@@ -15,8 +15,10 @@ collectors:
   - identity
   - metric
   - network
+  - process
   - service
   - port
   - package
   - firewall
   - log_tailer
+  - agent_health
