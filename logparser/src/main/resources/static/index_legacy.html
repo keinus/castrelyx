@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogParser - Configuration Management</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <!-- Material Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+        <span class="material-icons">brightness_6</span>
+    </button>
+
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="logo-section">
+                    <span class="material-icons logo-icon">analytics</span>
+                    <div>
+                        <h1>LogParser</h1>
+                        <p class="subtitle">Configuration Management Console</p>
+                    </div>
+                </div>
+                <div class="pipeline-status" id="pipelineStatus">
+                    <div class="status-indicator">
+                        <span class="material-icons status-icon">circle</span>
+                        <div class="status-info">
+                            <span class="status-label">Pipeline Status</span>
+                            <span class="status-value" id="statusValue">Loading...</span>
+                        </div>
+                    </div>
+                    <button onclick="refreshPipelineStatus()" class="btn-icon" title="Refresh">
+                        <span class="material-icons">refresh</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-button active" onclick="showTab('dashboard')">
+                <span class="material-icons">dashboard</span>
+                <span>Dashboard</span>
+            </button>
+            <button class="tab-button" onclick="showTab('input')">
+                <span class="material-icons">input</span>
+                <span>Input Adapters</span>
+            </button>
+            <button class="tab-button" onclick="showTab('parser')">
+                <span class="material-icons">code</span>
+                <span>Parsers</span>
+            </button>
+            <button class="tab-button" onclick="showTab('transform')">
+                <span class="material-icons">transform</span>
+                <span>Transforms</span>
+            </button>
+            <button class="tab-button" onclick="showTab('output')">
+                <span class="material-icons">output</span>
+                <span>Output Adapters</span>
+            </button>
+            <button class="tab-button" onclick="showTab('settings')">
+                <span class="material-icons">settings</span>
+                <span>Settings</span>
+            </button>
+        </nav>
+
+        <main class="content">
+            <!-- Dashboard Tab -->
+            <div id="dashboard-tab" class="tab-content active">
+                <!-- Monitoring Section (Merged) -->
+                <div class="card" style="margin-bottom: var(--spacing-lg);">
+                    <div class="card-header">
+                        <h2>
+                            <span class="material-icons">monitoring</span>
+                            Pipeline Monitoring
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <!-- Key Metrics -->
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-icon status">
+                                    <span class="material-icons">health_and_safety</span>
+                                </div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Pipeline Status</span>
+                                    <span class="metric-value" id="monitorStatus">-</span>
+                                </div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-icon throughput">
+                                    <span class="material-icons">speed</span>
+                                </div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Throughput</span>
+                                    <span class="metric-value" id="monitorThroughput">0/s</span>
+                                </div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-icon queue">
+                                    <span class="material-icons">layers</span>
+                                </div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Queue Size</span>
+                                    <span class="metric-value" id="monitorQueueSize">0</span>
+                                </div>
+                            </div>
+                             <div class="metric-card">
+                                <div class="metric-icon active-threads">
+                                    <span class="material-icons">memory</span>
+                                </div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Active Threads</span>
+                                    <span class="metric-value" id="monitorThreadCount">0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Detailed Stats -->
+                        <div class="monitoring-details-grid">
+                            <div class="monitoring-panel">
+                                <h3>
+                                    <span class="material-icons">settings_input_component</span>
+                                    Component Status
+                                </h3>
+                                <div id="componentStatusList" class="status-list"></div>
+                            </div>
+                            <div class="monitoring-panel">
+                                <h3>
+                                    <span class="material-icons">pending</span>
+                                    Reload Progress
+                                </h3>
+                                <div id="reloadProgressDetail"></div>
+                            </div>
+                        </div>
+
+                        <!-- Active Threads Section -->
+                        <div class="monitoring-section">
+                            <h3>
+                                <span class="material-icons">settings_applications</span>
+                                Active Threads Detail
+                            </h3>
+                            <div id="threadsContainer" class="threads-container"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>
+                                <span class="material-icons">build</span>
+                                System Operations
+                            </h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="control-buttons">
+                                <button onclick="reloadPipeline()" class="btn btn-primary">
+                                    <span class="material-icons">refresh</span>
+                                    <span>Reload Configuration</span>
+                                </button>
+                                <button onclick="validateAndReload()" class="btn btn-success">
+                                    <span class="material-icons">check_circle</span>
+                                    <span>Validate & Reload</span>
+                                </button>
+                                <button onclick="restartPipeline()" class="btn btn-danger">
+                                    <span class="material-icons">restart_alt</span>
+                                    <span>Restart Pipeline</span>
+                                </button>
+                            </div>
+                            
+                            <div id="reloadProgress" class="reload-progress" style="display: none; margin-top: 1.5rem;">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="progressFill"></div>
+                                </div>
+                                <p id="progressText" class="progress-text"></p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>
+                                <span class="material-icons">info</span>
+                                Quick Stats
+                            </h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="stats-grid">
+                                <div class="stat-item">
+                                    <span class="material-icons stat-icon">login</span>
+                                    <div>
+                                        <p class="stat-label">Input Adapters</p>
+                                        <p class="stat-value" id="inputCount">-</p>
+                                    </div>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="material-icons stat-icon">code</span>
+                                    <div>
+                                        <p class="stat-label">Parsers</p>
+                                        <p class="stat-value" id="parserCount">-</p>
+                                    </div>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="material-icons stat-icon">transform</span>
+                                    <div>
+                                        <p class="stat-label">Transforms</p>
+                                        <p class="stat-value" id="transformCount">-</p>
+                                    </div>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="material-icons stat-icon">logout</span>
+                                    <div>
+                                        <p class="stat-label">Output Adapters</p>
+                                        <p class="stat-value" id="outputCount">-</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- Input Adapters Tab -->
+            <div id="input-tab" class="tab-content">
+                <div class="tab-toolbar">
+                    <div class="toolbar-title">
+                        <h2>
+                            <span class="material-icons">input</span>
+                            Input Adapters
+                        </h2>
+                        <span class="badge" id="inputBadge">0</span>
+                    </div>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <span class="material-icons">search</span>
+                            <input type="text" placeholder="Search inputs..." onkeyup="filterAdapters('input', this.value)">
+                        </div>
+                        <button onclick="openCreateModal('input')" class="btn btn-primary">
+                            <span class="material-icons">add</span>
+                            <span>Create</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="inputList" class="adapter-grid"></div>
+            </div>
+
+            <!-- Parsers Tab -->
+            <div id="parser-tab" class="tab-content">
+                <div class="tab-toolbar">
+                    <div class="toolbar-title">
+                        <h2>
+                            <span class="material-icons">code</span>
+                            Parsers
+                        </h2>
+                         <span class="badge" id="parserBadge">0</span>
+                    </div>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <span class="material-icons">search</span>
+                            <input type="text" placeholder="Search parsers..." onkeyup="filterAdapters('parser', this.value)">
+                        </div>
+                        <button onclick="openCreateModal('parser')" class="btn btn-primary">
+                            <span class="material-icons">add</span>
+                            <span>Create</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="parserList" class="adapter-grid"></div>
+            </div>
+
+            <!-- Transforms Tab -->
+            <div id="transform-tab" class="tab-content">
+                <div class="tab-toolbar">
+                    <div class="toolbar-title">
+                        <h2>
+                            <span class="material-icons">transform</span>
+                            Transforms
+                        </h2>
+                         <span class="badge" id="transformBadge">0</span>
+                    </div>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <span class="material-icons">search</span>
+                            <input type="text" placeholder="Search transforms..." onkeyup="filterAdapters('transform', this.value)">
+                        </div>
+                        <button onclick="openCreateModal('transform')" class="btn btn-primary">
+                            <span class="material-icons">add</span>
+                            <span>Create</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="transformList" class="adapter-grid"></div>
+            </div>
+
+            <!-- Output Adapters Tab -->
+            <div id="output-tab" class="tab-content">
+                <div class="tab-toolbar">
+                    <div class="toolbar-title">
+                        <h2>
+                            <span class="material-icons">output</span>
+                            Output Adapters
+                        </h2>
+                         <span class="badge" id="outputBadge">0</span>
+                    </div>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <span class="material-icons">search</span>
+                            <input type="text" placeholder="Search outputs..." onkeyup="filterAdapters('output', this.value)">
+                        </div>
+                        <button onclick="openCreateModal('output')" class="btn btn-primary">
+                            <span class="material-icons">add</span>
+                            <span>Create</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="outputList" class="adapter-grid"></div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-content">
+                <div class="tab-toolbar">
+                    <div class="toolbar-title">
+                        <h2>
+                            <span class="material-icons">settings</span>
+                            Settings
+                        </h2>
+                    </div>
+                </div>
+                
+                <div class="grid-2">
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>
+                                <span class="material-icons">tune</span>
+                                Performance Tuning
+                            </h2>
+                        </div>
+                        <div class="card-body">
+                            <form id="pipelineSettingsForm" onsubmit="savePipelineSettings(event)">
+                                <div class="form-group">
+                                    <label for="parserThreadsInput">
+                                        Parser & Transform Threads
+                                        <span class="material-icons help-icon" title="Number of threads dedicated to parsing and transforming logs">help_outline</span>
+                                    </label>
+                                    <div style="display: flex; gap: var(--spacing-sm); align-items: flex-start;">
+                                        <div style="flex: 1;">
+                                            <input type="number" id="parserThreadsInput" min="1" class="form-control" placeholder="Default: 4">
+                                            <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary);">
+                                                Controls the parallelism of the processing stage. Higher values may improve throughput but consume more CPU.
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="display: flex; justify-content: flex-end; margin-top: var(--spacing-lg);">
+                                    <button type="submit" class="btn btn-primary">
+                                        <span class="material-icons">save</span> Save Changes
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </section>
+                    
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>
+                                <span class="material-icons">info</span>
+                                About
+                            </h2>
+                        </div>
+                        <div class="card-body">
+                            <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                                <strong>LogParser</strong> is a high-performance log processing pipeline.
+                            </p>
+                            <div class="info-item">
+                                <span class="info-label">Version</span>
+                                <span class="info-value">1.0.0</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Build Date</span>
+                                <span class="info-value">2025-07-30</span>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for Create/Edit -->
+    <div id="configModal" class="modal">
+        <div class="modal-overlay" onclick="closeModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">
+                    <span class="material-icons">settings</span>
+                    Add Configuration
+                </h2>
+                <button class="btn-icon" onclick="closeModal()">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="configForm">
+                    <div class="form-group">
+                        <label for="adapterType">
+                            <span class="material-icons">category</span>
+                            Type
+                        </label>
+                        <select id="adapterType" onchange="loadAdapterSchema()" required>
+                            <option value="">Select Type</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="messageType">
+                            <span class="material-icons">label</span>
+                            Message Type
+                        </label>
+                        <input type="text" id="messageType" required>
+                        <small>Unique identifier for this adapter</small>
+                    </div>
+
+                    <div id="dynamicFields" class="dynamic-fields"></div>
+
+                    <div id="enabledFieldGroup" class="form-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="enabled" checked>
+                            <span>Enabled</span>
+                        </label>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">
+                            <span class="material-icons">save</span>
+                            <span>Save</span>
+                        </button>
+                        <button type="button" onclick="closeModal()" class="btn btn-secondary">
+                            <span class="material-icons">cancel</span>
+                            <span>Cancel</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mapper Overlay -->
+    <!-- Removed: Mapper is now integrated into the generic configuration modal -->
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <span class="material-icons toast-icon"></span>
+        <span class="toast-message"></span>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/mapper.js"></script>
+    <script src="/js/app.js"></script>
+    <script>
+        // Theme toggle functionality
+        function toggleTheme() {
+            const body = document.body;
+            const isDark = body.classList.toggle('dark-theme');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        }
+
+        // Load saved theme
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-theme');
+            }
+        });
+    </script>
+</body>
+</html>

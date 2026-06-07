@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: logparser
+  profiles:
+    active:
+      - ops
+  datasource:
+    url: jdbc:sqlite:${user.home}/logparser/data/config.db
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-timeout: 30000
+  jpa:
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+
+server:
+  port: ${SERVER_PORT:8765}  # Default 8765, configurable via environment variable
+
+# Swagger/OpenAPI documentation
+springdoc:
+  api-docs:
+    path: /api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+
+logparser:
+  config-source: DATABASE
+  migration:
+    enabled: true
+    auto-import-yaml: false
+    yaml-file-path: ./config/config.yaml
+  # Auto-reload pipeline on configuration changes
+  auto-reload: true
+  auto-reload-delay-ms: 2000  # Wait 2 seconds before reloading (allows transaction to complete)
+
+  # Cryptography settings for sensitive data encryption
+  # REQUIRED: Set these environment variables before starting the application in PRODUCTION
+  # Use strong random values, at least 32 characters for secret-key
+  # Example: export LOGPARSER_CRYPTO_KEY="$(openssl rand -base64 32)"
+  # Example: export LOGPARSER_CRYPTO_SALT="$(openssl rand -hex 16)"
+  # DEV DEFAULTS: For development/debugging only - change in production!
+  crypto:
+    secret-key: ${LOGPARSER_CRYPTO_KEY:your-secret-key-change-this-in-production}
+    salt: ${LOGPARSER_CRYPTO_SALT:deadbeef}

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml" />
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml" />    
+    <property name="LOG_PATH_NAME" value="./application.log" />
+    
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    	<layout class="ch.qos.logback.classic.PatternLayout">
+        	<pattern>%d{yyyy-MM-dd HH:mm:ss} [%-5p] [%F]%M\(%L\) : %m%n</pattern>
+      	</layout>
+    </appender>
+  	<appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH_NAME}</file>
+        <!-- 일자별로 로그파일 적용하기 -->
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH_NAME}.%d{yyyyMMdd}</fileNamePattern>
+            <maxHistory>3</maxHistory> <!-- 일자별 백업파일의 보관기간 -->
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%-5p] [%F]%M\(%L\) : %m%n</pattern>
+        </encoder>
+    </appender>
+    <springProfile name="dev">
+      <root level="INFO">
+        <appender-ref ref="STDOUT" />
+      </root>
+    </springProfile>
+    <springProfile name="ops">
+      <root level="INFO">
+        <appender-ref ref="STDOUT" />
+      </root>
+    </springProfile>
+</configuration>

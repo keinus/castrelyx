@@ -1,0 +1,956 @@
+# Castrelyx 수집 아키텍처 및 장비별 스키마 설계
+
+## 1. 목표와 전제
+
+Castrelyx의 수집 목표는 여러 종류의 호스트와 네트워크 장비를 하나의 관제 자산 모델로 정규화하여, 장애 징후, 보안 이벤트, 네트워크 상태, 변경 가능성을 빠르게 판단할 수 있게 하는 것이다.
+
+현재 허용된 수집 방식은 다음 두 가지로 제한한다.
+
+| 수집 방식 | 적용 대상 | 핵심 역할 |
+|---|---|---|
+| 설치형 Agent | Linux, Windows 서버, Windows host | OS 내부 상태, 프로세스, 서비스, 포트, 패키지, 로그, 보안 이벤트, 리소스 metric 수집 |
+| SNMP Polling | 라우터, 방화벽, 네트워크 장비, SNMP가 활성화된 Linux/Windows | 표준 MIB 기반 장비 식별, 인터페이스, 트래픽, 라우팅, TCP/UDP 통계, BGP/OSPF 상태 수집 |
+
+현재 범위에서 제외하는 방식은 다음과 같다.
+
+| 제외 방식 | 제외 이유 |
+|---|---|
+| SSH 원격 명령 수집 | 운영 계정 관리, 권한 통제, 장비별 명령 차이가 큼 |
+| 장비 벤더 API | v1에서 공통 표준 수집 모델을 먼저 만들기 위함 |
+| 원격 Syslog 수집 | 현재 허용된 수집 방식이 agent와 SNMP뿐임 |
+| 방화벽 정책 원문 수집 | 표준 SNMP MIB 범위를 벗어나고 민감도가 높음 |
+| NAT 룰 원문 수집 | 표준 SNMP MIB 범위를 벗어나고 장비별 차이가 큼 |
+
+단, Agent가 설치된 장비 내부의 로그는 agent log tailer가 수집할 수 있다. 예를 들어 Linux 서버의 `/var/log/auth.log`나 Windows 서버의 Security Event Log는 agent 수집 범위에 포함한다.
+
+## 2. 전체 수집 모델
+
+Castrelyx는 수집 데이터를 다음 네 가지 형태로 나누어 저장한다.
+
+| 데이터 형태 | 설명 | 예시 |
+|---|---|---|
+| Asset Snapshot | 장비의 비교적 정적인 식별 정보 | hostname, OS, firmware, vendor, model, serial |
+| State Snapshot | 현재 상태를 나타내는 구조화 정보 | process list, service status, route table, BGP peer state |
+| Metric | 시간에 따라 변하는 숫자형 지표 | CPU 사용률, memory 사용률, interface traffic, TCP reset count |
+| Event | 특정 시점에 발생한 보안/운영 이벤트 | 로그인 실패, 서비스 중단, 인터페이스 down, BGP peer down |
+
+수집 파이프라인은 다음 순서로 동작한다.
+
+1. 자산 발견 또는 등록
+2. 수집 채널 결정
+3. capability discovery 수행
+4. collector 실행
+5. raw data 수집
+6. 정규화 schema 변환
+7. asset correlation 및 중복 제거
+8. metric/event/state 저장
+9. alert rule 및 dashboard에서 사용
+
+## 3. 수집 채널별 설계
+
+### 3.1 설치형 Agent
+
+Agent는 Windows와 Linux에 설치되는 로컬 collector이다. Agent는 장비 내부에서 직접 정보를 읽기 때문에 SNMP보다 훨씬 깊은 정보를 수집할 수 있다.
+
+Agent는 다음 collector 모듈로 구성한다.
+
+| Collector | 수집 방식 | 주요 수집 정보 |
+|---|---|---|
+| Identity Collector | OS API, system file, registry | hostname, OS, kernel/build, architecture, boot time, machine id |
+| Metric Collector | `/proc`, performance counter, WMI/CIM | CPU, memory, disk, network usage |
+| Network Collector | `ip`, `/proc/net`, Windows networking API | IP, MAC, NIC, route, DNS, gateway |
+| Process Collector | `/proc`, Windows process API | process name, PID, parent PID, executable path, resource usage |
+| Service Collector | systemd, Windows Service API | service name, status, startup type |
+| Port Collector | `ss`, `/proc/net`, Windows TCP table API | listening port, protocol, bind address, owning process |
+| Package Collector | dpkg/rpm/apk/pacman, registry/WMI | installed package/application, version, vendor |
+| Firewall Collector | nftables/iptables/ufw, Windows Firewall API | host firewall enabled state, rule summary |
+| Log Tailer | journald/file tailer, Windows Event Log bookmark | authentication, system, service, security event |
+| Agent Health Collector | internal heartbeat | agent version, last collection time, queue size, error state |
+
+Agent는 원칙적으로 outbound 방식으로 Castrelyx 서버에 연결한다. Agent가 일시적으로 서버에 연결할 수 없으면 로컬 spool queue에 데이터를 저장하고, 재연결 후 순서대로 전송한다.
+
+### 3.2 Agent metric 수집
+
+Agent metric은 짧은 주기로 반복 수집되는 숫자형 지표이다.
+
+| Metric | Linux 수집 방식 | Windows 수집 방식 | 권장 주기 |
+|---|---|---|---|
+| CPU 사용률 | `/proc/stat` delta 계산 | PDH/performance counter | 30~60초 |
+| Load average | `/proc/loadavg` | 해당 없음 | 30~60초 |
+| Memory 사용률 | `/proc/meminfo` | performance counter/WMI | 30~60초 |
+| Disk 사용률 | `statvfs`, `/proc/mounts` | volume API/WMI | 1~5분 |
+| Disk I/O | `/proc/diskstats` | performance counter | 1분 |
+| Network traffic | `/proc/net/dev` | interface counter API | 30~60초 |
+| Process resource | `/proc/<pid>` | process API | 1~5분 |
+
+Metric은 절대값과 delta 계산 결과를 구분한다. 예를 들어 network byte counter는 원천값을 저장하되, 서버 측에서 초당 rate를 계산한다.
+
+### 3.3 Agent log tailer
+
+Log tailer는 장비 내부의 로그를 구조화 event로 변환한다.
+
+Linux에서는 다음 원천을 우선 지원한다.
+
+| 로그 원천 | 수집 방식 | 주요 이벤트 |
+|---|---|---|
+| journald | journal cursor 기반 tail | service start/stop, failed unit, kernel message |
+| `/var/log/auth.log` | inode + offset 기반 tail | SSH login, sudo, user change |
+| `/var/log/secure` | inode + offset 기반 tail | RHEL 계열 auth event |
+| `/var/log/syslog` | inode + offset 기반 tail | system event |
+| `/var/log/messages` | inode + offset 기반 tail | system/kernel event |
+| auditd log | file tail 또는 audit parser | privileged action, file access event |
+
+Windows에서는 다음 Event Log channel을 우선 지원한다.
+
+| 로그 원천 | 수집 방식 | 주요 이벤트 |
+|---|---|---|
+| Security | Event Log bookmark/record id | login success/failure, account lockout, privilege use |
+| System | Event Log API | service failure, driver failure, reboot |
+| Application | Event Log API | application error |
+| Windows PowerShell | Event Log API | PowerShell execution event |
+| Microsoft-Windows-PowerShell/Operational | Event Log API | script block, command event |
+| Microsoft-Windows-TerminalServices-* | Event Log API | RDP login/session event |
+| Microsoft-Windows-Windows Defender/Operational | Event Log API | Defender detection/status event |
+
+Log tailer는 다음 규칙을 따른다.
+
+| 규칙 | 내용 |
+|---|---|
+| Cursor 저장 | Linux file은 inode+offset, journald는 journal cursor, Windows는 bookmark 또는 record id 저장 |
+| 중복 방지 | event source, timestamp, record id, raw hash 조합으로 deduplication |
+| 민감정보 보호 | password, token, API key, Authorization header 형태의 문자열은 redaction |
+| 원문 제한 | raw log 전체 저장은 선택 기능으로 두고, 기본은 normalized field 중심 저장 |
+| 장애 복구 | rotation, truncation, bookmark invalidation 발생 시 safe resync 수행 |
+
+### 3.4 SNMP Poller
+
+SNMP Poller는 네트워크 장비를 대상으로 표준 MIB를 polling한다. SNMP는 read-only 조회만 수행하며, `SET` 동작은 지원하지 않는다.
+
+SNMP 버전은 다음 우선순위를 따른다.
+
+| 우선순위 | 버전 | 정책 |
+|---:|---|---|
+| 1 | SNMPv3 authPriv | 기본 권장. 인증과 암호화를 모두 사용 |
+| 2 | SNMPv3 authNoPriv | 암호화가 어려운 환경의 차선책 |
+| 3 | SNMPv2c | 레거시 장비 호환용. read-only community만 허용 |
+
+SNMP Poller는 다음 discovery 흐름을 따른다.
+
+1. target IP와 credential로 SNMP 연결 확인
+2. `SNMPv2-MIB`의 `sysObjectID`, `sysDescr`, `sysName`, `sysUpTime` 조회
+3. `IF-MIB` walk로 인터페이스 capability 확인
+4. `IP-MIB`, `IP-FORWARD-MIB`, `TCP-MIB`, `UDP-MIB` 지원 여부 확인
+5. 라우팅 장비는 `BGP4-MIB`, `OSPF-MIB` 지원 여부 확인
+6. L2 장비는 `BRIDGE-MIB`, `Q-BRIDGE-MIB`, `LLDP-MIB` 지원 여부 확인
+7. 상용 장비는 `ENTITY-MIB`, `ENTITY-SENSOR-MIB` 지원 여부 확인
+8. 지원되는 MIB 목록을 asset capability로 저장
+9. 지원되는 MIB만 주기 polling
+
+### 3.5 SNMP 표준 MIB 수집 범위
+
+| MIB | 수집 정보 | 사용 대상 | 수집 우선순위 |
+|---|---|---|---|
+| `SNMPv2-MIB` | sysName, sysDescr, sysObjectID, sysUpTime, sysContact, sysLocation | 전체 SNMP 장비 | 필수 |
+| `IF-MIB` | ifIndex, ifName, ifDescr, ifAlias, ifType, ifMtu, ifSpeed, ifHighSpeed, ifAdminStatus, ifOperStatus, ifLastChange, ifHCInOctets, ifHCOutOctets, errors, discards | 전체 SNMP 장비 | 필수 |
+| `IP-MIB` | IP address, forwarding state, IP/ICMP statistics, reassembly/drop counters | 라우터, 방화벽, 서버 | 필수 |
+| `IP-FORWARD-MIB` | route destination, next hop, route type, route protocol, metric, route age | 라우터, L3 네트워크 장비 | 필수 |
+| `TCP-MIB` | active/passive opens, attempt fails, resets, current established, retransmitted segments, connection table | 서버, 방화벽, 라우터 | 권장 |
+| `UDP-MIB` | in/out datagrams, no port, receive errors, endpoint table | 서버, 방화벽, 라우터 | 권장 |
+| `BGP4-MIB` | BGP peer, peer state, remote AS, remote address, update count, route refresh 관련 counter | BGP 라우터 | 조건부 필수 |
+| `OSPF-MIB` | OSPF router id, area, interface, neighbor, neighbor state | OSPF 라우터 | 조건부 필수 |
+| `HOST-RESOURCES-MIB` | CPU, memory, storage, running software, installed software | SNMP가 활성화된 host/OpenWrt 일부 | 조건부 |
+| `ENTITY-MIB` | chassis, module, slot, power supply, fan, physical inventory | 상용 장비 | 조건부 |
+| `ENTITY-SENSOR-MIB` | temperature, voltage, fan speed, sensor status | 상용 장비 | 조건부 |
+| `BRIDGE-MIB` | bridge port, forwarding database, MAC table | L2 장비 | 조건부 |
+| `Q-BRIDGE-MIB` | VLAN, VLAN별 forwarding table | VLAN 지원 L2 장비 | 조건부 |
+| `LLDP-MIB` | neighbor device, neighbor port, chassis id, port id | LLDP 지원 장비 | 조건부 |
+
+SNMP counter 처리 규칙은 다음과 같다.
+
+| 규칙 | 내용 |
+|---|---|
+| 64-bit counter 우선 | traffic은 `ifHCInOctets`, `ifHCOutOctets`를 우선 사용 |
+| 32-bit fallback | 64-bit counter가 없으면 32-bit counter를 사용하되 wrap 처리를 수행 |
+| reboot 감지 | `sysUpTime`이 이전보다 작아지면 장비 reboot로 판단하고 counter delta를 reset |
+| interval 기록 | rate 계산을 위해 poll interval과 observed timestamp를 반드시 저장 |
+| partial failure 허용 | 일부 OID 실패가 전체 장비 수집 실패가 되지 않게 한다 |
+
+## 4. 공통 스키마
+
+모든 장비는 먼저 공통 asset schema로 정규화한다. 장비별 상세 정보는 type-specific schema에 저장한다.
+
+### 4.1 Asset 공통 스키마
+
+```json
+{
+  "asset_id": "string",
+  "tenant_id": "string",
+  "device_type": "linux | windows_server | windows_host | router | firewall | network_device",
+  "display_name": "string",
+  "hostname": "string | null",
+  "management_ips": ["string"],
+  "mac_addresses": ["string"],
+  "vendor": "string | null",
+  "model": "string | null",
+  "serial_number": "string | null",
+  "os_family": "linux | windows | network_os | unknown",
+  "os_name": "string | null",
+  "os_version": "string | null",
+  "firmware_version": "string | null",
+  "architecture": "string | null",
+  "first_seen_at": "datetime",
+  "last_seen_at": "datetime",
+  "collection_sources": ["agent | snmp"],
+  "tags": ["string"],
+  "location": {
+    "site": "string | null",
+    "rack": "string | null",
+    "zone": "string | null"
+  },
+  "owner": {
+    "team": "string | null",
+    "contact": "string | null"
+  },
+  "capabilities": {
+    "agent": "AgentCapability | null",
+    "snmp": "SnmpCapability | null"
+  }
+}
+```
+
+### 4.2 Agent capability 스키마
+
+```json
+{
+  "agent_id": "string",
+  "agent_version": "string",
+  "install_mode": "service | daemon",
+  "last_heartbeat_at": "datetime",
+  "enabled_collectors": [
+    "identity",
+    "metrics",
+    "network",
+    "process",
+    "service",
+    "port",
+    "package",
+    "firewall",
+    "log_tailer"
+  ],
+  "permission_level": "standard | elevated | administrator | root",
+  "log_sources": ["string"],
+  "last_error": "string | null"
+}
+```
+
+### 4.3 SNMP capability 스키마
+
+```json
+{
+  "snmp_version": "v2c | v3",
+  "security_level": "noAuthNoPriv | authNoPriv | authPriv | community",
+  "sys_object_id": "string | null",
+  "sys_descr": "string | null",
+  "supported_mibs": [
+    "SNMPv2-MIB",
+    "IF-MIB",
+    "IP-MIB",
+    "IP-FORWARD-MIB",
+    "TCP-MIB",
+    "UDP-MIB",
+    "BGP4-MIB",
+    "OSPF-MIB"
+  ],
+  "last_poll_at": "datetime",
+  "last_success_at": "datetime | null",
+  "last_error": "string | null"
+}
+```
+
+### 4.4 Interface 공통 스키마
+
+```json
+{
+  "asset_id": "string",
+  "interface_id": "string",
+  "source": "agent | snmp",
+  "if_index": "number | null",
+  "name": "string",
+  "description": "string | null",
+  "alias": "string | null",
+  "type": "string | null",
+  "mac_address": "string | null",
+  "mtu": "number | null",
+  "speed_bps": "number | null",
+  "admin_status": "up | down | testing | unknown",
+  "oper_status": "up | down | testing | dormant | not_present | lower_layer_down | unknown",
+  "ip_addresses": [
+    {
+      "address": "string",
+      "prefix_length": "number | null",
+      "family": "ipv4 | ipv6"
+    }
+  ],
+  "counters": {
+    "in_octets": "number | null",
+    "out_octets": "number | null",
+    "in_packets": "number | null",
+    "out_packets": "number | null",
+    "in_errors": "number | null",
+    "out_errors": "number | null",
+    "in_discards": "number | null",
+    "out_discards": "number | null"
+  },
+  "observed_at": "datetime"
+}
+```
+
+### 4.5 Metric 공통 스키마
+
+```json
+{
+  "asset_id": "string",
+  "metric_name": "string",
+  "value": "number",
+  "unit": "percent | bytes | count | bps | pps | celsius | seconds | status",
+  "labels": {
+    "source": "agent | snmp",
+    "collector": "string",
+    "interface": "string | null",
+    "protocol": "string | null"
+  },
+  "observed_at": "datetime",
+  "interval_sec": "number | null"
+}
+```
+
+### 4.6 Event 공통 스키마
+
+```json
+{
+  "event_id": "string",
+  "asset_id": "string",
+  "event_type": "auth | service | process | network | routing | firewall | system | security | collector",
+  "severity": "info | low | medium | high | critical",
+  "source": "agent | snmp",
+  "source_name": "string",
+  "observed_at": "datetime",
+  "actor": "string | null",
+  "action": "string | null",
+  "outcome": "success | failure | unknown",
+  "src_ip": "string | null",
+  "dst_ip": "string | null",
+  "protocol": "string | null",
+  "process": "string | null",
+  "service": "string | null",
+  "message": "string",
+  "raw_ref": "string | null",
+  "dedup_key": "string"
+}
+```
+
+### 4.7 Route 공통 스키마
+
+```json
+{
+  "asset_id": "string",
+  "source": "agent | snmp",
+  "destination": "string",
+  "prefix_length": "number",
+  "next_hop": "string | null",
+  "interface_id": "string | null",
+  "route_protocol": "local | static | ospf | bgp | rip | icmp | other | unknown",
+  "route_type": "unicast | blackhole | unreachable | prohibit | other | unknown",
+  "metric": "number | null",
+  "age_sec": "number | null",
+  "observed_at": "datetime"
+}
+```
+
+## 5. 장비 타입별 스키마와 수집 범위
+
+### 5.1 Linux
+
+Linux는 agent를 기본 수집 방식으로 사용한다. SNMP가 활성화되어 있으면 보조 채널로 사용할 수 있지만, Castrelyx의 Linux 정밀 관제는 agent 기준으로 설계한다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | Agent | hostname, distro, kernel, architecture, boot time, machine id |
+| Resource Metric | Agent | CPU, load average, memory, swap, disk, disk I/O, network I/O |
+| Network | Agent | interface, IP, MAC, route, DNS, gateway |
+| Process | Agent | PID, process name, executable path, parent PID, CPU/memory |
+| Service | Agent | systemd unit, status, startup state, failed unit |
+| Package | Agent | dpkg/rpm/apk/pacman package name/version |
+| Port | Agent | listening TCP/UDP port, bind address, owning process |
+| Firewall | Agent | nftables/iptables/ufw enabled state, rule summary |
+| Log | Agent log tailer | SSH login, sudo, user change, service failure, kernel/system event |
+| SNMP 보조 | SNMP | IF-MIB, HOST-RESOURCES-MIB, TCP-MIB, UDP-MIB |
+
+Linux type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "linux": {
+    "distro_name": "string",
+    "distro_version": "string",
+    "kernel_version": "string",
+    "init_system": "systemd | sysvinit | openrc | unknown",
+    "selinux_status": "enforcing | permissive | disabled | unknown",
+    "apparmor_status": "enabled | disabled | unknown",
+    "package_managers": ["dpkg | rpm | apk | pacman | unknown"],
+    "services": ["ServiceState"],
+    "processes": ["ProcessState"],
+    "packages": ["PackageState"],
+    "listening_ports": ["PortState"],
+    "firewall": {
+      "backend": "nftables | iptables | ufw | firewalld | unknown",
+      "enabled": "boolean | null",
+      "rule_count": "number | null"
+    },
+    "log_sources": [
+      "journald",
+      "/var/log/auth.log",
+      "/var/log/secure",
+      "/var/log/syslog",
+      "/var/log/messages",
+      "auditd"
+    ]
+  }
+}
+```
+
+Linux에서 기본적으로 alert 후보가 되는 event는 다음과 같다.
+
+| 이벤트 | 원천 |
+|---|---|
+| SSH 로그인 실패 반복 | auth log, journald |
+| sudo 실패 또는 권한 상승 | auth log |
+| 신규 사용자 생성/삭제 | auth log, auditd |
+| systemd service failed | journald |
+| listening port 신규 생성 | port collector diff |
+| CPU/memory/disk 임계치 초과 | metric collector |
+| default route 변경 | network collector diff |
+
+### 5.2 Windows 서버
+
+Windows 서버는 agent를 기본 수집 방식으로 사용한다. Windows 서버는 인증 이벤트, 서비스 장애, RDP, PowerShell 실행 이벤트의 관제 가치가 높다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | Agent | hostname, Windows edition, build, domain membership, boot time |
+| Resource Metric | Agent | CPU, memory, disk, disk I/O, network I/O |
+| Network | Agent | NIC, IP, MAC, route, DNS, gateway |
+| Process | Agent | process name, PID, executable path, resource usage |
+| Service | Agent | Windows service status, startup type |
+| Package/Application | Agent | installed application, patch/update hints |
+| Port | Agent | listening port, bind address, owning process |
+| Firewall | Agent | Windows Firewall profile status, rule summary |
+| Event Log | Agent log tailer | Security, System, Application, PowerShell, RDP, Defender |
+| Server Role | Agent | IIS, DNS, DHCP, AD DS, Hyper-V 등 role 감지 |
+| SNMP 보조 | SNMP | IF-MIB, TCP-MIB, UDP-MIB, HOST-RESOURCES-MIB 일부 |
+
+Windows 서버 type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "windows_server": {
+    "edition": "string",
+    "build_number": "string",
+    "domain_joined": "boolean",
+    "domain_name": "string | null",
+    "server_roles": ["iis | dns | dhcp | ad_ds | file_server | hyper_v | unknown"],
+    "services": ["ServiceState"],
+    "processes": ["ProcessState"],
+    "installed_applications": ["PackageState"],
+    "listening_ports": ["PortState"],
+    "firewall": {
+      "domain_profile_enabled": "boolean | null",
+      "private_profile_enabled": "boolean | null",
+      "public_profile_enabled": "boolean | null",
+      "rule_count": "number | null"
+    },
+    "security_products": {
+      "defender_enabled": "boolean | null",
+      "edr_detected": "boolean | null",
+      "last_signature_update": "datetime | null"
+    },
+    "event_log_sources": [
+      "Security",
+      "System",
+      "Application",
+      "Windows PowerShell",
+      "PowerShell Operational",
+      "Terminal Services",
+      "Windows Defender"
+    ]
+  }
+}
+```
+
+Windows 서버에서 기본적으로 alert 후보가 되는 event는 다음과 같다.
+
+| 이벤트 | 원천 |
+|---|---|
+| 로그인 실패 반복 | Security Event Log |
+| 관리자 권한 사용 또는 권한 변경 | Security Event Log |
+| 계정 잠금 | Security Event Log |
+| RDP 로그인 | Terminal Services Event Log |
+| PowerShell 실행 이벤트 | PowerShell Operational Log |
+| 서비스 장애 | System Event Log |
+| Defender 탐지 | Defender Operational Log |
+| 신규 listening port | port collector diff |
+
+### 5.3 Windows host
+
+Windows host는 일반 사용자 단말 또는 업무용 PC를 의미한다. 서버보다 사용자 세션, 보안 제품 상태, 로컬 방화벽, 의심스러운 실행 프로세스 관제가 중요하다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | Agent | hostname, Windows edition/build, device id |
+| Resource Metric | Agent | CPU, memory, disk, network |
+| User Session | Agent | logged-on user, session state |
+| Process | Agent | process name, executable path, resource usage |
+| Service | Agent | Windows service status |
+| Application | Agent | installed application |
+| Port | Agent | listening port, bind address |
+| Firewall | Agent | Windows Firewall profile status |
+| Security Product | Agent | Defender/AV/EDR detected state |
+| Event Log | Agent log tailer | login failure, Defender, PowerShell, system error |
+
+Windows host type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "windows_host": {
+    "edition": "string",
+    "build_number": "string",
+    "domain_joined": "boolean",
+    "logged_on_users": ["string"],
+    "interactive_sessions": [
+      {
+        "username": "string",
+        "session_id": "string | null",
+        "state": "active | disconnected | unknown"
+      }
+    ],
+    "services": ["ServiceState"],
+    "processes": ["ProcessState"],
+    "installed_applications": ["PackageState"],
+    "listening_ports": ["PortState"],
+    "firewall": {
+      "domain_profile_enabled": "boolean | null",
+      "private_profile_enabled": "boolean | null",
+      "public_profile_enabled": "boolean | null"
+    },
+    "security_products": {
+      "defender_enabled": "boolean | null",
+      "edr_detected": "boolean | null",
+      "last_signature_update": "datetime | null"
+    }
+  }
+}
+```
+
+Windows host에서는 privacy와 민감정보 노출을 조심해야 한다. 기본 정책은 다음과 같다.
+
+| 항목 | 기본 정책 |
+|---|---|
+| process command line | 기본 비수집. 필요 시 redaction 후 선택 수집 |
+| browser history | 수집 제외 |
+| user document path | 수집 제외 |
+| clipboard | 수집 제외 |
+| credential/token | 수집 제외 |
+
+### 5.4 라우터
+
+라우터는 SNMP를 기본 수집 방식으로 사용한다. Linux 기반 라우터에 agent를 설치할 수 있는 경우가 있더라도, v1에서는 라우터 type의 표준 수집 모델을 SNMP 중심으로 둔다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | SNMPv2-MIB | sysName, sysDescr, sysObjectID, sysUpTime |
+| Interface | IF-MIB | interface status, speed, traffic, errors, discards |
+| IP Layer | IP-MIB | IP forwarding, IP/ICMP statistics |
+| Route | IP-FORWARD-MIB | route table, next hop, protocol, metric |
+| TCP/UDP | TCP-MIB, UDP-MIB | transport statistics |
+| BGP | BGP4-MIB | peer, state, remote AS, update counters |
+| OSPF | OSPF-MIB | area, interface, neighbor, neighbor state |
+| Hardware | ENTITY-MIB, ENTITY-SENSOR-MIB | chassis, module, sensor |
+
+라우터 type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "router": {
+    "routing_enabled": "boolean | null",
+    "routes": ["RouteState"],
+    "routing_protocols": {
+      "static": "boolean",
+      "ospf": "boolean",
+      "bgp": "boolean",
+      "rip": "boolean | null"
+    },
+    "bgp_peers": [
+      {
+        "peer_address": "string",
+        "remote_as": "number | null",
+        "state": "idle | connect | active | opensent | openconfirm | established | unknown",
+        "in_updates": "number | null",
+        "out_updates": "number | null",
+        "observed_at": "datetime"
+      }
+    ],
+    "ospf_neighbors": [
+      {
+        "neighbor_id": "string",
+        "neighbor_address": "string | null",
+        "area_id": "string | null",
+        "state": "down | attempt | init | two_way | exchange_start | exchange | loading | full | unknown",
+        "observed_at": "datetime"
+      }
+    ],
+    "transport_stats": {
+      "tcp_curr_estab": "number | null",
+      "tcp_retrans_segs": "number | null",
+      "tcp_estab_resets": "number | null",
+      "udp_in_errors": "number | null",
+      "udp_no_ports": "number | null"
+    }
+  }
+}
+```
+
+라우터에서 기본적으로 alert 후보가 되는 event는 다음과 같다.
+
+| 이벤트 | 원천 |
+|---|---|
+| interface oper down | IF-MIB |
+| interface error/discard 급증 | IF-MIB |
+| route table 변화 | IP-FORWARD-MIB diff |
+| BGP peer established 이탈 | BGP4-MIB |
+| OSPF neighbor full 이탈 | OSPF-MIB |
+| sysUpTime reset | SNMPv2-MIB |
+| TCP reset/retransmission 급증 | TCP-MIB |
+
+### 5.5 방화벽
+
+방화벽은 SNMP를 기본 수집 방식으로 사용한다. 현재 수집 방식이 SNMP뿐이므로, 방화벽 정책 원문, NAT 룰 원문, threat log 상세는 v1 기본 범위에 포함하지 않는다. 대신 표준 MIB 기반으로 인터페이스, IP, routing, TCP/UDP 통계, 장비 상태를 수집한다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | SNMPv2-MIB | sysName, sysDescr, sysObjectID, sysUpTime |
+| Interface | IF-MIB | interface status, traffic, errors, discards |
+| IP Layer | IP-MIB | IP/ICMP statistics |
+| Route | IP-FORWARD-MIB | route table, next hop |
+| TCP/UDP | TCP-MIB, UDP-MIB | session-like transport counters, resets, errors |
+| Hardware | ENTITY-MIB, ENTITY-SENSOR-MIB | module, fan, PSU, temperature |
+| Vendor Extension | 벤더 MIB | session count, HA status 등은 향후 확장 |
+
+방화벽 type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "firewall": {
+    "routes": ["RouteState"],
+    "interfaces": ["InterfaceState"],
+    "transport_stats": {
+      "tcp_curr_estab": "number | null",
+      "tcp_attempt_fails": "number | null",
+      "tcp_estab_resets": "number | null",
+      "tcp_retrans_segs": "number | null",
+      "udp_in_errors": "number | null",
+      "udp_no_ports": "number | null"
+    },
+    "policy_collection": {
+      "supported": false,
+      "reason": "standard_snmp_mib_does_not_expose_firewall_policy"
+    },
+    "nat_collection": {
+      "supported": false,
+      "reason": "standard_snmp_mib_does_not_expose_nat_rules"
+    },
+    "vendor_extensions": {
+      "session_count": "number | null",
+      "ha_state": "string | null",
+      "license_status": "string | null"
+    }
+  }
+}
+```
+
+방화벽에서 기본적으로 alert 후보가 되는 event는 다음과 같다.
+
+| 이벤트 | 원천 |
+|---|---|
+| outside/inside interface down | IF-MIB |
+| interface error/discard 급증 | IF-MIB |
+| TCP reset 급증 | TCP-MIB |
+| UDP no port/error 급증 | UDP-MIB |
+| route table 변화 | IP-FORWARD-MIB |
+| 장비 reboot | sysUpTime |
+| fan/temperature 이상 | ENTITY-SENSOR-MIB |
+
+### 5.6 네트워크 장비
+
+네트워크 장비는 라우터와 방화벽을 제외한 스위치, L2/L3 장비, 무선 장비, 기타 SNMP 지원 장비를 포괄한다.
+
+| 수집 영역 | 수집 방식 | 주요 정보 |
+|---|---|---|
+| Identity | SNMPv2-MIB | sysName, sysDescr, sysObjectID, sysUpTime |
+| Interface | IF-MIB | port status, speed, traffic, errors, discards |
+| L2 Bridge | BRIDGE-MIB | MAC forwarding table |
+| VLAN | Q-BRIDGE-MIB | VLAN, VLAN별 forwarding table |
+| Topology | LLDP-MIB | neighbor device, neighbor port |
+| Hardware | ENTITY-MIB, ENTITY-SENSOR-MIB | chassis, module, PSU, fan, temperature |
+| IP Layer | IP-MIB | management IP, IP statistics |
+
+네트워크 장비 type-specific schema는 다음 필드를 가진다.
+
+```json
+{
+  "network_device": {
+    "network_roles": ["switch | l2 | l3 | wireless | appliance | unknown"],
+    "vlans": [
+      {
+        "vlan_id": "number",
+        "name": "string | null",
+        "status": "active | suspended | unknown"
+      }
+    ],
+    "mac_table": [
+      {
+        "mac_address": "string",
+        "interface_id": "string | null",
+        "vlan_id": "number | null",
+        "entry_type": "dynamic | static | unknown",
+        "observed_at": "datetime"
+      }
+    ],
+    "lldp_neighbors": [
+      {
+        "local_interface_id": "string",
+        "remote_chassis_id": "string | null",
+        "remote_port_id": "string | null",
+        "remote_system_name": "string | null",
+        "remote_system_description": "string | null",
+        "observed_at": "datetime"
+      }
+    ],
+    "hardware_inventory": ["EntityState"],
+    "sensors": ["SensorState"]
+  }
+}
+```
+
+네트워크 장비에서 기본적으로 alert 후보가 되는 event는 다음과 같다.
+
+| 이벤트 | 원천 |
+|---|---|
+| uplink interface down | IF-MIB |
+| port error/discard 급증 | IF-MIB |
+| trunk port traffic 급감/급증 | IF-MIB |
+| LLDP neighbor 변화 | LLDP-MIB diff |
+| MAC table 급격한 변화 | BRIDGE-MIB/Q-BRIDGE-MIB diff |
+| fan/temperature/power 이상 | ENTITY-SENSOR-MIB |
+| 장비 reboot | sysUpTime |
+
+## 6. 보조 상태 스키마
+
+### 6.1 ProcessState
+
+```json
+{
+  "pid": "number",
+  "parent_pid": "number | null",
+  "name": "string",
+  "executable_path": "string | null",
+  "command_line": "string | null",
+  "user": "string | null",
+  "cpu_percent": "number | null",
+  "memory_bytes": "number | null",
+  "started_at": "datetime | null"
+}
+```
+
+`command_line`은 secret 노출 위험이 있어 기본 비수집으로 둔다. 수집을 활성화하더라도 token, password, key, secret, authorization 형태의 값을 redaction한다.
+
+### 6.2 ServiceState
+
+```json
+{
+  "name": "string",
+  "display_name": "string | null",
+  "status": "running | stopped | failed | paused | unknown",
+  "startup_type": "automatic | manual | disabled | unknown",
+  "binary_path": "string | null",
+  "user": "string | null",
+  "last_state_change_at": "datetime | null"
+}
+```
+
+### 6.3 PackageState
+
+```json
+{
+  "name": "string",
+  "version": "string | null",
+  "vendor": "string | null",
+  "install_time": "datetime | null",
+  "source": "dpkg | rpm | apk | pacman | registry | wmi | unknown"
+}
+```
+
+### 6.4 PortState
+
+```json
+{
+  "protocol": "tcp | udp",
+  "local_address": "string",
+  "local_port": "number",
+  "state": "listen | established | unknown",
+  "process_id": "number | null",
+  "process_name": "string | null",
+  "observed_at": "datetime"
+}
+```
+
+### 6.5 EntityState
+
+```json
+{
+  "entity_index": "number | null",
+  "name": "string",
+  "description": "string | null",
+  "class": "chassis | module | port | power_supply | fan | sensor | other | unknown",
+  "serial_number": "string | null",
+  "model": "string | null",
+  "parent_entity_index": "number | null"
+}
+```
+
+### 6.6 SensorState
+
+```json
+{
+  "entity_index": "number | null",
+  "name": "string",
+  "sensor_type": "temperature | voltage | fan | power | other | unknown",
+  "value": "number | null",
+  "unit": "celsius | volts | rpm | watts | unknown",
+  "status": "ok | warning | critical | unavailable | unknown",
+  "observed_at": "datetime"
+}
+```
+
+## 7. 수집 주기
+
+### 7.1 Agent 권장 수집 주기
+
+| Collector | 권장 주기 | 비고 |
+|---|---:|---|
+| Agent heartbeat | 30초 | agent alive 판단 |
+| Identity | 시작 시 + 1시간 | 변경 빈도 낮음 |
+| CPU/memory metric | 30~60초 | dashboard 기본 지표 |
+| Disk usage | 1~5분 | 파일시스템 수 기준 조정 |
+| Disk I/O | 1분 | 서버 중심 |
+| Network traffic | 30~60초 | interface별 counter |
+| Process snapshot | 1~5분 | 고부하 방지 |
+| Service snapshot | 1~5분 | 중요 서비스는 더 짧게 가능 |
+| Listening port | 1~5분 | diff 기반 event 생성 |
+| Package inventory | 6~24시간 | 변경 빈도 낮음 |
+| Firewall summary | 5~15분 | rule 원문보다 요약 중심 |
+| Log tailer | near real-time | cursor 기반 incremental 수집 |
+
+### 7.2 SNMP 권장 수집 주기
+
+| MIB/수집 영역 | 권장 주기 | 비고 |
+|---|---:|---|
+| SNMPv2-MIB identity | 5분~1시간 | sysUpTime은 더 자주 수집 가능 |
+| IF-MIB status | 30~60초 | 장애 감지 핵심 |
+| IF-MIB traffic counter | 30~60초 | rate 계산 |
+| IF-MIB errors/discards | 30~60초 | 장애 징후 |
+| IP-MIB statistics | 1~5분 | IP/ICMP 이상 |
+| IP-FORWARD-MIB route table | 1~5분 | 라우터는 더 짧게 |
+| TCP-MIB/UDP-MIB | 1~5분 | 통계성 지표 |
+| BGP4-MIB peer state | 30~60초 | BGP 장비는 중요 |
+| OSPF-MIB neighbor state | 30~60초 | OSPF 장비는 중요 |
+| ENTITY-MIB inventory | 1~6시간 | 변경 빈도 낮음 |
+| ENTITY-SENSOR-MIB | 1~5분 | 온도/팬/전원 |
+| LLDP-MIB | 5~15분 | 토폴로지 변화 감지 |
+| BRIDGE/Q-BRIDGE-MIB | 5~15분 | 대형 스위치는 부하 고려 |
+
+## 8. 자산 식별과 중복 제거
+
+같은 장비가 agent와 SNMP 양쪽에서 보일 수 있으므로 asset correlation이 필요하다.
+
+자산 식별 우선순위는 다음과 같다.
+
+| 우선순위 | 식별자 | 설명 |
+|---:|---|---|
+| 1 | agent_id | agent 설치 장비의 가장 강한 식별자 |
+| 2 | serial_number | 서버/상용 장비에서 강한 식별자 |
+| 3 | sysObjectID + sysName + management IP | SNMP 장비 식별 |
+| 4 | hostname + primary MAC | host 식별 |
+| 5 | management IP | 마지막 fallback. IP 변경 가능성이 있어 단독 사용은 지양 |
+
+중복 제거 규칙은 다음과 같다.
+
+| 상황 | 처리 |
+|---|---|
+| Agent와 SNMP가 같은 hostname/MAC를 보고 | 하나의 asset에 source만 병합 |
+| SNMP sysName이 hostname과 다름 | alias로 보관하고 관리자가 확인 |
+| management IP가 바뀜 | 이전 IP를 historical identifier로 유지 |
+| sysUpTime reset | 새 asset이 아니라 reboot event로 처리 |
+| serial이 다른데 hostname이 같음 | 다른 asset으로 분리 |
+
+## 9. 보안 및 개인정보 원칙
+
+수집기는 관제를 위해 필요한 정보만 수집하고, 민감정보 원문은 저장하지 않는다.
+
+| 항목 | 기본 정책 |
+|---|---|
+| Password/API key/token | 수집 제외 또는 redaction |
+| Process command line | 기본 비수집. 선택 활성화 시 redaction |
+| Environment variable | 기본 비수집 |
+| Browser history | 수집 제외 |
+| Clipboard | 수집 제외 |
+| User document content | 수집 제외 |
+| SNMP community | 서버 secret store에 저장, 로그 출력 금지 |
+| SNMP SET | 미지원 |
+| SNMPv2c | read-only community만 허용 |
+| Agent 권한 | collector별 최소 권한 원칙 |
+
+## 10. v1 구현 우선순위
+
+v1은 수집 범위를 넓히기보다, 정규화 모델과 기본 collector의 신뢰성을 먼저 확보한다.
+
+| 단계 | 구현 내용 | 이유 |
+|---:|---|---|
+| 1 | Asset 공통 schema, capability schema | 모든 수집 데이터의 기준 |
+| 2 | Linux/Windows agent identity, metric, network, service, port collector | 가장 안정적인 host telemetry |
+| 3 | Linux/Windows log tailer | 보안 이벤트와 장애 이벤트 수집 |
+| 4 | SNMPv2-MIB, IF-MIB | 모든 SNMP 장비의 최소 공통 수집 |
+| 5 | IP-MIB, IP-FORWARD-MIB, TCP-MIB, UDP-MIB | L3/transport 관제 확장 |
+| 6 | BGP4-MIB, OSPF-MIB | 라우터 관제 핵심 |
+| 7 | ENTITY-MIB, ENTITY-SENSOR-MIB | 상용 장비 하드웨어 상태 |
+| 8 | BRIDGE-MIB, Q-BRIDGE-MIB, LLDP-MIB | 네트워크 토폴로지와 L2 관제 |
+
+## 11. 장비 타입별 최종 수집 요약
+
+| 장비 타입 | 기본 수집 방식 | 핵심 수집 정보 | 제한 사항 |
+|---|---|---|---|
+| Linux | Agent | OS, metric, process, service, package, port, firewall, log | command line과 환경변수는 기본 비수집 |
+| Windows 서버 | Agent | OS, metric, process, service, app, port, firewall, Event Log, server role | 일부 보안 제품 상태는 제품별 편차 |
+| Windows host | Agent | OS, metric, user session, process, service, app, firewall, Defender/Event Log | 개인정보성 데이터는 수집 제외 |
+| 라우터 | SNMP | interface, traffic, route, IP, TCP/UDP, BGP, OSPF | config 원문/CLI 상태는 제외 |
+| 방화벽 | SNMP | interface, traffic, route, TCP/UDP, hardware sensor | policy/NAT/threat log 상세는 표준 SNMP로 불가 |
+| 네트워크 장비 | SNMP | interface, MAC table, VLAN, LLDP, hardware sensor | 장비별 MIB 지원 편차 큼 |
+
+## 12. 결론
+
+Castrelyx의 수집 구조는 `Agent Deep Telemetry`와 `SNMP Infra Telemetry`를 결합하는 방식이 가장 현실적이다.
+
+Agent는 Windows/Linux 내부 상태를 깊게 수집한다. Metric collector는 리소스와 네트워크 사용량을 수집하고, log tailer는 인증/보안/서비스 이벤트를 near real-time으로 수집한다. Process, service, package, port collector는 공격면과 운영 상태를 파악하는 데 사용한다.
+
+SNMP는 네트워크 장비의 표준 상태 수집에 집중한다. `SNMPv2-MIB`, `IF-MIB`, `IP-MIB`, `IP-FORWARD-MIB`, `TCP-MIB`, `UDP-MIB`, `BGP4-MIB`, `OSPF-MIB`를 v1 핵심 MIB로 두고, 장비 capability에 따라 `ENTITY-MIB`, `ENTITY-SENSOR-MIB`, `BRIDGE-MIB`, `Q-BRIDGE-MIB`, `LLDP-MIB`를 추가 수집한다.
+
+모든 수집 결과는 공통 asset schema에 먼저 매핑하고, Linux, Windows 서버, Windows host, 라우터, 방화벽, 네트워크 장비별 extension schema로 상세 정보를 분리한다. 이 구조를 사용하면 수집 방식이 달라도 Castrelyx UI와 분석 엔진은 동일한 자산 모델을 기준으로 동작할 수 있다.

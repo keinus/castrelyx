@@ -1,0 +1,86 @@
+package org.keinus.logparser.infrastructure.persistence.repository;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.keinus.logparser.domain.model.mapping.MappingConfiguration;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import javax.sql.DataSource;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class MappingRepositoryTest {
+
+    private SqliteMappingRepository mappingRepository;
+    private DataSource dataSource;
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void setUp() {
+        // Use H2 in-memory database for testing
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUrl("jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MySQL");
+        ds.setUsername("sa");
+        ds.setPassword("");
+        this.dataSource = ds;
+        this.objectMapper = new ObjectMapper();
+        
+        mappingRepository = new SqliteMappingRepository(dataSource, objectMapper);
+        mappingRepository.initTable();
+    }
+
+    @Test
+    void shouldSaveAndFindByMessageType() {
+        MappingConfiguration config = new MappingConfiguration();
+        config.setId("id1");
+        config.setMessageType("test-type");
+
+        mappingRepository.save(config);
+
+        Optional<MappingConfiguration> result = mappingRepository.findByMessageType("test-type");
+        assertThat(result).isPresent();
+        assertThat(result.get().getId()).isEqualTo("id1");
+        assertThat(result.get().getMessageType()).isEqualTo("test-type");
+    }
+
+    @Test
+    void shouldReturnEmptyWhenNotFound() {
+        Optional<MappingConfiguration> result = mappingRepository.findByMessageType("non-existent");
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void shouldOverwriteWhenSavingSameMessageType() {
+        MappingConfiguration config1 = new MappingConfiguration();
+        config1.setId("id1");
+        config1.setMessageType("test-type");
+        mappingRepository.save(config1);
+
+        MappingConfiguration config2 = new MappingConfiguration();
+        config2.setId("id2");
+        config2.setMessageType("test-type");
+        mappingRepository.save(config2);
+
+        Optional<MappingConfiguration> result = mappingRepository.findByMessageType("test-type");
+        assertThat(result).isPresent();
+        assertThat(result.get().getId()).isEqualTo("id2");
+    }
+
+    @Test
+    void shouldFindAllMappings() {
+        MappingConfiguration config1 = new MappingConfiguration();
+        config1.setMessageType("type-a");
+        mappingRepository.save(config1);
+
+        MappingConfiguration config2 = new MappingConfiguration();
+        config2.setMessageType("type-b");
+        mappingRepository.save(config2);
+
+        assertThat(mappingRepository.findAll())
+                .extracting(MappingConfiguration::getMessageType)
+                .contains("type-a", "type-b");
+    }
+}

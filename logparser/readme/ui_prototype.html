@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logparser Advanced Schema Mapper Prototype</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #3498db;
+            --success-color: #27ae60;
+            --bg-color: #f4f6f9;
+            --border-color: #dcdcdc;
+        }
+        body {
+            font-family: 'Segoe UI', 'Apple SD Gothic Neo', sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        }
+        h1, h2, h3 { margin-top: 0; color: var(--primary-color); }
+        h1 { border-bottom: 2px solid var(--accent-color); padding-bottom: 15px; margin-bottom: 30px; }
+        
+        .section {
+            background: #fff;
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 25px;
+        }
+        
+        .row { display: flex; gap: 20px; }
+        .col { flex: 1; }
+        .col-2 { flex: 2; }
+
+        input, select, button {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input:focus, select:focus { outline: 2px solid var(--accent-color); border-color: transparent; }
+        
+        .btn { cursor: pointer; background: #eee; border: 1px solid #ccc; transition: all 0.2s; }
+        .btn-primary { background: var(--accent-color); color: white; border-color: var(--accent-color); }
+        .btn-success { background: var(--success-color); color: white; border-color: var(--success-color); }
+        .btn:hover { opacity: 0.9; }
+
+        /* Mapping Area */
+        .mapping-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        
+        .schema-container {
+            display: flex;
+            gap: 20px;
+            height: 600px; /* Fixed height for scroll */
+        }
+
+        /* Source Column */
+        .source-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-color);
+            padding-right: 20px;
+        }
+        .source-list {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            padding: 5px;
+            background: #fafafa;
+        }
+        .field-item {
+            padding: 8px;
+            background: white;
+            border: 1px solid #ddd;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            cursor: grab;
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+        .field-item:hover { border-color: var(--accent-color); background: #f0f7ff; }
+
+        /* Target Column */
+        .target-panel {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            overflow-y: hidden;
+        }
+        .target-scroll-area {
+            overflow-y: auto;
+            padding-right: 5px;
+            flex: 1;
+        }
+
+        .schema-group {
+            margin-bottom: 20px;
+            border: 1px solid var(--accent-color);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .schema-header {
+            background: var(--accent-color);
+            color: white;
+            padding: 8px 15px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .schema-row {
+            display: flex;
+            padding: 8px 15px;
+            border-bottom: 1px solid #eee;
+            align-items: center;
+            background: white;
+        }
+        .schema-row:last-child { border-bottom: none; }
+        .col-name { flex: 1; font-weight: 600; font-size: 13px; }
+        .col-type { flex: 0.5; color: #888; font-size: 12px; }
+        .col-mapping { flex: 2; display: flex; gap: 5px; }
+        
+        /* Mapping Input Styles */
+        .mapping-input-wrapper {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            background: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 0 5px;
+        }
+        .mapping-input-wrapper.active {
+            border-color: var(--success-color);
+            background: #e8f5e9;
+        }
+        .mapped-tag {
+            background: var(--primary-color);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-right: 5px;
+            display: inline-flex;
+            align-items: center;
+        }
+        .mapped-tag .close { margin-left: 5px; cursor: pointer; }
+        .combo-select {
+            border: none;
+            background: transparent;
+            width: 100%;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .combo-select:focus { outline: none; }
+
+        /* Custom Field Input */
+        .add-field-box {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        /* Simulation Box */
+        #sim-result {
+            background: #222;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Consolas', monospace;
+            white-space: pre-wrap;
+            height: 150px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Logparser Schema Mapper Prototype v2</h1>
+
+    <!-- 1. Rule Config -->
+    <div class="section">
+        <h3>1. Transformation Rules</h3>
+        <div class="row">
+            <div class="col">
+                <label><b>Condition (Filter)</b></label>
+                <input type="text" value="dest_port == 80 || protocol == 'HTTP'" style="width:100%">
+            </div>
+            <div class="col">
+                <label><b>Target Sub-Table</b></label>
+                <select id="sub-schema-select" onchange="renderTargetSchemas()" style="width:100%">
+                    <option value="event_web">event_web (Web Traffic)</option>
+                    <option value="event_network">event_network (Network Flow)</option>
+                    <option value="event_auth">event_auth (Authentication)</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Mapping Area -->
+    <div class="section">
+        <div class="mapping-toolbar">
+            <h3>2. Schema Mapping</h3>
+            <div>
+                <button class="btn btn-success" onclick="autoMap()">✨ Auto Map (Smart Match)</button>
+                <button class="btn" onclick="resetMapping()">Reset</button>
+            </div>
+        </div>
+
+        <div class="schema-container">
+            <!-- Left: Source Fields -->
+            <div class="source-panel">
+                <h4>Source Fields (Detected)</h4>
+                <div class="add-field-box">
+                    <input type="text" id="new-field-name" placeholder="+ Add custom field name...">
+                    <button class="btn" onclick="addCustomField()">Add</button>
+                </div>
+                <div class="source-list" id="source-list">
+                    <!-- Dynamic Source Fields -->
+                </div>
+            </div>
+
+            <!-- Right: Target Schemas -->
+            <div class="target-panel">
+                <h4>Target Database Schema</h4>
+                <div class="target-scroll-area" id="target-area">
+                    <!-- Common Schema -->
+                    <div class="schema-group">
+                        <div class="schema-header">Common Table: event</div>
+                        <div id="common-schema-rows"></div>
+                    </div>
+                    <!-- Sub Schema -->
+                    <div class="schema-group">
+                        <div class="schema-header" id="sub-schema-header">Sub Table: event_web</div>
+                        <div id="sub-schema-rows"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Simulation -->
+    <div class="section">
+        <h3>3. Simulation Preview</h3>
+        <button class="btn btn-primary" onclick="runSimulation()">▶ Run Simulation</button>
+        <div style="margin-top:10px;">
+            <div id="sim-result">// Ready</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Data Definitions ---
+    const sourceFields = [
+        'client_ip', 'server_ip', 'method', 'uri_path', 'status_code', 
+        'user_agent', 'response_bytes', 'timestamp', 'referer', 'username'
+    ];
+
+    const commonSchema = [
+        { name: 'event_time', type: 'TIMESTAMP' },
+        { name: 'src_ip', type: 'INET' },
+        { name: 'dst_ip', type: 'INET' },
+        { name: 'user_name', type: 'VARCHAR' },
+        { name: 'log_source', type: 'VARCHAR' }
+    ];
+
+    const subSchemas = {
+        'event_web': [
+            { name: 'http_method', type: 'VARCHAR(10)' },
+            { name: 'url', type: 'TEXT' },
+            { name: 'uri_path', type: 'TEXT' },
+            { name: 'http_status', type: 'INTEGER' },
+            { name: 'user_agent', type: 'TEXT' },
+            { name: 'bytes', type: 'BIGINT' }
+        ],
+        'event_network': [
+            { name: 'bytes_in', type: 'BIGINT' },
+            { name: 'bytes_out', type: 'BIGINT' },
+            { name: 'packets_in', type: 'BIGINT' },
+            { name: 'packets_out', type: 'BIGINT' }
+        ]
+    };
+
+    let mappingState = {}; // targetCol -> sourceField
+
+    // --- Rendering Functions ---
+
+    function init() {
+        renderSourceList();
+        renderTargetSchemas();
+    }
+
+    function renderSourceList() {
+        const container = document.getElementById('source-list');
+        container.innerHTML = '';
+        sourceFields.forEach(field => {
+            const div = document.createElement('div');
+            div.className = 'field-item';
+            div.draggable = true;
+            div.ondragstart = (e) => e.dataTransfer.setData('text', field);
+            div.innerHTML = `<span>${field}</span> <span style="color:#aaa">String</span>`;
+            container.appendChild(div);
+        });
+    }
+
+    function addCustomField() {
+        const input = document.getElementById('new-field-name');
+        const name = input.value.trim();
+        if(name && !sourceFields.includes(name)) {
+            sourceFields.push(name);
+            renderSourceList();
+            // Also update dropdowns
+            renderTargetSchemas(); 
+            input.value = '';
+        }
+    }
+
+    function renderTargetSchemas() {
+        // Common
+        renderSchemaRows(commonSchema, 'common-schema-rows');
+
+        // Sub
+        const subType = document.getElementById('sub-schema-select').value;
+        document.getElementById('sub-schema-header').innerText = `Sub Table: ${subType}`;
+        const subCols = subSchemas[subType] || [];
+        renderSchemaRows(subCols, 'sub-schema-rows');
+    }
+
+    function renderSchemaRows(schema, containerId) {
+        const container = document.getElementById(containerId);
+        container.innerHTML = '';
+
+        schema.forEach(col => {
+            const row = document.createElement('div');
+            row.className = 'schema-row';
+            
+            const currentMap = mappingState[col.name] || '';
+            const isActive = currentMap !== '';
+
+            // Dropdown Options
+            let options = `<option value="">(Select Source Field...)</option>`;
+            sourceFields.forEach(src => {
+                const selected = src === currentMap ? 'selected' : '';
+                options += `<option value="${src}" ${selected}>${src}</option>`;
+            });
+
+            row.innerHTML = `
+                <div class="col-name">${col.name}</div>
+                <div class="col-type">${col.type}</div>
+                <div class="col-mapping">
+                    <div class="mapping-input-wrapper ${isActive ? 'active' : ''}" 
+                         ondrop="dropHandler(event, '${col.name}')" 
+                         ondragover="allowDrop(event)">
+                        
+                        ${isActive ? `<span class="mapped-tag">${currentMap} <span class="close" onclick="clearMap('${col.name}')">&times;</span></span>` : ''}
+                        
+                        <select class="combo-select" onchange="manualSelect('${col.name}', this.value)">
+                            ${options}
+                        </select>
+                    </div>
+                </div>
+            `;
+            container.appendChild(row);
+        });
+    }
+
+    // --- Interaction Logic ---
+
+    function allowDrop(ev) { ev.preventDefault(); }
+
+    function dropHandler(ev, targetCol) {
+        ev.preventDefault();
+        const srcField = ev.dataTransfer.getData('text');
+        manualSelect(targetCol, srcField);
+    }
+
+    function manualSelect(targetCol, srcField) {
+        if(srcField) {
+            mappingState[targetCol] = srcField;
+        } else {
+            delete mappingState[targetCol];
+        }
+        renderTargetSchemas(); // Re-render to show tag style
+    }
+
+    function clearMap(targetCol) {
+        delete mappingState[targetCol];
+        renderTargetSchemas();
+    }
+
+    function resetMapping() {
+        mappingState = {};
+        renderTargetSchemas();
+    }
+
+    function autoMap() {
+        // Simple heuristic: name similarity
+        // e.g. client_ip -> src_ip, method -> http_method
+        const keywords = {
+            'src_ip': ['client_ip', 'src_ip', 'source_ip'],
+            'dst_ip': ['server_ip', 'dst_ip', 'dest_ip'],
+            'http_method': ['method', 'http_method'],
+            'uri_path': ['uri', 'url', 'path', 'uri_path'],
+            'http_status': ['status', 'code', 'status_code'],
+            'bytes': ['bytes', 'response_bytes', 'size'],
+            'user_name': ['user', 'username', 'login_id'],
+            'event_time': ['time', 'timestamp', 'date']
+        };
+
+        const allTargetCols = [...commonSchema, ...(subSchemas[document.getElementById('sub-schema-select').value]||[])];
+
+        allTargetCols.forEach(target => {
+            if(mappingState[target.name]) return; // Skip if already mapped
+
+            const potentialMatches = keywords[target.name] || [target.name];
+            
+            // Find a source field that matches any keyword
+            const match = sourceFields.find(src => 
+                potentialMatches.some(key => src.includes(key) || key.includes(src))
+            );
+
+            if(match) {
+                mappingState[target.name] = match;
+            }
+        });
+        
+        renderTargetSchemas();
+    }
+
+    function runSimulation() {
+        const result = {
+            _metadata: {
+                timestamp: new Date().toISOString(),
+                target_tables: ['event', document.getElementById('sub-schema-select').value]
+            },
+            mapped_data: {}
+        };
+
+        Object.keys(mappingState).forEach(key => {
+            result.mapped_data[key] = `[Value from ${mappingState[key]}]`;
+        });
+
+        document.getElementById('sim-result').innerText = JSON.stringify(result, null, 4);
+    }
+
+    // Initialize
+    init();
+
+</script>
+
+</body>
+</html>

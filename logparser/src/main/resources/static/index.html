@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogParser - Data Pipeline Console</title>
+    
+    <!-- Tailwind CSS & DaisyUI -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.6.0/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        /* Fluid Typography: Adjust base size based on viewport */
+        html {
+            font-size: 13px; /* Mobile base */
+        }
+        @media (min-width: 640px) { html { font-size: 14px; } }
+        @media (min-width: 1024px) { html { font-size: 15px; } }
+        @media (min-width: 1536px) { html { font-size: 16px; } }
+
+        :root {
+            /* Sidebar width variables for calculation if needed, though Tailwind handles it */
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        /* Sidebar Styling */
+        .sidebar-active {
+            background-color: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            border-right: 3px solid #60a5fa;
+        }
+        
+        .pipeline-connector {
+            flex-grow: 1;
+            height: 2px;
+            background: #334155;
+            position: relative;
+            margin: 0 1rem;
+        }
+        .pipeline-connector::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: -4px;
+            width: 8px;
+            height: 8px;
+            border-top: 2px solid #334155;
+            border-right: 2px solid #334155;
+            transform: rotate(45deg);
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+        
+        .metric-value {
+             font-variant-numeric: tabular-nums;
+        }
+
+        /* Mapper UI Overrides for Dark Mode Compatibility */
+        .mapper-container { color: #cbd5e1; }
+        .mapper-section { background: #1e293b !important; border-color: #334155 !important; }
+        .mapper-section h3, .mapper-section h4, .mapper-section label { color: #e2e8f0 !important; }
+        .form-control, .combo-select { 
+            background-color: #0f172a !important; 
+            border-color: #334155 !important; 
+            color: #f1f5f9 !important; 
+        }
+        .field-item, .schema-row { background: #0f172a !important; border-color: #334155 !important; color: #cbd5e1 !important; }
+    </style>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            850: '#151f32',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="flex h-screen overflow-hidden text-slate-300">
+
+    <!-- Sidebar 
+         Responsive Width: w-20 on mobile/tablet, lg:w-72 on desktop.
+         Transition enabled for smooth resizing.
+    -->
+    <aside class="w-20 lg:w-72 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 z-20 transition-all duration-300 ease-in-out">
+        <!-- Logo -->
+        <div class="h-16 flex items-center justify-center lg:justify-start lg:px-6 border-b border-slate-800 bg-slate-900 overflow-hidden whitespace-nowrap">
+            <span class="material-icons-round text-blue-500 text-3xl lg:mr-3 lg:text-2xl">hub</span>
+            <div class="hidden lg:block opacity-0 lg:opacity-100 transition-opacity duration-300">
+                <h1 class="font-bold text-white text-lg tracking-tight">LogParser</h1>
+                <p class="text-xs text-slate-500 font-mono">v0.2.3-stable</p>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 overflow-y-auto py-4 overflow-x-hidden">
+            <div class="hidden lg:block px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Observability</div>
+            <!-- Mobile Divider -->
+            <div class="lg:hidden h-px bg-slate-800 mx-4 mb-4"></div>
+            
+            <ul class="space-y-1 mb-6">
+                <li>
+                    <a href="#" onclick="App.switchView('overview')" id="nav-overview" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors sidebar-active" title="Overview">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">dashboard</span>
+                        <span class="hidden lg:inline-block">Overview</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('live-tail')" id="nav-live-tail" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Live Tail">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">terminal</span>
+                        <span class="hidden lg:inline-block">Live Tail</span>
+                    </a>
+                </li>
+            </ul>
+
+            <div class="hidden lg:block px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Pipeline Config</div>
+            <!-- Mobile Divider -->
+            <div class="lg:hidden h-px bg-slate-800 mx-4 mb-4"></div>
+
+            <ul class="space-y-1 mb-6">
+                <li>
+                    <a href="#" onclick="App.switchView('pipeline-visual')" id="nav-pipeline-visual" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Pipeline View">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">account_tree</span>
+                        <span class="hidden lg:inline-block">Pipeline View</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('inputs')" id="nav-input" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Sources">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">input</span>
+                        <span class="hidden lg:inline-block">Sources</span>
+                        <span class="hidden lg:inline-flex ml-auto bg-slate-800 text-slate-400 py-0.5 px-2 rounded-full text-xs" id="badge-input">0</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('parser')" id="nav-parser" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Parsers">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">code</span>
+                        <span class="hidden lg:inline-block">Parsers</span>
+                        <span class="hidden lg:inline-flex ml-auto bg-slate-800 text-slate-400 py-0.5 px-2 rounded-full text-xs" id="badge-parser">0</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('transform')" id="nav-transform" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Event Rules">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">rule</span>
+                        <span class="hidden lg:inline-block">Event Rules</span>
+                        <span class="hidden lg:inline-flex ml-auto bg-slate-800 text-slate-400 py-0.5 px-2 rounded-full text-xs" id="badge-transform">0</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('schema-map')" id="nav-schema-map" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Schema Map">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">schema</span>
+                        <span class="hidden lg:inline-block">Schema Map</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('outputs')" id="nav-output" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Destinations">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">output</span>
+                        <span class="hidden lg:inline-block">Destinations</span>
+                        <span class="hidden lg:inline-flex ml-auto bg-slate-800 text-slate-400 py-0.5 px-2 rounded-full text-xs" id="badge-output">0</span>
+                    </a>
+                </li>
+            </ul>
+
+            <div class="hidden lg:block px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">System</div>
+            <!-- Mobile Divider -->
+            <div class="lg:hidden h-px bg-slate-800 mx-4 mb-4"></div>
+
+            <ul class="space-y-1">
+                <li>
+                    <a href="#" onclick="App.switchView('settings')" id="nav-settings" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Configuration">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">settings</span>
+                        <span class="hidden lg:inline-block">Configuration</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/markdown-viewer.html?path=README.md" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium text-slate-400 hover:bg-slate-800 transition-colors" title="Docs">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">description</span>
+                        <span class="hidden lg:inline-block">Docs</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Status Footer -->
+        <div class="p-2 lg:p-4 border-t border-slate-800 bg-slate-900 overflow-hidden">
+            <div class="flex items-center justify-center lg:justify-between mb-2">
+                <span class="hidden lg:inline text-xs font-medium text-slate-400">System Status</span>
+                <span class="flex h-2 w-2 relative" title="System Status: OK">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+            </div>
+            <div class="hidden lg:block w-full bg-slate-800 rounded-full h-1.5 mb-1">
+                <div class="bg-blue-500 h-1.5 rounded-full" id="cpu-bar" style="width: 45%"></div>
+            </div>
+            <div class="hidden lg:flex justify-between text-[10px] text-slate-500 font-mono">
+                <span id="threads-count">Threads: -</span>
+                <span id="mem-usage">MEM: -</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col h-screen overflow-hidden bg-slate-950 relative">
+        
+        <!-- Top Header -->
+        <header class="h-14 lg:h-16 flex items-center justify-between px-4 lg:px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10 transition-all">
+            <div class="flex items-center overflow-hidden">
+                <h2 id="page-title" class="text-lg lg:text-xl font-semibold text-white mr-4 truncate">Overview</h2>
+                <div class="hidden sm:block h-6 w-px bg-slate-700 mx-2"></div>
+                <div id="status-pill" class="hidden sm:inline-flex badge badge-success badge-outline gap-2 ml-2">
+                    <div class="w-1.5 h-1.5 rounded-full bg-current"></div>
+                    <span id="pipeline-status-text">Running</span>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-2 lg:space-x-4">
+                <div class="relative hidden sm:block">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3">
+                        <span class="material-icons-round text-slate-500 text-lg">search</span>
+                    </span>
+                    <input type="text" id="global-search" onkeyup="App.handleSearch(this.value)" placeholder="Search..." class="input input-sm input-bordered bg-slate-800 border-slate-700 w-32 md:w-48 lg:w-64 pl-10 focus:outline-none focus:border-blue-500 transition-colors text-slate-200">
+                </div>
+                <!-- Mobile Search Icon -->
+                <button class="sm:hidden btn btn-sm btn-ghost btn-circle text-slate-400">
+                     <span class="material-icons-round">search</span>
+                </button>
+                
+                <button class="btn btn-sm btn-ghost btn-circle text-slate-400 hover:text-white">
+                    <span class="material-icons-round">notifications</span>
+                </button>
+                <button class="btn btn-sm btn-primary gap-1 lg:gap-2 px-2 lg:px-4" onclick="App.openControlModal()">
+                    <span class="material-icons-round text-sm">play_circle</span>
+                    <span class="hidden md:inline">Actions</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Scrollable Content Area -->
+        <div id="content-area" class="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative scroll-smooth">
+            
+            <!-- OVERVIEW VIEW -->
+            <div id="view-overview" class="space-y-4 lg:space-y-6">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-6">
+                    <div class="card bg-slate-900 border border-slate-800 shadow-xl compact">
+                        <div class="card-body p-4 lg:p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Components</p>
+                                    <h3 class="text-xl lg:text-2xl font-bold text-white mt-1 metric-value" id="stat-components">0</h3>
+                                </div>
+                                <span class="p-2 bg-blue-500/10 rounded-lg text-blue-500">
+                                    <span class="material-icons-round">extension</span>
+                                </span>
+                            </div>
+                            <div class="mt-4 flex items-center text-xs text-slate-400 font-medium">
+                                Total active adapters
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card bg-slate-900 border border-slate-800 shadow-xl compact">
+                        <div class="card-body p-4 lg:p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Throughput</p>
+                                    <h3 class="text-xl lg:text-2xl font-bold text-white mt-1 metric-value" id="stat-throughput">0/s</h3>
+                                </div>
+                                <span class="p-2 bg-purple-500/10 rounded-lg text-purple-500">
+                                    <span class="material-icons-round">speed</span>
+                                </span>
+                            </div>
+                             <div class="mt-4 flex items-center text-xs text-slate-500 font-medium">
+                                <span class="material-icons-round text-sm mr-1">access_time</span>
+                                Real-time
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card bg-slate-900 border border-slate-800 shadow-xl compact">
+                        <div class="card-body p-4 lg:p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Queue Depth</p>
+                                    <h3 class="text-xl lg:text-2xl font-bold text-white mt-1 metric-value" id="stat-queue">0</h3>
+                                </div>
+                                <span class="p-2 bg-amber-500/10 rounded-lg text-amber-500">
+                                    <span class="material-icons-round">layers</span>
+                                </span>
+                            </div>
+                            <progress id="queue-progress" class="progress progress-warning w-full mt-4" value="0" max="1000"></progress>
+                        </div>
+                    </div>
+
+                    <div class="card bg-slate-900 border border-slate-800 shadow-xl compact">
+                        <div class="card-body p-4 lg:p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Threads</p>
+                                    <h3 class="text-xl lg:text-2xl font-bold text-white mt-1 metric-value" id="stat-threads">0</h3>
+                                </div>
+                                <span class="p-2 bg-emerald-500/10 rounded-lg text-emerald-500">
+                                    <span class="material-icons-round">memory</span>
+                                </span>
+                            </div>
+                             <div class="mt-4 flex items-center text-xs text-emerald-400 font-medium">
+                                Processing Workers
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 lg:gap-6">
+                    <!-- Main Chart -->
+                    <div class="col-span-1 xl:col-span-2 card bg-slate-900 border border-slate-800 shadow-xl">
+                        <div class="card-body p-4 lg:p-6">
+                            <div class="flex justify-between items-center mb-4 lg:mb-6">
+                                <h3 class="font-semibold text-white">Traffic Volume (Throughput)</h3>
+                            </div>
+                            <div class="h-48 md:h-64 lg:h-80 w-full">
+                                <canvas id="trafficChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Component Status -->
+                    <div class="card bg-slate-900 border border-slate-800 shadow-xl">
+                        <div class="card-body p-4 lg:p-6">
+                            <h3 class="font-semibold text-white mb-4">Pipeline Breakdown</h3>
+                            <div class="space-y-3 lg:space-y-4" id="pipeline-breakdown-list">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Threads Table -->
+                <div class="card bg-slate-900 border border-slate-800 shadow-xl">
+                    <div class="card-body p-4 lg:p-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-semibold text-white">Active Threads</h3>
+                            <span class="text-xs text-slate-500 font-mono">Managed by ThreadManager</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="table table-xs md:table-sm w-full font-mono text-slate-300">
+                                <thead class="text-slate-500 border-b border-slate-800">
+                                    <tr>
+                                        <th>Type</th>
+                                        <th>Name / Component</th>
+                                        <th>State</th>
+                                        <th>Thread ID</th>
+                                        <th class="text-right">Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="thread-list-body">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PIPELINE VIEW -->
+            <div id="view-pipeline-visual" class="hidden h-full flex flex-col">
+                <div class="flex justify-between items-center mb-6">
+                     <h3 class="text-lg font-medium text-white">Pipeline Topology</h3>
+                </div>
+                
+                <div class="flex-1 bg-slate-900 border border-slate-800 rounded-xl relative overflow-hidden" style="background-image: radial-gradient(#334155 1px, transparent 1px); background-size: 20px 20px;">
+                    <!-- Simple CSS Flow Visualization -->
+                    <div class="absolute inset-0 flex items-center justify-center p-4 lg:p-10 overflow-x-auto">
+                        
+                        <!-- Input Stage -->
+                        <div onclick="App.switchView('inputs')" class="flex flex-col items-center min-w-[140px] md:min-w-[200px] group cursor-pointer hover:scale-105 transition-transform">
+                            <div class="w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-blue-500/20 border-2 border-blue-500 flex items-center justify-center mb-4 shadow-lg shadow-blue-900/20">
+                                <span class="material-icons-round text-blue-500 text-2xl md:text-3xl">input</span>
+                            </div>
+                            <h4 class="font-bold text-white text-sm md:text-base">Sources</h4>
+                            <p class="text-xs text-slate-400 mt-1" id="topo-input-count">0 Adapters</p>
+                        </div>
+
+                        <!-- Connector -->
+                        <div class="w-12 md:w-24 h-0.5 bg-slate-600 relative mx-2 md:mx-4">
+                            <div class="absolute -top-1 left-1/2 -ml-1 w-2 h-2 bg-slate-400 rounded-full animate-ping"></div>
+                        </div>
+
+                        <!-- Parser Stage -->
+                        <div onclick="App.switchView('parser')" class="flex flex-col items-center min-w-[140px] md:min-w-[200px] group cursor-pointer hover:scale-105 transition-transform">
+                             <div class="w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-purple-500/20 border-2 border-purple-500 flex items-center justify-center mb-4 shadow-lg shadow-purple-900/20">
+                                <span class="material-icons-round text-purple-500 text-2xl md:text-3xl">code</span>
+                            </div>
+                            <h4 class="font-bold text-white text-sm md:text-base">Parsing</h4>
+                            <p class="text-xs text-slate-400 mt-1" id="topo-parser-count">0 Parsers</p>
+                        </div>
+
+                        <!-- Connector -->
+                        <div class="w-12 md:w-24 h-0.5 bg-slate-600 relative mx-2 md:mx-4"></div>
+
+                         <!-- Transform Stage -->
+                         <div onclick="App.switchView('transform')" class="flex flex-col items-center min-w-[140px] md:min-w-[200px] group cursor-pointer hover:scale-105 transition-transform">
+                            <div class="w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-amber-500/20 border-2 border-amber-500 flex items-center justify-center mb-4 shadow-lg shadow-amber-900/20">
+                               <span class="material-icons-round text-amber-500 text-2xl md:text-3xl">transform</span>
+                           </div>
+                           <h4 class="font-bold text-white text-sm md:text-base">Enrichment</h4>
+                           <p class="text-xs text-slate-400 mt-1" id="topo-transform-count">0 Transforms</p>
+                       </div>
+
+                       <!-- Connector -->
+                       <div class="w-12 md:w-24 h-0.5 bg-slate-600 relative mx-2 md:mx-4"></div>
+
+                       <!-- Output Stage -->
+                       <div onclick="App.switchView('outputs')" class="flex flex-col items-center min-w-[140px] md:min-w-[200px] group cursor-pointer hover:scale-105 transition-transform">
+                            <div class="w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-emerald-500/20 border-2 border-emerald-500 flex items-center justify-center mb-4 shadow-lg shadow-emerald-900/20">
+                               <span class="material-icons-round text-emerald-500 text-2xl md:text-3xl">output</span>
+                           </div>
+                           <h4 class="font-bold text-white text-sm md:text-base">Destinations</h4>
+                           <p class="text-xs text-slate-400 mt-1" id="topo-output-count">0 Outputs</p>
+                       </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- LIVE TAIL VIEW -->
+            <div id="view-live-tail" class="hidden h-full flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <div class="flex gap-4 items-center">
+                        <div class="flex items-center gap-2">
+                             <span class="loading loading-spinner loading-xs text-blue-500"></span>
+                             <span class="text-xs text-blue-400 font-mono">LIVE</span>
+                        </div>
+                    </div>
+                    <div class="flex gap-4 items-center">
+                        <label class="cursor-pointer label p-0 gap-2">
+                            <span class="label-text text-xs text-slate-400">Service</span> 
+                            <input type="checkbox" id="livetail-service-toggle" class="toggle toggle-success toggle-sm" onchange="App.toggleLiveTailService(this.checked)" />
+                        </label>
+                        <div class="h-4 w-px bg-slate-700"></div>
+                        <button class="btn btn-sm btn-ghost text-slate-400" onclick="document.getElementById('terminal-window').innerHTML = ''">Clear</button>
+                        <button class="btn btn-sm btn-secondary" onclick="App.togglePauseTail(this)">Pause</button>
+                    </div>
+                </div>
+                
+                <div class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-4 overflow-y-auto font-mono text-xs leading-relaxed" id="terminal-window">
+                    <div class="text-slate-500 mb-2 border-b border-slate-800 pb-2"># Listening for events (Simulated in Prototype)...</div>
+                </div>
+            </div>
+
+            <!-- GENERIC LIST VIEW (Inputs/Outputs/etc) -->
+            <div id="view-list-generic" class="hidden">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                    <div class="tabs tabs-boxed bg-slate-800 p-1">
+                        <a id="tab-all" class="tab tab-active text-white text-xs md:text-sm" onclick="App.setFilter('all')">All</a>
+                        <a id="tab-enabled" class="tab text-slate-400 text-xs md:text-sm" onclick="App.setFilter('enabled')">Enabled</a>
+                        <a id="tab-disabled" class="tab text-slate-400 text-xs md:text-sm" onclick="App.setFilter('disabled')">Disabled</a>
+                    </div>
+                    <button class="btn btn-primary btn-sm gap-2" onclick="App.openCreateModal()">
+                        <span class="material-icons-round text-sm">add</span>
+                        Create New
+                    </button>
+                </div>
+                
+                <div class="overflow-x-auto rounded-lg border border-slate-800">
+                    <table class="table w-full">
+                        <!-- head -->
+                        <thead class="bg-slate-900 text-slate-400 text-xs uppercase">
+                            <tr>
+                                <th>Status</th>
+                                <th>Message Type / ID</th>
+                                <th>Type</th>
+                                <th class="hidden md:table-cell" id="generic-config-header">Configuration</th>
+                                <th class="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="generic-list-body" class="bg-slate-900/50 text-sm">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- SCHEMA MAP VIEW -->
+            <div id="view-schema-map" class="hidden h-full flex flex-col gap-4">
+                <div class="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                    <div class="join w-full sm:w-auto">
+                        <input type="text" id="schema-map-message-type" value="syslog" class="input input-sm input-bordered join-item bg-slate-800 border-slate-700 text-white w-full sm:w-64 font-mono" placeholder="messageType" />
+                        <button class="btn btn-sm btn-outline join-item border-slate-700 text-slate-300 hover:bg-slate-800" onclick="App.loadSchemaMapping()">
+                            <span class="material-icons-round text-sm">download</span>
+                            Load
+                        </button>
+                    </div>
+                    <button class="btn btn-sm btn-primary gap-2 w-full sm:w-auto" onclick="App.saveSchemaMapping()">
+                        <span class="material-icons-round text-sm">save</span>
+                        Save Mapping
+                    </button>
+                </div>
+                <div id="schema-map-container" class="flex-1 min-h-[720px]"></div>
+            </div>
+            
+            <!-- SETTINGS VIEW -->
+            <div id="view-settings" class="hidden">
+                 <div class="card bg-slate-900 border border-slate-800 shadow-xl max-w-2xl">
+                    <div class="card-body">
+                        <h2 class="card-title text-white">Performance Tuning</h2>
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text text-slate-300">Parser & Transform Threads</span>
+                            </label>
+                            <input type="number" id="setting-threads" placeholder="4" class="input input-bordered bg-slate-800 text-white w-full" />
+                            <label class="label">
+                                <span class="label-text-alt text-slate-500">Number of threads dedicated to parsing and transforming. Requires restart.</span>
+                            </label>
+                        </div>
+                        <div class="card-actions justify-end mt-4">
+                            <button class="btn btn-primary" onclick="App.saveSettings()">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Modal: Control Panel -->
+    <dialog id="control_modal" class="modal">
+        <div class="modal-box bg-slate-900 border border-slate-800">
+            <h3 class="font-bold text-lg text-white mb-4">Pipeline Controls</h3>
+            
+            <div class="grid gap-3">
+                <button class="btn btn-outline border-slate-700 text-slate-300 justify-start hover:bg-slate-800 hover:text-white" onclick="App.reloadPipeline()">
+                    <span class="material-icons-round mr-2 text-blue-500">refresh</span>
+                    Reload Configuration (Hot)
+                </button>
+                <button class="btn btn-outline border-slate-700 text-slate-300 justify-start hover:bg-slate-800 hover:text-white" onclick="App.validateAndReload()">
+                    <span class="material-icons-round mr-2 text-emerald-500">check_circle</span>
+                    Validate Config Integrity
+                </button>
+                <button class="btn btn-outline border-red-900/30 text-red-400 justify-start hover:bg-red-900/20 hover:border-red-500/50" onclick="App.restartPipeline()">
+                    <span class="material-icons-round mr-2">restart_alt</span>
+                    Full Pipeline Restart
+                </button>
+            </div>
+            
+            <div class="modal-action">
+                <form method="dialog">
+                    <button class="btn btn-ghost">Close</button>
+                </form>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+
+    <!-- Modal: Edit/Create Adapter -->
+    <dialog id="config_modal" class="modal">
+        <div class="modal-box w-11/12 max-w-5xl bg-slate-900 border border-slate-800">
+            <h3 class="font-bold text-lg text-white mb-4" id="modal-title">Configure Adapter</h3>
+            
+            <form id="config-form" onsubmit="App.handleConfigSubmit(event)">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                     <div class="form-control">
+                        <label class="label"><span class="label-text text-slate-300">Adapter Type</span></label>
+                        <select id="config-type" class="select select-bordered bg-slate-800 text-white" onchange="App.loadSchema(this.value)" required>
+                            <option value="">Select Type</option>
+                        </select>
+                    </div>
+                    <div class="form-control">
+                        <label class="label"><span class="label-text text-slate-300">Message Type (ID)</span></label>
+                        <input type="text" id="config-messagetype" class="input input-bordered bg-slate-800 text-white" required />
+                    </div>
+                </div>
+
+                <!-- Dynamic Fields Container -->
+                <div id="dynamic-fields" class="space-y-4 mb-6 border-t border-slate-800 pt-4">
+                    <!-- Fields injected here -->
+                </div>
+                
+                <div class="form-control w-52 mb-6" id="enabled-group">
+                    <label class="cursor-pointer label">
+                        <span class="label-text text-slate-300">Enabled</span>
+                        <input type="checkbox" id="config-enabled" class="toggle toggle-primary" checked />
+                    </label>
+                </div>
+
+                <div class="modal-action">
+                    <button type="button" class="btn btn-ghost" onclick="document.getElementById('config_modal').close()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Configuration</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+    
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast toast-end z-50"></div>
+
+    <!-- Scripts -->
+    <script src="/js/api.js"></script>
+    <script src="/js/mapper.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

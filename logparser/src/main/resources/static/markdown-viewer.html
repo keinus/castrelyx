@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogParser Docs Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.24/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/lib/marked.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #08111f;
+            --panel: rgba(10, 24, 41, 0.78);
+            --panel-border: rgba(140, 170, 204, 0.18);
+            --accent: #7dd3fc;
+            --accent-2: #f59e0b;
+            --text: #dce8f6;
+            --muted: #8ba2bf;
+            --code-bg: rgba(7, 16, 27, 0.95);
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "IBM Plex Sans", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(125, 211, 252, 0.18), transparent 32%),
+                radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 28%),
+                linear-gradient(160deg, #050a12 0%, #08111f 45%, #0d1728 100%);
+        }
+
+        code, pre, .font-mono {
+            font-family: "IBM Plex Mono", monospace;
+        }
+
+        .viewer-shell {
+            width: min(1180px, calc(100vw - 2rem));
+            margin: 0 auto;
+            padding: 1rem 0 2.5rem;
+        }
+
+        .viewer-header {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            backdrop-filter: blur(14px);
+            background: rgba(5, 10, 18, 0.72);
+            border: 1px solid var(--panel-border);
+            border-radius: 1.25rem;
+            padding: 1rem;
+            margin-top: 1rem;
+            box-shadow: 0 20px 70px rgba(0, 0, 0, 0.28);
+        }
+
+        .viewer-panel {
+            margin-top: 1rem;
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 1.5rem;
+            overflow: hidden;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.28);
+        }
+
+        .viewer-surface {
+            padding: 1.5rem;
+        }
+
+        @media (min-width: 768px) {
+            .viewer-surface {
+                padding: 2rem 2.25rem;
+            }
+        }
+
+        .status-badge {
+            border-color: rgba(125, 211, 252, 0.3);
+            color: var(--accent);
+            background: rgba(125, 211, 252, 0.08);
+        }
+
+        .doc-body {
+            max-width: 100%;
+            line-height: 1.72;
+            font-size: 1rem;
+        }
+
+        .doc-body h1,
+        .doc-body h2,
+        .doc-body h3,
+        .doc-body h4 {
+            color: #f8fbff;
+            line-height: 1.2;
+            margin-top: 2rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .doc-body h1 { font-size: 2rem; }
+        .doc-body h2 { font-size: 1.55rem; }
+        .doc-body h3 { font-size: 1.2rem; }
+
+        .doc-body p,
+        .doc-body ul,
+        .doc-body ol,
+        .doc-body blockquote,
+        .doc-body table,
+        .doc-body pre {
+            margin: 0 0 1rem;
+        }
+
+        .doc-body a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .doc-body a:hover {
+            text-decoration: underline;
+        }
+
+        .doc-body blockquote {
+            border-left: 3px solid rgba(125, 211, 252, 0.45);
+            background: rgba(11, 23, 38, 0.72);
+            border-radius: 0 1rem 1rem 0;
+            padding: 0.9rem 1rem;
+            color: #c7d7ea;
+        }
+
+        .doc-body table {
+            width: 100%;
+            border-collapse: collapse;
+            display: block;
+            overflow-x: auto;
+        }
+
+        .doc-body th,
+        .doc-body td {
+            border: 1px solid rgba(140, 170, 204, 0.18);
+            padding: 0.7rem 0.85rem;
+            text-align: left;
+        }
+
+        .doc-body th {
+            background: rgba(125, 211, 252, 0.08);
+        }
+
+        .doc-body pre,
+        .source-block {
+            background: var(--code-bg);
+            border: 1px solid rgba(140, 170, 204, 0.14);
+            border-radius: 1rem;
+            padding: 1rem;
+            overflow-x: auto;
+            color: #dce8f6;
+        }
+
+        .doc-body img {
+            border-radius: 1rem;
+            border: 1px solid rgba(140, 170, 204, 0.16);
+            background: rgba(7, 16, 27, 0.7);
+            padding: 0.3rem;
+            max-width: 100%;
+        }
+
+        .diagram-card {
+            border: 1px solid rgba(125, 211, 252, 0.16);
+            background: linear-gradient(180deg, rgba(8, 18, 30, 0.95), rgba(6, 13, 24, 0.95));
+            border-radius: 1.15rem;
+            overflow: hidden;
+            margin: 1.2rem 0;
+        }
+
+        .diagram-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.8rem 1rem;
+            border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+            background: rgba(15, 30, 48, 0.72);
+        }
+
+        .diagram-toolbar .eyebrow {
+            font-size: 0.72rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        .diagram-body {
+            padding: 1rem;
+            overflow-x: auto;
+        }
+
+        .diagram-body svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .diagram-note {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .diagram-error {
+            border-color: rgba(251, 146, 60, 0.25);
+        }
+
+        .empty-state {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .path-chip {
+            background: rgba(125, 211, 252, 0.08);
+            border: 1px solid rgba(125, 211, 252, 0.16);
+            color: #cfe9ff;
+        }
+
+        .diagram-source[hidden] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<div class="viewer-shell">
+    <header class="viewer-header">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <div class="badge status-badge gap-2">Docs Viewer</div>
+                <h1 class="mt-3 text-2xl font-semibold text-white">Markdown / Diagram Renderer</h1>
+                <p class="mt-2 text-sm text-slate-400">
+                    Mermaid fenced block과 StarUML `.mdj` 또는 `staruml` 코드블록을 렌더링합니다.
+                </p>
+            </div>
+
+            <form id="path-form" class="flex w-full flex-col gap-2 sm:flex-row lg:max-w-2xl">
+                <input
+                    id="path-input"
+                    type="text"
+                    class="input input-bordered w-full bg-slate-950/70 text-slate-100"
+                    placeholder="README.md 또는 readme/example.mdj"
+                    value="README.md"
+                />
+                <button type="submit" class="btn btn-info text-slate-950">Open</button>
+                <a id="raw-link" class="btn btn-ghost border border-slate-700 text-slate-200" href="/api/v1/docs/raw?path=README.md" target="_blank" rel="noopener noreferrer">Raw</a>
+            </form>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+            <span class="path-chip rounded-full px-3 py-1 font-mono" id="current-path">README.md</span>
+            <span class="text-slate-500" id="status-text">Loading document…</span>
+        </div>
+    </header>
+
+    <section class="viewer-panel">
+        <div class="viewer-surface">
+            <div id="doc-container" class="doc-body">
+                <div class="empty-state">
+                    문서를 불러오는 중입니다.
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<script defer src="/js/markdown-viewer.js"></script>
+</body>
+</html>

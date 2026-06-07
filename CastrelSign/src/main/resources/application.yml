@@ -1,0 +1,19 @@
+server:
+  port: ${CASTRELSIGN_PORT:8443}
+  ssl:
+    enabled: true
+    client-auth: want
+
+castrelsign:
+  data-dir: ${CASTRELSIGN_DATA_DIR:${user.home}/castrelsign}
+  public-base-url: ${CASTRELSIGN_PUBLIC_BASE_URL:}
+  enrollment-token: ${CASTRELSIGN_ENROLLMENT_TOKEN:}
+  admin-token: ${CASTRELSIGN_ADMIN_TOKEN:}
+  cert-valid-days: ${CASTRELSIGN_CERT_VALID_DAYS:30}
+  root-valid-days: ${CASTRELSIGN_ROOT_VALID_DAYS:3650}
+  tls-server-name: ${CASTRELSIGN_TLS_SERVER_NAME:localhost}
+  key-store-password: ${CASTRELSIGN_KEYSTORE_PASSWORD:changeit}
+
+spring:
+  application:
+    name: CastrelSign

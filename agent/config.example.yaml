@@ -1,0 +1,22 @@
+manager_url: https://manager.example.com
+enrollment_token: replace-with-one-time-token
+agent_id: local-agent-01
+tenant_id: default
+cert_dir: ./certs
+ca_cert_path: ./certs/ca.pem
+tls_server_name: manager.example.com
+ingest_transport: https
+tcp_ingest_addr: logparser.example.com:9443
+tcp_ingest_server_name: logparser.example.com
+batch_interval: 30s
+spool_dir: ./spool
+max_spool_record_bytes: 8mb
+collectors:
+  - identity
+  - metric
+  - network
+  - service
+  - port
+  - package
+  - firewall
+  - log_tailer

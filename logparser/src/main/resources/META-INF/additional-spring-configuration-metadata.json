@@ -1,0 +1,32 @@
+{"properties": [
+  {
+    "name": "threads",
+    "type": "java.lang.Integer",
+    "description": "A description for 'threads number'"
+  },
+  {
+    "name": "logparser.input",
+    "type": "java.util.List",
+    "description": "A description for 'logparser.input'"
+  },
+  {
+    "name": "logparser.parser",
+    "type": "java.util.List",
+    "description": "A description for 'logparser.parser'"
+  },
+  {
+    "name": "logparser.transform",
+    "type": "java.util.List",
+    "description": "A description for 'logparser.transform'"
+  },
+  {
+    "name": "logparser.output",
+    "type": "java.util.List",
+    "description": "A description for 'logparser.output'"
+  },
+  {
+    "name": "logparser.parser_threads",
+    "type": "java.lang.Integer",
+    "description": "A description for 'logparser.parser_threads'"
+  }
+]}

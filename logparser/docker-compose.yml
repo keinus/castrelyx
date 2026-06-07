@@ -1,0 +1,44 @@
+services:
+  mariadb:
+    image: mariadb:11
+    container_name: castrelyx-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: castrelyx
+      MARIADB_USER: ${CASTRELYX_DB_USER}
+      MARIADB_PASSWORD: ${CASTRELYX_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${CASTRELYX_DB_ROOT_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  logparser:
+    image: keinus/logparser:latest
+    container_name: logparser
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    volumes:
+      - /home/keinus/suricata/log:/app/log
+      - ./config/config.yaml:/app/config/config.yaml:ro
+      - ./certs:/app/certs:ro
+    environment:
+      - JAVA_OPTS=-Xmx1G
+      - SERVER_PORT=8765
+      - LOGPARSER_CRYPTO_KEY=${LOGPARSER_CRYPTO_KEY}
+      - LOGPARSER_CRYPTO_SALT=${LOGPARSER_CRYPTO_SALT}
+      - LOGPARSER_KEYSTORE_PASSWORD=${LOGPARSER_KEYSTORE_PASSWORD}
+      - LOGPARSER_TRUSTSTORE_PASSWORD=${LOGPARSER_TRUSTSTORE_PASSWORD}
+      - CASTRELYX_DB_USER=${CASTRELYX_DB_USER}
+      - CASTRELYX_DB_PASSWORD=${CASTRELYX_DB_PASSWORD}
+    ports:
+      - "8765:8765"
+      - "9443:9443"
+    restart: unless-stopped
+
+volumes:
+  mariadb-data:

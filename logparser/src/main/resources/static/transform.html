@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logparser Transformation Mapper</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* Specific styles for Transform UI */
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .section { background: #fff; padding: 20px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 20px; }
+        .row { display: flex; gap: 20px; }
+        .col { flex: 1; }
+        
+        /* Mapping Area */
+        .mapping-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .schema-container { display: flex; gap: 20px; height: 600px; }
+        
+        .source-panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #eee; padding-right: 20px; }
+        .source-list { flex: 1; overflow-y: auto; background: #fafafa; padding: 5px; border: 1px solid #eee; }
+        .field-item { padding: 8px; background: white; border: 1px solid #ddd; margin-bottom: 5px; cursor: grab; display: flex; justify-content: space-between; font-size: 13px; }
+        
+        .target-panel { flex: 2; display: flex; flex-direction: column; }
+        .target-scroll-area { flex: 1; overflow-y: auto; padding-right: 5px; }
+        
+        .schema-group { margin-bottom: 20px; border: 1px solid #3498db; border-radius: 6px; overflow: hidden; }
+        .schema-header { background: #3498db; color: white; padding: 8px 15px; font-weight: bold; font-size: 14px; }
+        .schema-row { display: flex; padding: 8px 15px; border-bottom: 1px solid #eee; align-items: center; background: white; }
+        .col-name { flex: 1; font-weight: 600; font-size: 13px; }
+        .col-type { flex: 0.5; color: #888; font-size: 12px; }
+        .col-mapping { flex: 2; }
+        
+        .mapping-input-wrapper { display: flex; align-items: center; width: 100%; }
+        .combo-select { width: 100%; padding: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        
+        #sim-result { background: #222; color: #0f0; padding: 15px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; height: 150px; overflow-y: auto; }
+
+        .btn { padding: 8px 15px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px; }
+        .btn-primary { background: #3498db; color: white; border-color: #3498db; }
+        .btn-success { background: #27ae60; color: white; border-color: #27ae60; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Logparser Transformation Mapper</h1>
+
+    <!-- 0. Config Loader -->
+    <div class="section">
+        <label><b>Message Type:</b></label>
+        <input type="text" id="message-type" value="syslog" style="width: 200px;">
+        <button class="btn" onclick="loadMapping()">Load Config</button>
+        <button class="btn btn-primary" onclick="saveMapping()">Save Config</button>
+    </div>
+
+    <!-- 1. Rule Config -->
+    <div class="section">
+        <h3>1. Sub-Table Rule</h3>
+        <div class="row">
+            <div class="col">
+                <label><b>Condition (SpEL):</b></label>
+                <input type="text" id="condition-expr" placeholder="e.g. dst_port == 80" style="width:100%">
+            </div>
+            <div class="col">
+                <label><b>Target Sub-Table:</b></label>
+                <select id="sub-schema-select" onchange="renderTargetSchemas()" style="width:100%">
+                    <!-- Filled by JS -->
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Mapping Area -->
+    <div class="section">
+        <div class="mapping-toolbar">
+            <h3>2. Schema Mapping</h3>
+            <div>
+                <button class="btn btn-success" onclick="autoMap()">✨ Auto Map</button>
+                <button class="btn" onclick="resetMapping()">Reset</button>
+            </div>
+        </div>
+
+        <div class="schema-container">
+            <!-- Left: Source Fields -->
+            <div class="source-panel">
+                <h4>Source Fields</h4>
+                <div style="display:flex; gap:5px; margin-bottom:10px;">
+                    <input type="text" id="new-field-name" placeholder="Add custom field..." style="flex:1">
+                    <button class="btn" onclick="addCustomField()">Add</button>
+                </div>
+                <div class="source-list" id="source-list">
+                    <!-- Dynamic -->
+                </div>
+            </div>
+
+            <!-- Right: Target Schemas -->
+            <div class="target-panel">
+                <h4>Target Schema</h4>
+                <div class="target-scroll-area" id="target-area">
+                    <div class="schema-group">
+                        <div class="schema-header">Common Table: event</div>
+                        <div id="common-schema-rows"></div>
+                    </div>
+                    <div class="schema-group">
+                        <div class="schema-header" id="sub-schema-header">Sub Table</div>
+                        <div id="sub-schema-rows"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Simulation -->
+    <div class="section">
+        <h3>3. Simulation</h3>
+        <textarea id="sample-log-data" placeholder='{"src_ip": "1.2.3.4", ...}' style="width:100%; height:60px; margin-bottom:10px;"></textarea>
+        <button class="btn btn-primary" onclick="runSimulation()">▶ Run Simulation</button>
+        <div style="margin-top:10px;">
+            <div id="sim-result">// Result will appear here</div>
+        </div>
+    </div>
+</div>
+
+<script src="js/transform.js"></script>
+</body>
+</html>
