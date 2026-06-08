@@ -22,6 +22,7 @@ public class OutputAdapterConfig {
         "OpenSearchOutputAdapter",
         "RabbitMQAdapter",
         "MariaDbOutputAdapter",
+        "ClickHouseOutputAdapter",
         "BenchmarkAdapter"
     })
     @Description("출력 어댑터의 타입")
@@ -156,7 +157,7 @@ public class OutputAdapterConfig {
     @Description("연결 타임아웃 (밀리초)")
     private Integer timeoutMs;
 
-    @AdapterSpecific(adapters = {"MariaDbOutputAdapter"})
+    @AdapterSpecific(adapters = {"MariaDbOutputAdapter", "ClickHouseOutputAdapter"})
     @Description("Adapter-specific JSON configuration")
     private String configParams;
 
@@ -201,6 +202,11 @@ public class OutputAdapterConfig {
             case "MariaDbOutputAdapter":
                 if (configParams == null || configParams.trim().isEmpty()) {
                     throw new IllegalArgumentException("MariaDbOutputAdapter requires 'configParams' field");
+                }
+                break;
+            case "ClickHouseOutputAdapter":
+                if (configParams == null || configParams.trim().isEmpty()) {
+                    throw new IllegalArgumentException("ClickHouseOutputAdapter requires 'configParams' field");
                 }
                 break;
         }

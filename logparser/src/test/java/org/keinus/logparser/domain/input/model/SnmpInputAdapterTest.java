@@ -63,6 +63,63 @@ class SnmpInputAdapterTest {
         assertEquals("timeout", payload.get("error_message"));
     }
 
+    @Test
+    void runPollsSnmpV3TargetWithSecurityConfig() throws Exception {
+        InputAdapterConfig config = new InputAdapterConfig();
+        config.setId(10L);
+        config.setType("SnmpInputAdapter");
+        config.setMessagetype("snmp-v3-metrics");
+        config.setTimeoutMs(2500);
+        config.setWorkerThreads(1);
+        config.setQueueSize(10);
+        config.setConfigParams("""
+                {
+                  "intervalMs": 60000,
+                  "retries": 2,
+                  "targets": [
+                    {
+                      "name": "fw-edge-01",
+                      "host": "192.0.2.20",
+                      "version": "3",
+                      "securityName": "poller",
+                      "securityLevel": "authPriv",
+                      "authProtocol": "SHA256",
+                      "authPassphrase": "auth-secret",
+                      "privProtocol": "AES128",
+                      "privPassphrase": "priv-secret"
+                    }
+                  ],
+                  "oids": [
+                    {"name": "sysName", "oid": "1.3.6.1.2.1.1.5.0"}
+                  ]
+                }
+                """);
+        SnmpInputAdapter.SnmpClient client = (target, oids, timeoutMs, retries) -> {
+            assertEquals("3", target.version());
+            assertEquals("poller", target.securityName());
+            assertEquals("authPriv", target.securityLevel());
+            assertEquals("SHA256", target.authProtocol());
+            assertEquals("auth-secret", target.authPassphrase());
+            assertEquals("AES128", target.privProtocol());
+            assertEquals("priv-secret", target.privPassphrase());
+            assertEquals(2500, timeoutMs);
+            assertEquals(2, retries);
+            return Map.of("sysName", "fw-edge-01");
+        };
+
+        SnmpInputAdapter adapter = new SnmpInputAdapter(config, client);
+
+        LogEvent event = adapter.run();
+
+        assertNotNull(event);
+        assertEquals("snmp-v3-metrics", event.getMessageType());
+        Map<String, Object> payload = readPayload(event);
+        assertEquals("3", payload.get("version"));
+        assertEquals("authPriv", payload.get("security_level"));
+        assertEquals("poller", payload.get("security_name"));
+        assertEquals("success", payload.get("poll_status"));
+    }
+
     private InputAdapterConfig snmpConfig() {
         InputAdapterConfig config = new InputAdapterConfig();
         config.setId(9L);

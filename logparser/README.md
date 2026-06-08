@@ -109,7 +109,7 @@ flowchart LR
 | `TcpInputAdapter` | TCP socket 기반 로그 수집 |
 | `HttpInputAdapter` | HTTP endpoint 이벤트 수집 |
 | `KafkaInputAdapter` | Kafka topic 메시지 수집 |
-| `SnmpInputAdapter` | SNMP v1/v2c polling 기반 장비 메트릭 수집 |
+| `SnmpInputAdapter` | SNMP v1/v2c/v3 polling 기반 장비 메트릭 수집 |
 | `RabbitMqInputAdapter` | RabbitMQ queue 메시지 수집 |
 
 공통 설정 필드는 다음과 같습니다.
@@ -126,7 +126,7 @@ flowchart LR
 
 ## SNMP 수집 예시
 
-`SnmpInputAdapter`는 여러 target과 여러 OID를 주기적으로 polling하고, 각 응답을 JSON 문자열 형태의 `LogEvent`로 전달합니다. 현재 구현은 SNMP v1/v2c community 기반 수집을 지원합니다.
+`SnmpInputAdapter`는 여러 target과 여러 OID를 주기적으로 polling하고, 각 응답을 JSON 문자열 형태의 `LogEvent`로 전달합니다. 현재 구현은 SNMP v1/v2c community 기반 수집과 SNMPv3 USM 기반 수집을 지원합니다.
 
 예시 설정:
 
@@ -156,6 +156,35 @@ flowchart LR
 }
 ```
 
+SNMPv3 `authPriv` 예시:
+
+```json
+{
+  "intervalMs": 60000,
+  "retries": 1,
+  "targets": [
+    {
+      "name": "fw-edge-01",
+      "host": "192.0.2.20",
+      "port": 161,
+      "version": "3",
+      "securityName": "poller",
+      "securityLevel": "authPriv",
+      "authProtocol": "SHA256",
+      "authPassphraseEnv": "SNMP_AUTH_PASSPHRASE",
+      "privProtocol": "AES128",
+      "privPassphraseEnv": "SNMP_PRIV_PASSPHRASE"
+    }
+  ],
+  "oids": [
+    {
+      "name": "sysName",
+      "oid": "1.3.6.1.2.1.1.5.0"
+    }
+  ]
+}
+```
+
 API 등록 예시:
 
 ```powershell
@@ -174,7 +203,7 @@ curl -X POST http://localhost:8765/api/v1/input-adapters `
 
 운영 기준으로 20-150대 규모를 수집하려면 target 수, OID 수, `intervalMs`, `timeoutMs`, `retries`를 함께 조정해야 합니다. 예를 들어 150대에 OID 10개를 60초마다 polling하면 한 주기에 1500개 요청이 발생합니다. timeout이 길거나 retry가 많으면 다음 주기와 겹칠 수 있으므로 timeout과 interval을 보수적으로 잡는 것이 좋습니다.
 
-SNMP community 같은 민감 값은 `configParams`에 저장될 수 있으므로 운영 환경에서는 접근 권한과 DB 보관 정책을 별도로 관리해야 합니다.
+SNMP community나 SNMPv3 passphrase 같은 민감 값은 `configParams`에 저장될 수 있으므로 운영 환경에서는 접근 권한과 DB 보관 정책을 별도로 관리해야 합니다. SNMPv3 passphrase는 `authPassphraseEnv`, `privPassphraseEnv`로 환경 변수 참조를 사용하는 방식을 권장합니다.
 
 ## RabbitMQ 입력 예시
 
@@ -244,7 +273,25 @@ SNMP 수집 이벤트는 JSON 문자열로 생성되므로 일반적으로 `Json
 | `HttpOutputAdapter` | HTTP endpoint 전송 |
 | `OpenSearchOutputAdapter` | OpenSearch index 전송 |
 | `KafkaOutputAdapter` | Kafka topic 전송 |
+| `ClickHouseOutputAdapter` | ClickHouse HTTP endpoint에 이벤트 저장 |
 | `DebugOutputAdapter` | 로그/디버그 출력 |
+
+### ClickHouseOutputAdapter
+
+`ClickHouseOutputAdapter`는 `LogEvent.toOutputMap()` 결과를 `event_json` 문자열로 저장하고, 조회에 자주 쓰는 `agent_id`, `tenant_id`, `source_id`, `item_kind`, `item_type`, `item_key`를 별도 컬럼으로 함께 전송합니다. ClickHouse HTTP API를 사용하므로 별도 JDBC 드라이버가 필요하지 않습니다.
+
+예시:
+
+```json
+{
+  "type": "ClickHouseOutputAdapter",
+  "messagetype": "castrelyx-agent-item",
+  "enabled": true,
+  "configParams": "{\"endpointUrl\":\"http://clickhouse:8123\",\"database\":\"default\",\"tableName\":\"castrelyx_agent_events\",\"usernameEnv\":\"CLICKHOUSE_USER\",\"passwordEnv\":\"CLICKHOUSE_PASSWORD\",\"batchSize\":100,\"flushIntervalMs\":5000,\"autoCreateSchema\":true}"
+}
+```
+
+`usernameEnv`, `passwordEnv`는 선택 사항입니다. 둘 다 지정하면 Basic 인증 헤더로 전송하고, 지정하지 않으면 인증 없이 요청합니다. `autoCreateSchema=true`이면 `MergeTree` 기반 기본 테이블을 생성합니다.
 
 ## REST API 요약
 

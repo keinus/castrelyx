@@ -86,6 +86,19 @@ class OutputAdapterConfigTest {
     }
 
     @Test
+    void testClickHouseOutputAdapterValidation() {
+        OutputAdapterConfig config = new OutputAdapterConfig();
+        config.setType("ClickHouseOutputAdapter");
+
+        assertThrows(IllegalArgumentException.class, config::validate);
+
+        config.setConfigParams("""
+                {"endpointUrl":"http://clickhouse:8123","database":"default","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"autoCreateSchema":true}
+                """);
+        assertDoesNotThrow(config::validate);
+    }
+
+    @Test
     void testGettersAndSetters() {
         OutputAdapterConfig config = new OutputAdapterConfig();
         config.setId(1L);

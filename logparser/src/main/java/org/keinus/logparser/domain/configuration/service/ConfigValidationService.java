@@ -9,6 +9,7 @@ import org.keinus.logparser.infrastructure.persistence.repository.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
 import java.util.*;
 
 @Service
@@ -86,8 +87,73 @@ public class ConfigValidationService {
             if (!root.hasNonNull("oids") || !root.get("oids").isArray() || root.get("oids").isEmpty()) {
                 errors.add("configParams.oids must contain at least one OID");
             }
+            validateSnmpV3Targets(root, errors);
         } catch (Exception e) {
             errors.add("configParams must be valid JSON for SnmpInputAdapter");
+        }
+    }
+
+    private void validateSnmpV3Targets(JsonNode root, List<String> errors) {
+        JsonNode targets = root.get("targets");
+        if (targets == null || !targets.isArray()) {
+            return;
+        }
+
+        for (JsonNode target : targets) {
+            String version = text(target, "version", text(root, "version", "2c"));
+            if (!isSnmpV3(version)) {
+                continue;
+            }
+
+            requireText(target, root, "securityName", errors);
+            String securityLevel = text(target, "securityLevel", text(root, "securityLevel", "authPriv"));
+            switch (normalizeSecurityLevel(securityLevel)) {
+                case "noauthnopriv" -> {
+                    break;
+                }
+                case "authnopriv" -> {
+                    requireSecret(target, root, "authPassphrase", "authPassphraseEnv", errors);
+                }
+                case "authpriv" -> {
+                    requireSecret(target, root, "authPassphrase", "authPassphraseEnv", errors);
+                    requireSecret(target, root, "privPassphrase", "privPassphraseEnv", errors);
+                }
+                default -> errors.add("configParams.securityLevel must be one of noAuthNoPriv, authNoPriv, authPriv");
+            }
+        }
+    }
+
+    private boolean isSnmpV3(String version) {
+        String normalized = version == null ? "" : version.trim().toLowerCase(Locale.ROOT);
+        return "3".equals(normalized) || "v3".equals(normalized);
+    }
+
+    private String normalizeSecurityLevel(String securityLevel) {
+        return securityLevel == null
+                ? "authpriv"
+                : securityLevel.trim().toLowerCase(Locale.ROOT).replace("_", "");
+    }
+
+    private String text(JsonNode primary, String fieldName, String defaultValue) {
+        JsonNode value = primary == null ? null : primary.get(fieldName);
+        if (value == null || value.isNull() || value.asText().isBlank()) {
+            return defaultValue;
+        }
+        return value.asText();
+    }
+
+    private void requireText(JsonNode primary, JsonNode fallback, String fieldName, List<String> errors) {
+        String value = text(primary, fieldName, text(fallback, fieldName, null));
+        if (value == null || value.isBlank()) {
+            errors.add("configParams." + fieldName + " is required");
+        }
+    }
+
+    private void requireSecret(JsonNode primary, JsonNode fallback, String directField, String envField, List<String> errors) {
+        String direct = text(primary, directField, text(fallback, directField, null));
+        String env = text(primary, envField, text(fallback, envField, null));
+        if ((direct == null || direct.isBlank()) && (env == null || env.isBlank())) {
+            errors.add("configParams." + directField + " or " + envField + " is required");
         }
     }
 
@@ -254,6 +320,7 @@ public class ConfigValidationService {
                 }
             }
             case "mariadb", "mariadboutputadapter" -> validateMariaDbConfigParams(entity, errors);
+            case "clickhouse", "clickhouseoutputadapter" -> validateClickHouseConfigParams(entity, errors);
             case "console", "consoleoutputadapter", "benchmark", "benchmarkadapter" -> {
                 break;
             }
@@ -291,9 +358,58 @@ public class ConfigValidationService {
         }
     }
 
+    private void validateClickHouseConfigParams(OutputAdapterEntity entity, List<String> errors) {
+        String configParams = entity.getConfigParams();
+        if (configParams == null || configParams.trim().isEmpty()) {
+            errors.add("configParams is required for ClickHouseOutputAdapter");
+            return;
+        }
+
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(configParams);
+            requireText(root, "endpointUrl", errors);
+            requireText(root, "tableName", errors);
+            validateHttpEndpoint(root, "endpointUrl", errors);
+            validateIdentifier(root, "database", errors);
+            validateIdentifier(root, "tableName", errors);
+            if (root.has("batchSize") && root.get("batchSize").asInt() <= 0) {
+                errors.add("configParams.batchSize must be greater than zero");
+            }
+            if (root.has("flushIntervalMs") && root.get("flushIntervalMs").asLong() <= 0) {
+                errors.add("configParams.flushIntervalMs must be greater than zero");
+            }
+        } catch (Exception e) {
+            errors.add("configParams must be valid JSON for ClickHouseOutputAdapter");
+        }
+    }
+
     private void requireText(JsonNode root, String fieldName, List<String> errors) {
         if (!root.hasNonNull(fieldName) || root.get(fieldName).asText().isBlank()) {
             errors.add("configParams." + fieldName + " is required");
+        }
+    }
+
+    private void validateHttpEndpoint(JsonNode root, String fieldName, List<String> errors) {
+        if (!root.hasNonNull(fieldName) || root.get(fieldName).asText().isBlank()) {
+            return;
+        }
+        try {
+            URI uri = URI.create(root.get(fieldName).asText());
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                errors.add("configParams." + fieldName + " must use http or https");
+            }
+        } catch (IllegalArgumentException e) {
+            errors.add("configParams." + fieldName + " must be a valid URI");
+        }
+    }
+
+    private void validateIdentifier(JsonNode root, String fieldName, List<String> errors) {
+        if (!root.hasNonNull(fieldName) || root.get(fieldName).asText().isBlank()) {
+            return;
+        }
+        if (!root.get(fieldName).asText().matches("[A-Za-z0-9_]+")) {
+            errors.add("configParams." + fieldName + " must contain only letters, numbers, and underscore");
         }
     }
 

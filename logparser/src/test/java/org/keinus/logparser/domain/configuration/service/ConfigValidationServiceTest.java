@@ -94,6 +94,40 @@ class ConfigValidationServiceTest {
     }
 
     @Test
+    void snmpV3InputAdapterRequiresSecurityConfig() {
+        InputAdapterEntity missingSecurity = InputAdapterEntity.builder()
+                .type("SnmpInputAdapter")
+                .messagetype("snmp-v3-metrics")
+                .configParams("""
+                        {"targets":[{"host":"192.0.2.20","version":"3"}],"oids":["1.3.6.1.2.1.1.5.0"]}
+                        """)
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult missingResult =
+                configValidationService.validateInputAdapter(missingSecurity);
+
+        assertFalse(missingResult.isValid());
+        assertTrue(missingResult.errors().stream().anyMatch(error -> error.contains("securityName")));
+        assertTrue(missingResult.errors().stream().anyMatch(error -> error.contains("authPassphrase")));
+        assertTrue(missingResult.errors().stream().anyMatch(error -> error.contains("privPassphrase")));
+
+        InputAdapterEntity valid = InputAdapterEntity.builder()
+                .type("SnmpInputAdapter")
+                .messagetype("snmp-v3-metrics")
+                .configParams("""
+                        {"targets":[{"host":"192.0.2.20","version":"3","securityName":"poller","securityLevel":"authPriv","authProtocol":"SHA256","authPassphrase":"auth-secret","privProtocol":"AES128","privPassphrase":"priv-secret"}],"oids":["1.3.6.1.2.1.1.5.0"]}
+                        """)
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult validResult =
+                configValidationService.validateInputAdapter(valid);
+
+        assertTrue(validResult.isValid());
+    }
+
+    @Test
     void rabbitMqInputAdapterRequiresQueueConfigParam() {
         InputAdapterEntity missingParams = InputAdapterEntity.builder()
                 .type("RabbitMqInputAdapter")
@@ -196,6 +230,47 @@ class ConfigValidationServiceTest {
                 .messagetype("castrelyx-agent-item")
                 .configParams("""
                         {"jdbcUrl":"jdbc:mariadb://mariadb:3306/castrelyx","usernameEnv":"CASTRELYX_DB_USER","passwordEnv":"CASTRELYX_DB_PASSWORD","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"autoCreateSchema":true}
+                        """)
+                .enabled(true)
+                .build();
+
+        assertTrue(configValidationService.validateOutputAdapter(valid).isValid());
+    }
+
+    @Test
+    void clickHouseOutputAdapterRequiresEndpointConfigParams() {
+        OutputAdapterEntity missingParams = OutputAdapterEntity.builder()
+                .type("ClickHouseOutputAdapter")
+                .messagetype("castrelyx-agent-item")
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult missingResult =
+                configValidationService.validateOutputAdapter(missingParams);
+
+        assertFalse(missingResult.isValid());
+        assertTrue(missingResult.errors().stream().anyMatch(error -> error.contains("configParams")));
+
+        OutputAdapterEntity invalidBatch = OutputAdapterEntity.builder()
+                .type("ClickHouseOutputAdapter")
+                .messagetype("castrelyx-agent-item")
+                .configParams("""
+                        {"endpointUrl":"http://clickhouse:8123","database":"default","tableName":"castrelyx_agent_events","batchSize":0}
+                        """)
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult invalidBatchResult =
+                configValidationService.validateOutputAdapter(invalidBatch);
+
+        assertFalse(invalidBatchResult.isValid());
+        assertTrue(invalidBatchResult.errors().stream().anyMatch(error -> error.contains("batchSize")));
+
+        OutputAdapterEntity valid = OutputAdapterEntity.builder()
+                .type("ClickHouseOutputAdapter")
+                .messagetype("castrelyx-agent-item")
+                .configParams("""
+                        {"endpointUrl":"http://clickhouse:8123","database":"default","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"autoCreateSchema":true}
                         """)
                 .enabled(true)
                 .build();

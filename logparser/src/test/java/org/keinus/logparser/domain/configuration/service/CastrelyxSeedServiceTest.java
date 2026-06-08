@@ -61,9 +61,15 @@ class CastrelyxSeedServiceTest {
     void doesNotOverwriteExistingRows() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(inputAdapterRepository.findByType("TcpMtlsGzipInputAdapter"))
-                .thenReturn(List.of(InputAdapterEntity.builder().id(1L).build()));
+                .thenReturn(List.of(InputAdapterEntity.builder()
+                        .id(1L)
+                        .messagetype("castrelyx-agent-item")
+                        .build()));
         when(outputAdapterRepository.findByType("MariaDbOutputAdapter"))
-                .thenReturn(List.of(OutputAdapterEntity.builder().id(2L).build()));
+                .thenReturn(List.of(OutputAdapterEntity.builder()
+                        .id(2L)
+                        .messagetype("castrelyx-agent-item")
+                        .build()));
 
         CastrelyxSeedService service = new CastrelyxSeedService(
                 inputAdapterRepository,

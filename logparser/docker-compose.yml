@@ -1,44 +1,24 @@
 services:
-  mariadb:
-    image: mariadb:11
-    container_name: castrelyx-mariadb
+  logparser:
+    image: 192.168.50.22:8443/logparser:0.3.1
+    container_name: logparser
     restart: unless-stopped
     environment:
-      MARIADB_DATABASE: castrelyx
-      MARIADB_USER: ${CASTRELYX_DB_USER}
-      MARIADB_PASSWORD: ${CASTRELYX_DB_PASSWORD}
-      MARIADB_ROOT_PASSWORD: ${CASTRELYX_DB_ROOT_PASSWORD}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx1G}
+      SERVER_PORT: ${SERVER_PORT:-8765}
+      LOGPARSER_CRYPTO_KEY: ${LOGPARSER_CRYPTO_KEY:?set LOGPARSER_CRYPTO_KEY}
+      LOGPARSER_CRYPTO_SALT: ${LOGPARSER_CRYPTO_SALT:?set LOGPARSER_CRYPTO_SALT}
+      LOGPARSER_KEYSTORE_PASSWORD: ${LOGPARSER_KEYSTORE_PASSWORD:?set LOGPARSER_KEYSTORE_PASSWORD}
+      LOGPARSER_TRUSTSTORE_PASSWORD: ${LOGPARSER_TRUSTSTORE_PASSWORD:?set LOGPARSER_TRUSTSTORE_PASSWORD}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
     volumes:
-      - mariadb-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  logparser:
-    image: keinus/logparser:latest
-    container_name: logparser
-    depends_on:
-      mariadb:
-        condition: service_healthy
-    volumes:
-      - /home/keinus/suricata/log:/app/log
-      - ./config/config.yaml:/app/config/config.yaml:ro
+      - logparser-data:/root/logparser/data
       - ./certs:/app/certs:ro
-    environment:
-      - JAVA_OPTS=-Xmx1G
-      - SERVER_PORT=8765
-      - LOGPARSER_CRYPTO_KEY=${LOGPARSER_CRYPTO_KEY}
-      - LOGPARSER_CRYPTO_SALT=${LOGPARSER_CRYPTO_SALT}
-      - LOGPARSER_KEYSTORE_PASSWORD=${LOGPARSER_KEYSTORE_PASSWORD}
-      - LOGPARSER_TRUSTSTORE_PASSWORD=${LOGPARSER_TRUSTSTORE_PASSWORD}
-      - CASTRELYX_DB_USER=${CASTRELYX_DB_USER}
-      - CASTRELYX_DB_PASSWORD=${CASTRELYX_DB_PASSWORD}
+      - ./log:/app/log
     ports:
       - "8765:8765"
       - "9443:9443"
-    restart: unless-stopped
 
 volumes:
-  mariadb-data:
+  logparser-data:

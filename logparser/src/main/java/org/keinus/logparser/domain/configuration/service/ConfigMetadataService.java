@@ -18,7 +18,7 @@ public class ConfigMetadataService {
                 new AdapterTypeInfo("UdpInputAdapter", "UDP Input", "Listen for UDP datagrams"),
                 new AdapterTypeInfo("HttpInputAdapter", "HTTP Input", "HTTP REST endpoint"),
                 new AdapterTypeInfo("KafkaInputAdapter", "Kafka Input", "Consume from Kafka topic"),
-                new AdapterTypeInfo("SnmpInputAdapter", "SNMP Collector", "Poll SNMP targets"),
+                new AdapterTypeInfo("SnmpInputAdapter", "SNMP Collector", "Poll SNMP v1/v2c/v3 targets"),
                 new AdapterTypeInfo("RabbitMqInputAdapter", "RabbitMQ Input", "Consume from RabbitMQ queue"),
                 new AdapterTypeInfo("TcpMtlsGzipInputAdapter", "Castrelyx TCP mTLS Gzip Input", "Receive gzip batches over TCP/mTLS"),
                 new AdapterTypeInfo("FileInputAdapter", "File Input", "Read from files"),
@@ -35,6 +35,7 @@ public class ConfigMetadataService {
                 new AdapterTypeInfo("OpenSearchOutputAdapter", "OpenSearch Output", "Index to OpenSearch/Elasticsearch"),
                 new AdapterTypeInfo("RabbitMQAdapter", "RabbitMQ Output", "Publish to RabbitMQ exchange"),
                 new AdapterTypeInfo("MariaDbOutputAdapter", "MariaDB Output", "Persist Castrelyx agent events to MariaDB"),
+                new AdapterTypeInfo("ClickHouseOutputAdapter", "ClickHouse Output", "Persist Castrelyx agent events to ClickHouse"),
                 new AdapterTypeInfo("BenchmarkAdapter", "Benchmark Output", "Performance testing")
         );
     }
@@ -86,7 +87,7 @@ public class ConfigMetadataService {
             case "SnmpInputAdapter" -> new AdapterSchema(
                     type,
                     Arrays.asList(
-                            new FieldSchema("configParams", "String", true, "SNMP collector JSON configuration"),
+                            new FieldSchema("configParams", "String", true, "SNMP v1/v2c/v3 collector JSON configuration"),
                             new FieldSchema("timeoutMs", "Integer", false, "SNMP request timeout"),
                             new FieldSchema("queueSize", "Integer", false, "Internal event queue size"),
                             new FieldSchema("workerThreads", "Integer", false, "Concurrent polling workers")
@@ -171,6 +172,12 @@ public class ConfigMetadataService {
                     type,
                     List.of(
                             new FieldSchema("configParams", "String", true, "MariaDB output JSON configuration")
+                    )
+            );
+            case "ClickHouseOutputAdapter" -> new AdapterSchema(
+                    type,
+                    List.of(
+                            new FieldSchema("configParams", "String", true, "ClickHouse output JSON configuration")
                     )
             );
             default -> new AdapterSchema(type, List.of());
