@@ -52,27 +52,45 @@ export type IntegrationConfig = {
 };
 
 export type CastrelSignToken = {
-  id?: number;
+  id: number;
+  name?: string;
   token?: string;
-  description?: string;
-  revoked?: boolean;
+  agentId?: string;
+  maxUses?: number;
+  usedCount?: number;
   expiresAt?: string;
+  revokedAt?: string;
   createdAt?: string;
-  [key: string]: unknown;
+  lastUsedAt?: string;
+  lastUsedAgentId?: string;
 };
 
 export type CastrelSignAgent = {
-  agentId?: string;
+  agentId: string;
   hostname?: string;
+  version?: string;
   status?: string;
-  [key: string]: unknown;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
 };
 
 export type CastrelSignCertificate = {
+  id?: number;
+  agentId?: string;
   serialNumber?: string;
-  subject?: string;
+  subjectDn?: string;
+  notBefore?: string;
+  notAfter?: string;
   status?: string;
-  [key: string]: unknown;
+  issuedAt?: string;
+};
+
+export type CastrelSignAuditEvent = {
+  id?: number;
+  eventType?: string;
+  agentId?: string;
+  message?: string;
+  createdAt?: string;
 };
 
 export type LogparserStatus = Record<string, unknown>;

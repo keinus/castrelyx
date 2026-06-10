@@ -86,6 +86,19 @@ public class EnrollmentTokenRepository {
         """, Instant.now().toString(), id) == 1;
   }
 
+  public int revokeUnusedForAgent(String agentId) {
+    if (agentId == null || agentId.isBlank()) {
+      return 0;
+    }
+    return jdbcTemplate.update("""
+        update enrollment_tokens
+        set revoked_at = ?
+        where agent_id = ?
+          and revoked_at is null
+          and used_count < max_uses
+        """, Instant.now().toString(), agentId);
+  }
+
   private static Instant instantOrNull(String value) {
     if (value == null || value.isBlank()) {
       return null;
@@ -107,4 +120,3 @@ public class EnrollmentTokenRepository {
       String lastUsedAgentId) {
   }
 }
-

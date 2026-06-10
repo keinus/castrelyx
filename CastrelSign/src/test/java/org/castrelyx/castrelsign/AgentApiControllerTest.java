@@ -301,6 +301,56 @@ class AgentApiControllerTest {
   }
 
   @Test
+  void blockedAgentCannotRenewIngestOrEnrollUntilReactivated() throws Exception {
+    X509Certificate clientCert = enrollCertificate("agent-blocked");
+
+    mockMvc.perform(post("/api/admin/agents/agent-blocked/block")
+        .header("Authorization", "Bearer admin-token"))
+        .andExpect(status().isNoContent());
+
+    String renewalCsr = csr("agent-blocked", ecKeyPair());
+    mockMvc.perform(post("/api/agent/renew")
+        .requestAttr(CERTIFICATE_ATTRIBUTE, new X509Certificate[] {clientCert})
+        .contentType("application/json")
+        .content("""
+            {"agent_id":"agent-blocked","hostname":"blocked-host","version":"0.1.1","csr_pem":%s}
+            """.formatted(MAPPER.writeValueAsString(renewalCsr))))
+        .andExpect(status().isForbidden());
+
+    mockMvc.perform(post("/api/agent/ingest")
+        .requestAttr(CERTIFICATE_ATTRIBUTE, new X509Certificate[] {clientCert})
+        .header("Content-Encoding", "gzip")
+        .contentType("application/json")
+        .content(gzip("""
+            {"schema_version":"1.0","source":"agent","source_id":"agent-blocked","tenant_id":"default","items":[]}
+            """)))
+        .andExpect(status().isForbidden());
+
+    String token = createEnrollmentToken("agent-blocked", 3600, 1);
+    String csrPem = csr("agent-blocked", ecKeyPair());
+    mockMvc.perform(post("/api/agent/enroll")
+        .header("Authorization", "Bearer " + token)
+        .contentType("application/json")
+        .content("""
+            {"agent_id":"agent-blocked","hostname":"blocked-host","version":"0.1.0","csr_pem":%s}
+            """.formatted(MAPPER.writeValueAsString(csrPem))))
+        .andExpect(status().isForbidden());
+
+    mockMvc.perform(post("/api/admin/agents/agent-blocked/reactivate")
+        .header("Authorization", "Bearer admin-token"))
+        .andExpect(status().isNoContent());
+
+    String reactivatedToken = createEnrollmentToken("agent-blocked", 3600, 1);
+    mockMvc.perform(post("/api/agent/enroll")
+        .header("Authorization", "Bearer " + reactivatedToken)
+        .contentType("application/json")
+        .content("""
+            {"agent_id":"agent-blocked","hostname":"blocked-host","version":"0.1.2","csr_pem":%s}
+            """.formatted(MAPPER.writeValueAsString(csrPem))))
+        .andExpect(status().isOk());
+  }
+
+  @Test
   void ingestRejectsMissingClientCertificate() throws Exception {
     mockMvc.perform(post("/api/agent/ingest")
         .header("Content-Encoding", "gzip")

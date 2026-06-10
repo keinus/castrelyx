@@ -2,6 +2,7 @@ import type {
   AlertRow,
   Asset,
   BootstrapState,
+  CastrelSignAuditEvent,
   CastrelSignAgent,
   CastrelSignCertificate,
   CastrelSignToken,
@@ -24,6 +25,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    ...init
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.blob();
 }
 
 export async function bootstrap(): Promise<BootstrapState> {
@@ -55,8 +68,26 @@ export const api = {
   castrelSignTokens: () => request<CastrelSignToken[]>('/api/integrations/castrelsign/tokens'),
   castrelSignAgents: () => request<CastrelSignAgent[]>('/api/integrations/castrelsign/agents'),
   castrelSignCertificates: () => request<CastrelSignCertificate[]>('/api/integrations/castrelsign/certificates'),
-  createCastrelSignToken: (payload: { description?: string } = {}) =>
+  castrelSignAuditEvents: () => request<CastrelSignAuditEvent[]>('/api/integrations/castrelsign/audit-events'),
+  createCastrelSignToken: (payload: { name?: string; agentId?: string; ttlSeconds?: number; maxUses?: number } = {}) =>
     request<CastrelSignToken>('/api/integrations/castrelsign/tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  revokeCastrelSignToken: (id: number) =>
+    request(`/api/integrations/castrelsign/tokens/${id}/revoke`, { method: 'POST' }),
+  blockCastrelSignAgent: (agentId: string) =>
+    request(`/api/integrations/castrelsign/agents/${encodeURIComponent(agentId)}/block`, { method: 'POST' }),
+  reactivateCastrelSignAgent: (agentId: string) =>
+    request(`/api/integrations/castrelsign/agents/${encodeURIComponent(agentId)}/reactivate`, { method: 'POST' }),
+  createCastrelSignEnrollmentPackage: (payload: {
+    agentId: string;
+    tenantId: string;
+    ttlSeconds: number;
+    maxUses: number;
+    tlsServerName: string;
+  }) =>
+    requestBlob('/api/integrations/castrelsign/enrollment-packages', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),

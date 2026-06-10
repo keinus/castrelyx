@@ -34,6 +34,19 @@ public class CastrelSignClient {
     return getList("/api/admin/certificates");
   }
 
+  public List<?> listAuditEvents() {
+    return getList("/api/admin/audit-events");
+  }
+
+  public String rootCaPem() {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.get()
+        .uri(URI.create(config.baseUrl() + "/api/admin/ca.pem"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .body(String.class);
+  }
+
   public Map<?, ?> createEnrollmentToken(Map<String, Object> request) {
     IntegrationConfig config = integrationService.get("castrelsign");
     return restClient.post()
@@ -53,6 +66,14 @@ public class CastrelSignClient {
         .toBodilessEntity();
   }
 
+  public void blockAgent(String agentId) {
+    postNoBody("/api/admin/agents/" + agentId + "/block");
+  }
+
+  public void reactivateAgent(String agentId) {
+    postNoBody("/api/admin/agents/" + agentId + "/reactivate");
+  }
+
   private List<?> getList(String path) {
     IntegrationConfig config = integrationService.get("castrelsign");
     return restClient.get()
@@ -60,5 +81,14 @@ public class CastrelSignClient {
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
         .retrieve()
         .body(List.class);
+  }
+
+  private void postNoBody(String path) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    restClient.post()
+        .uri(URI.create(config.baseUrl() + path))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .toBodilessEntity();
   }
 }
