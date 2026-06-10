@@ -3,6 +3,10 @@ outputs/
 
 **/build/
 **/.gradle/
+**/node_modules/
+**/test-results/
+**/playwright-report/
+**/tsconfig.tsbuildinfo
 dist/
 output/
 !logparser/src/main/java/org/keinus/logparser/domain/output/

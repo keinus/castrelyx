@@ -1,0 +1,58 @@
+plugins {
+  id 'java'
+  id 'org.springframework.boot' version '3.5.10'
+  id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'org.castrelyx'
+version = '0.1.0'
+
+java {
+  sourceCompatibility = JavaVersion.VERSION_21
+  targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.release = 21
+  options.compilerArgs << '-parameters'
+}
+
+dependencies {
+  implementation 'org.springframework.boot:spring-boot-starter-web'
+  implementation 'org.springframework.boot:spring-boot-starter-validation'
+  implementation 'org.springframework.boot:spring-boot-starter-security'
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+  implementation 'org.flywaydb:flyway-core'
+  implementation 'org.flywaydb:flyway-mysql'
+  implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.1'
+  implementation 'com.fasterxml.jackson.core:jackson-databind'
+  implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+  implementation 'org.apache.httpcomponents.client5:httpclient5'
+
+  testImplementation 'org.springframework.boot:spring-boot-starter-test'
+  testImplementation 'org.springframework.security:spring-security-test'
+  testImplementation 'com.h2database:h2'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+  useJUnitPlatform()
+}
+
+tasks.register('frontendInstall', Exec) {
+  workingDir = file('frontend')
+  commandLine = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm install'] : ['npm', 'install']
+}
+
+tasks.register('frontendBuild', Exec) {
+  dependsOn 'frontendInstall'
+  workingDir = file('frontend')
+  commandLine = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm run build'] : ['npm', 'run', 'build']
+}
+
+tasks.named('processResources') {
+  if (file('frontend/package.json').exists() && !project.hasProperty('skipFrontend')) {
+    dependsOn 'frontendBuild'
+  }
+}

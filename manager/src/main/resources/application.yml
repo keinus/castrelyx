@@ -1,0 +1,27 @@
+manager:
+  crypto-key: ${MANAGER_CRYPTO_KEY:}
+  public-base-url: ${MANAGER_PUBLIC_BASE_URL:http://localhost:8780}
+  clickhouse:
+    endpoint-url: ${MANAGER_CLICKHOUSE_ENDPOINT_URL:http://clickhouse:8123}
+    database: ${MANAGER_CLICKHOUSE_DATABASE:castrelyx}
+    username: ${MANAGER_CLICKHOUSE_USER:default}
+    password: ${MANAGER_CLICKHOUSE_PASSWORD:}
+    raw-table: ${MANAGER_CLICKHOUSE_RAW_TABLE:castrelyx_agent_events}
+
+server:
+  port: ${MANAGER_PORT:8780}
+
+spring:
+  application:
+    name: castrelyx-manager
+  datasource:
+    url: ${MANAGER_DB_URL:jdbc:mariadb://localhost:3306/castrelyx_manager}
+    username: ${MANAGER_DB_USER:castrelyx}
+    password: ${MANAGER_DB_PASSWORD:castrelyx}
+    driver-class-name: org.mariadb.jdbc.Driver
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false

@@ -1,0 +1,103 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: castrelyx_manager
+      MARIADB_USER: ${MANAGER_DB_USER:-castrelyx}
+      MARIADB_PASSWORD: ${MANAGER_DB_PASSWORD:-change-me}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-change-root-me}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${MANAGER_CLICKHOUSE_DATABASE:-castrelyx}
+      CLICKHOUSE_USER: ${MANAGER_CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${MANAGER_CLICKHOUSE_PASSWORD:-change-clickhouse-me}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  castrelsign:
+    build:
+      context: .
+      dockerfile: CastrelSign/Dockerfile
+    restart: unless-stopped
+    environment:
+      CASTRELSIGN_PUBLIC_BASE_URL: ${CASTRELSIGN_PUBLIC_BASE_URL:-https://castrelsign:8443}
+      CASTRELSIGN_ADMIN_TOKEN: ${CASTRELSIGN_ADMIN_TOKEN:-replace-with-admin-token}
+      CASTRELSIGN_TLS_SERVER_NAME: ${CASTRELSIGN_TLS_SERVER_NAME:-castrelsign}
+      CASTRELSIGN_KEYSTORE_PASSWORD: ${CASTRELSIGN_KEYSTORE_PASSWORD:-changeit}
+      CASTRELSIGN_DATA_DIR: /var/lib/castrelsign
+    volumes:
+      - castrelsign-data:/var/lib/castrelsign
+    ports:
+      - "8443:8443"
+
+  logparser:
+    build:
+      context: .
+      dockerfile: logparser/Dockerfile
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xmx1G}
+      SERVER_PORT: 8765
+      LOGPARSER_CRYPTO_KEY: ${LOGPARSER_CRYPTO_KEY:-replace-with-logparser-key-minimum-32-bytes}
+      LOGPARSER_CRYPTO_SALT: ${LOGPARSER_CRYPTO_SALT:-00112233445566778899aabbccddeeff}
+      LOGPARSER_KEYSTORE_PASSWORD: ${LOGPARSER_KEYSTORE_PASSWORD:-changeit}
+      LOGPARSER_TRUSTSTORE_PASSWORD: ${LOGPARSER_TRUSTSTORE_PASSWORD:-changeit}
+      CLICKHOUSE_USER: ${MANAGER_CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${MANAGER_CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - logparser-data:/root/logparser/data
+    ports:
+      - "8765:8765"
+
+  manager:
+    build:
+      context: .
+      dockerfile: manager/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      castrelsign:
+        condition: service_started
+      logparser:
+        condition: service_started
+    environment:
+      MANAGER_PORT: ${MANAGER_PORT:-8780}
+      MANAGER_DB_URL: jdbc:mariadb://mariadb:3306/castrelyx_manager
+      MANAGER_DB_USER: ${MANAGER_DB_USER:-castrelyx}
+      MANAGER_DB_PASSWORD: ${MANAGER_DB_PASSWORD:-change-me}
+      MANAGER_CRYPTO_KEY: ${MANAGER_CRYPTO_KEY:-replace-with-32-byte-minimum-secret}
+      MANAGER_PUBLIC_BASE_URL: ${MANAGER_PUBLIC_BASE_URL:-http://localhost:8780}
+      MANAGER_CLICKHOUSE_ENDPOINT_URL: http://clickhouse:8123
+      MANAGER_CLICKHOUSE_DATABASE: ${MANAGER_CLICKHOUSE_DATABASE:-castrelyx}
+      MANAGER_CLICKHOUSE_USER: ${MANAGER_CLICKHOUSE_USER:-default}
+      MANAGER_CLICKHOUSE_PASSWORD: ${MANAGER_CLICKHOUSE_PASSWORD:-change-clickhouse-me}
+      MANAGER_CLICKHOUSE_RAW_TABLE: ${MANAGER_CLICKHOUSE_RAW_TABLE:-castrelyx_agent_events}
+    ports:
+      - "${MANAGER_PORT:-8780}:8780"
+
+volumes:
+  mariadb-data:
+  clickhouse-data:
+  castrelsign-data:
+  logparser-data:

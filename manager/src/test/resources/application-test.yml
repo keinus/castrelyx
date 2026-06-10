@@ -1,0 +1,24 @@
+manager:
+  crypto-key: 12345678901234567890123456789012
+  public-base-url: http://localhost:8780
+  clickhouse:
+    endpoint-url: http://localhost:18123
+    database: castrelyx
+    username: default
+    password: ''
+    raw-table: castrelyx_agent_events
+spring:
+  datasource:
+    url: jdbc:h2:mem:manager-test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ''
+    driver-class-name: org.h2.Driver
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+logging:
+  level:
+    org.springframework.security: warn
