@@ -46,6 +46,48 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     alerts[0] = { ...alerts[0], status: 'RESOLVED' };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(alerts[0]) });
   });
+  await page.route('/api/integrations/castrelsign', routeJson({
+    serviceName: 'castrelsign',
+    baseUrl: 'https://castrelsign:8443',
+    secret: { configured: true, masked: '********' },
+    enabled: true
+  }));
+  await page.route('/api/integrations/castrelsign/agents', routeJson([
+    { agentId: 'edge-agent', hostname: 'edge-router', status: 'ACTIVE' }
+  ]));
+  await page.route('/api/integrations/castrelsign/certificates', routeJson([
+    { serialNumber: '01', subject: 'CN=edge-agent', status: 'ISSUED' }
+  ]));
+  await page.route('/api/integrations/castrelsign/tokens', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 3, token: 'enroll-token-123', description: 'Manager issued token' })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ id: 2, description: 'Existing token', revoked: false }])
+    });
+  });
+  await page.route('/api/integrations/logparser', routeJson({
+    serviceName: 'logparser',
+    baseUrl: 'http://logparser:8765',
+    secret: { configured: false, masked: '' },
+    enabled: true
+  }));
+  await page.route('/api/integrations/logparser/status', routeJson({
+    status: 'RUNNING',
+    inputAdapterCount: 1,
+    outputAdapterCount: 1
+  }));
+  await page.route('/api/integrations/logparser/deep-links', routeJson([
+    { label: 'Pipeline', url: 'http://logparser:8765/' },
+    { label: 'Input adapters', url: 'http://logparser:8765/#input-adapters' }
+  ]));
 }
 
 export function routeJson(body: unknown, status = 200) {

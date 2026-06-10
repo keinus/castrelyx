@@ -247,6 +247,109 @@ select {
   margin: 0;
 }
 
+.notice {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #d8e1e5;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #ffffff;
+}
+
+.notice.error {
+  border-color: #e0a7a7;
+  color: #8f1f1f;
+  background: #fff7f7;
+}
+
+.kv-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.kv-list div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.kv-list dt {
+  color: #60717a;
+  font-size: 12px;
+}
+
+.kv-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.compact-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+}
+
+.compact-list strong,
+.compact-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact-list span {
+  color: #60717a;
+  font-size: 13px;
+}
+
+.token-output {
+  display: grid;
+  gap: 10px;
+}
+
+.token-output code {
+  display: block;
+  overflow-wrap: anywhere;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #eef2f3;
+}
+
+.link-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  gap: 8px;
+  border: 1px solid #c7d1d6;
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #172026;
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  border-color: #2f7d7e;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

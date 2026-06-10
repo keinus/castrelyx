@@ -20,7 +20,8 @@ export function menuItemsForRole(role: Role): MenuItem[] {
     ['agent', 'Agent'],
     ['snmp', 'SNMP'],
     ['alerts', '알림'],
-    ['integrations', '연동'],
+    ['castrelsign', 'CastrelSign'],
+    ['logparser', 'LogParser'],
     ['settings', '설정']
   ] as const;
   if (role === 'VIEWER') {

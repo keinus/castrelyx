@@ -3,11 +3,12 @@ import {
   Bell,
   Boxes,
   Gauge,
-  Link2,
   LogOut,
   Network,
   Router,
+  ScrollText,
   Server,
+  ShieldCheck,
   Settings
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -17,7 +18,8 @@ import { menuItemsForRole, nextSurface } from './lib/uiModel';
 import { AgentDashboardView } from './views/AgentDashboardView';
 import { AlertsView } from './views/AlertsView';
 import { AssetsView } from './views/AssetsView';
-import { IntegrationsView } from './views/IntegrationsView';
+import { CastrelSignView } from './views/CastrelSignView';
+import { LogparserView } from './views/LogparserView';
 import { LoginView } from './views/LoginView';
 import { OverviewView } from './views/OverviewView';
 import { SettingsView } from './views/SettingsView';
@@ -47,7 +49,8 @@ const icons = {
   agent: Server,
   snmp: Router,
   alerts: Bell,
-  integrations: Link2,
+  castrelsign: ShieldCheck,
+  logparser: ScrollText,
   settings: Settings
 };
 
@@ -205,8 +208,10 @@ function ViewSwitch({
       return <SnmpDashboardView />;
     case 'alerts':
       return <AlertsView role={props.role} alerts={alerts} onAcknowledge={onAcknowledgeAlert} onResolve={onResolveAlert} />;
-    case 'integrations':
-      return <IntegrationsView role={props.role} />;
+    case 'castrelsign':
+      return <CastrelSignView role={props.role} />;
+    case 'logparser':
+      return <LogparserView />;
     case 'settings':
       return <SettingsView />;
     default:

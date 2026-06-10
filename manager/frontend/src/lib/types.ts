@@ -38,3 +38,46 @@ export type DashboardSummary = {
 };
 
 export type Surface = 'setup' | 'login' | 'console';
+
+export type SecretMask = {
+  configured: boolean;
+  masked: string;
+};
+
+export type IntegrationConfig = {
+  serviceName: string;
+  baseUrl: string;
+  secret: SecretMask;
+  enabled: boolean;
+};
+
+export type CastrelSignToken = {
+  id?: number;
+  token?: string;
+  description?: string;
+  revoked?: boolean;
+  expiresAt?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+};
+
+export type CastrelSignAgent = {
+  agentId?: string;
+  hostname?: string;
+  status?: string;
+  [key: string]: unknown;
+};
+
+export type CastrelSignCertificate = {
+  serialNumber?: string;
+  subject?: string;
+  status?: string;
+  [key: string]: unknown;
+};
+
+export type LogparserStatus = Record<string, unknown>;
+
+export type DeepLink = {
+  label: string;
+  url: string;
+};

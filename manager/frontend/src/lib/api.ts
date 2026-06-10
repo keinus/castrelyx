@@ -1,4 +1,15 @@
-import type { AlertRow, Asset, BootstrapState, DashboardSummary } from './types';
+import type {
+  AlertRow,
+  Asset,
+  BootstrapState,
+  CastrelSignAgent,
+  CastrelSignCertificate,
+  CastrelSignToken,
+  DashboardSummary,
+  DeepLink,
+  IntegrationConfig,
+  LogparserStatus
+} from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -40,6 +51,16 @@ export const api = {
   alerts: () => request<AlertRow[]>('/api/alerts'),
   acknowledgeAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/acknowledge`, { method: 'POST' }),
   resolveAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/resolve`, { method: 'POST' }),
-  castrelSign: () => request('/api/integrations/castrelsign'),
-  logparserLinks: () => request<{ label: string; url: string }[]>('/api/integrations/logparser/deep-links')
+  castrelSign: () => request<IntegrationConfig>('/api/integrations/castrelsign'),
+  castrelSignTokens: () => request<CastrelSignToken[]>('/api/integrations/castrelsign/tokens'),
+  castrelSignAgents: () => request<CastrelSignAgent[]>('/api/integrations/castrelsign/agents'),
+  castrelSignCertificates: () => request<CastrelSignCertificate[]>('/api/integrations/castrelsign/certificates'),
+  createCastrelSignToken: (payload: { description?: string } = {}) =>
+    request<CastrelSignToken>('/api/integrations/castrelsign/tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  logparser: () => request<IntegrationConfig>('/api/integrations/logparser'),
+  logparserStatus: () => request<LogparserStatus>('/api/integrations/logparser/status'),
+  logparserLinks: () => request<DeepLink[]>('/api/integrations/logparser/deep-links')
 };

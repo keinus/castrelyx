@@ -17,7 +17,19 @@ describe('manager UI model', () => {
   });
 
   it('keeps viewer read-only while operator and admin can mutate operations', () => {
+    expect(menuItemsForRole('ADMIN').map((item) => item.id)).toEqual([
+      'overview',
+      'assets',
+      'traffic',
+      'agent',
+      'snmp',
+      'alerts',
+      'castrelsign',
+      'logparser',
+      'settings'
+    ]);
     expect(menuItemsForRole('VIEWER').map((item) => item.id)).toContain('assets');
+    expect(menuItemsForRole('VIEWER').map((item) => item.id)).not.toContain('integrations');
     expect(canMutate('VIEWER', 'asset:create')).toBe(false);
     expect(canMutate('OPERATOR', 'asset:create')).toBe(true);
     expect(canMutate('OPERATOR', 'integration:update-secret')).toBe(false);

@@ -9,5 +9,8 @@ describe('App shell', () => {
     expect(await screen.findByRole('heading', { name: 'Castrelyx Manager' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '자산' })).toBeInTheDocument();
     expect(screen.getByText('Traffic')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'LogParser' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '연동' })).not.toBeInTheDocument();
   });
 });
