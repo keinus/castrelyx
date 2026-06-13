@@ -1,11 +1,13 @@
 package org.castrelyx.manager.telemetry;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URLEncoder;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -134,12 +136,143 @@ public class ClickHouseClient {
     return result;
   }
 
-  public Map<String, Object> queryAgentDashboard(Long assetId) {
+  public List<ObservedAgentSource> fetchObservedAgentSources() {
+    String table = tableReference(properties.clickhouse().database(), properties.clickhouse().rawTable());
+    List<Map<String, Object>> rows = queryJsonRows("""
+        SELECT
+          source_id,
+          max(received_at) AS last_seen_at,
+          argMaxIf(event_json, received_at, item_kind = 'asset' OR item_type = 'identity') AS identity_json
+        FROM %s
+        GROUP BY source_id
+        ORDER BY last_seen_at DESC
+        LIMIT 500
+        FORMAT JSONEachRow
+        """.formatted(table));
+    return rows.stream()
+        .map(row -> new ObservedAgentSource(
+            stringValue(row.get("source_id")),
+            parseInstant(stringValue(row.get("last_seen_at"))),
+            stringValue(row.get("identity_json"))))
+        .filter(source -> source.sourceId() != null && !source.sourceId().isBlank())
+        .toList();
+  }
+
+  public Map<String, Object> queryAgentDashboard(String assetUid) {
+    String rawTable = tableReference(properties.clickhouse().database(), properties.clickhouse().rawTable());
+    String sourceFilter = assetUid == null || assetUid.isBlank() ? "" : "AND source_id = " + sqlString(assetUid);
+    List<Map<String, Object>> agents = queryJsonRows("""
+        SELECT source_id AS asset_uid, source_id, max(received_at) AS last_seen_at
+        FROM %s
+        WHERE source_id != ''
+          %s
+        GROUP BY source_id
+        ORDER BY last_seen_at DESC
+        LIMIT 50
+        FORMAT JSONEachRow
+        """.formatted(rawTable, sourceFilter));
+    Map<String, Object> heartbeat = agentHeartbeat(agents);
+    List<Map<String, Object>> collectors = queryJsonRows("""
+        SELECT item_type AS name, count() AS sample_count, max(received_at) AS last_seen_at
+        FROM %s
+        WHERE source_id != ''
+          %s
+        GROUP BY item_type
+        ORDER BY sample_count DESC, name
+        LIMIT 20
+        FORMAT JSONEachRow
+        """.formatted(rawTable, sourceFilter));
+    List<Map<String, Object>> metrics = queryJsonRows("""
+        SELECT
+          source_id AS asset_uid,
+          metric_name,
+          event_json,
+          last_observed_at AS observed_at
+        FROM (
+          SELECT
+            source_id,
+            item_key AS metric_name,
+            argMax(event_json, received_at) AS event_json,
+            max(received_at) AS last_observed_at
+          FROM %s
+          WHERE item_kind = 'metric'
+            %s
+          GROUP BY source_id, item_key
+        )
+        ORDER BY last_observed_at DESC, metric_name
+        LIMIT 24
+        FORMAT JSONEachRow
+        """.formatted(rawTable, sourceFilter)).stream()
+        .map(ClickHouseClient::rawMetricRow)
+        .toList();
+    List<Map<String, Object>> stateRows = queryJsonRows("""
+        SELECT
+          source_id AS asset_uid,
+          source_id,
+          item_type AS state_type,
+          item_key AS state_key,
+          argMax(event_json, received_at) AS event_json,
+          max(received_at) AS observed_at
+        FROM %s
+        WHERE item_kind = 'state'
+          AND source_id != ''
+          %s
+        GROUP BY source_id, item_type, item_key
+        ORDER BY observed_at DESC
+        LIMIT 250
+        FORMAT JSONEachRow
+        """.formatted(rawTable, sourceFilter)).stream()
+        .map(ClickHouseClient::rawStateRow)
+        .toList();
+    List<Map<String, Object>> sockets = stateRows.stream()
+        .filter(row -> "socket".equals(row.get("stateType")))
+        .limit(50)
+        .toList();
+    List<Map<String, Object>> services = stateRows.stream()
+        .filter(row -> "service".equals(row.get("stateType")))
+        .limit(50)
+        .toList();
+    List<Map<String, Object>> firewalls = stateRows.stream()
+        .filter(row -> "firewall".equals(row.get("stateType")))
+        .limit(50)
+        .toList();
+    List<Map<String, Object>> processes = stateRows.stream()
+        .filter(row -> "process".equals(row.get("stateType")))
+        .limit(50)
+        .toList();
+    List<Map<String, Object>> packages = stateRows.stream()
+        .filter(row -> "package".equals(row.get("stateType")))
+        .limit(50)
+        .toList();
+    List<Map<String, Object>> events = queryJsonRows("""
+        SELECT
+          source_id AS asset_uid,
+          item_type AS event_type,
+          argMax(event_json, received_at) AS event_json,
+          max(received_at) AS observed_at
+        FROM %s
+        WHERE item_kind = 'event'
+          %s
+        GROUP BY source_id, item_type
+        ORDER BY observed_at DESC
+        LIMIT 20
+        FORMAT JSONEachRow
+        """.formatted(rawTable, sourceFilter)).stream()
+        .map(ClickHouseClient::rawEventRow)
+        .toList();
     return Map.of(
-        "heartbeat", Map.of("healthy", 0, "stale", 0),
-        "collectors", List.of(),
-        "resources", Map.of(),
-        "events", List.of());
+        "heartbeat", normalizeDashboardKeys(heartbeat),
+        "securityPosture", securityPosture(sockets, services, firewalls, events),
+        "agents", agents.stream().map(ClickHouseClient::normalizeDashboardKeys).toList(),
+        "collectors", collectors.stream().map(ClickHouseClient::normalizeDashboardKeys).toList(),
+        "states", Map.of(
+            "sockets", sockets,
+            "services", services,
+            "firewalls", firewalls,
+            "processes", processes,
+            "packages", packages),
+        "resources", Map.of("metrics", metrics.stream().map(ClickHouseClient::normalizeDashboardKeys).toList()),
+        "events", events.stream().map(ClickHouseClient::normalizeDashboardKeys).toList());
   }
 
   public Map<String, Object> querySnmpDashboard(Long targetId) {
@@ -228,6 +361,26 @@ public class ClickHouseClient {
     return request.body(body).retrieve();
   }
 
+  private List<Map<String, Object>> queryJsonRows(String sql) {
+    String body = post(sql, "").body(String.class);
+    if (body == null || body.isBlank()) {
+      return List.of();
+    }
+    List<Map<String, Object>> rows = new ArrayList<>();
+    for (String line : body.split("\\R")) {
+      if (line.isBlank()) {
+        continue;
+      }
+      try {
+        rows.add(OBJECT_MAPPER.readValue(line, new TypeReference<Map<String, Object>>() {
+        }));
+      } catch (JsonProcessingException exception) {
+        throw new IllegalStateException("invalid ClickHouse dashboard row", exception);
+      }
+    }
+    return rows;
+  }
+
   private URI endpoint() {
     return URI.create(properties.clickhouse().endpointUrl());
   }
@@ -293,6 +446,192 @@ public class ClickHouseClient {
     return value == null || value.isNull() ? null : value.asText();
   }
 
+  private static Map<String, Object> rawMetricRow(Map<String, Object> row) {
+    Map<String, Object> metric = normalizeDashboardKeys(row);
+    metric.remove("eventJson");
+    JsonNode payload = rawPayload(row.get("event_json"));
+    String metricName = textOr(payload, "metric_name", stringValue(metric.get("metricName")));
+    metric.put("metricName", metricName);
+    if (payload.hasNonNull("value")) {
+      metric.put("value", payload.path("value").asDouble());
+    }
+    String unit = nullableText(payload, "unit");
+    if (unit != null) {
+      metric.put("unit", unit);
+    }
+    return metric;
+  }
+
+  static Map<String, Object> rawStateRow(Map<String, Object> row) {
+    Map<String, Object> state = normalizeDashboardKeys(row);
+    state.remove("eventJson");
+    copyPayloadFields(state, rawPayload(row.get("event_json")));
+    return state;
+  }
+
+  private static Map<String, Object> rawEventRow(Map<String, Object> row) {
+    Map<String, Object> event = normalizeDashboardKeys(row);
+    event.remove("eventJson");
+    JsonNode payload = rawPayload(row.get("event_json"));
+    copyText(event, payload, "event_type", "eventType");
+    copyText(event, payload, "severity", "severity");
+    copyText(event, payload, "message", "message");
+    copyText(event, payload, "source_name", "sourceName");
+    copyText(event, payload, "outcome", "outcome");
+    try {
+      JsonNode root = OBJECT_MAPPER.readTree(stringValue(row.get("event_json")));
+      String severity = nullableText(root.path("common"), "severity");
+      if (severity != null) {
+        event.put("severity", severity);
+      }
+    } catch (JsonProcessingException ignored) {
+      // Keep the summary row even when the raw event payload cannot be parsed.
+    }
+    return event;
+  }
+
+  private static JsonNode rawPayload(Object eventJson) {
+    try {
+      JsonNode root = OBJECT_MAPPER.readTree(stringValue(eventJson));
+      JsonNode payload = root.path("payload");
+      if (!payload.isMissingNode() && !payload.isNull()) {
+        return payload;
+      }
+      JsonNode nestedPayload = root.path("additionalAttributes").path("payload");
+      if (!nestedPayload.isMissingNode() && !nestedPayload.isNull()) {
+        return nestedPayload;
+      }
+      JsonNode rawLog = root.path("common").path("rawLog");
+      if (rawLog.isTextual()) {
+        return OBJECT_MAPPER.readTree(rawLog.asText()).path("payload");
+      }
+    } catch (JsonProcessingException ignored) {
+      // Fall through to empty payload.
+    }
+    return OBJECT_MAPPER.createObjectNode();
+  }
+
+  private static void copyPayloadFields(Map<String, Object> target, JsonNode payload) {
+    if (payload == null || !payload.isObject()) {
+      return;
+    }
+    payload.fields().forEachRemaining(field -> {
+      if (!field.getValue().isNull()) {
+        target.put(snakeToCamel(field.getKey()), OBJECT_MAPPER.convertValue(field.getValue(), Object.class));
+      }
+    });
+  }
+
+  private static void copyText(Map<String, Object> target, JsonNode payload, String sourceField, String targetField) {
+    String value = nullableText(payload, sourceField);
+    if (value != null && !value.isBlank()) {
+      target.put(targetField, value);
+    }
+  }
+
+  private static Map<String, Object> securityPosture(
+      List<Map<String, Object>> sockets,
+      List<Map<String, Object>> services,
+      List<Map<String, Object>> firewalls,
+      List<Map<String, Object>> events) {
+    return Map.of(
+        "exposedPorts", sockets.stream().filter(ClickHouseClient::isListeningSocket).count(),
+        "failedServices", services.stream().filter(ClickHouseClient::isProblemService).count(),
+        "firewallDisabled", firewalls.stream().filter(ClickHouseClient::isFirewallDisabled).count(),
+        "securityEvents", (long) events.size());
+  }
+
+  private static boolean isListeningSocket(Map<String, Object> row) {
+    String direction = stringValue(row.get("direction"));
+    String state = stringValue(row.get("state"));
+    return "listening".equalsIgnoreCase(direction) || "listen".equalsIgnoreCase(state);
+  }
+
+  private static boolean isProblemService(Map<String, Object> row) {
+    String status = stringValue(row.get("status"));
+    return "failed".equalsIgnoreCase(status) || "error".equalsIgnoreCase(status);
+  }
+
+  private static boolean isFirewallDisabled(Map<String, Object> row) {
+    Object enabled = row.get("enabled");
+    if (enabled instanceof Boolean bool) {
+      return !bool;
+    }
+    return "false".equalsIgnoreCase(stringValue(enabled));
+  }
+
+  private static Map<String, Object> agentHeartbeat(List<Map<String, Object>> agents) {
+    Instant staleCutoff = Instant.now().minus(Duration.ofMinutes(5));
+    int healthy = 0;
+    int stale = 0;
+    Instant lastSeenAt = null;
+    for (Map<String, Object> agent : agents) {
+      Object value = agent.get("last_seen_at");
+      if (value == null) {
+        value = agent.get("lastSeenAt");
+      }
+      if (value == null) {
+        stale++;
+        continue;
+      }
+      Instant seen = parseInstant(String.valueOf(value));
+      if (seen.isAfter(staleCutoff)) {
+        healthy++;
+      } else {
+        stale++;
+      }
+      if (lastSeenAt == null || seen.isAfter(lastSeenAt)) {
+        lastSeenAt = seen;
+      }
+    }
+    Map<String, Object> heartbeat = new LinkedHashMap<>();
+    heartbeat.put("healthy", healthy);
+    heartbeat.put("stale", stale);
+    if (lastSeenAt != null) {
+      heartbeat.put("last_seen_at", lastSeenAt.toString());
+    }
+    return heartbeat;
+  }
+
+  private static Map<String, Object> normalizeDashboardKeys(Map<String, Object> row) {
+    Map<String, Object> normalized = new LinkedHashMap<>();
+    row.forEach((key, value) -> normalized.put(snakeToCamel(key), normalizeDashboardValue(key, value)));
+    return normalized;
+  }
+
+  private static Object normalizeDashboardValue(String key, Object value) {
+    if (value instanceof String text && key.endsWith("_at") && !text.isBlank()) {
+      return parseInstant(text).toString();
+    }
+    return value;
+  }
+
+  private static String textOr(JsonNode node, String field, String fallback) {
+    String value = nullableText(node, field);
+    return value == null || value.isBlank() ? fallback : value;
+  }
+
+  private static String stringValue(Object value) {
+    return value == null ? null : String.valueOf(value);
+  }
+
+  private static String snakeToCamel(String value) {
+    StringBuilder result = new StringBuilder();
+    boolean upperNext = false;
+    for (int index = 0; index < value.length(); index++) {
+      char ch = value.charAt(index);
+      if (ch == '_') {
+        upperNext = true;
+      } else if (upperNext) {
+        result.append(Character.toUpperCase(ch));
+        upperNext = false;
+      } else {
+        result.append(ch);
+      }
+    }
+    return result.toString();
+  }
+
   @FunctionalInterface
   private interface RowMapper {
     Map<String, Object> map(CanonicalTelemetryRecord record);
@@ -305,5 +644,11 @@ public class ClickHouseClient {
       String itemType,
       String itemKey,
       String eventJson) {
+  }
+
+  public record ObservedAgentSource(
+      String sourceId,
+      Instant lastSeenAt,
+      String identityJson) {
   }
 }

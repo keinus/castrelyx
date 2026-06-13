@@ -236,6 +236,9 @@ public class StructuredTransformService {
                 case "user_id":
                     builder.userId(String.valueOf(value));
                     break;
+                case "log_source":
+                    builder.logSource(String.valueOf(value));
+                    break;
                 default:
                     log.debug("Unknown common target field: {}", targetField);
             }

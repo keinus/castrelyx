@@ -1,5 +1,6 @@
 import type {
   AlertRow,
+  AgentDashboard,
   Asset,
   BootstrapState,
   CastrelSignAuditEvent,
@@ -58,6 +59,7 @@ export const api = {
     }),
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   overview: () => request<DashboardSummary>('/api/dashboards/overview'),
+  agentDashboard: () => request<AgentDashboard>('/api/dashboards/agent'),
   assets: () => request<Asset[]>('/api/assets'),
   createAsset: (payload: { name: string; assetType: string; managementIp?: string; description?: string }) =>
     request<Asset>('/api/assets', { method: 'POST', body: JSON.stringify(payload) }),
@@ -81,11 +83,9 @@ export const api = {
   reactivateCastrelSignAgent: (agentId: string) =>
     request(`/api/integrations/castrelsign/agents/${encodeURIComponent(agentId)}/reactivate`, { method: 'POST' }),
   createCastrelSignEnrollmentPackage: (payload: {
-    agentId: string;
+    agentId?: string;
     tenantId: string;
     ttlSeconds: number;
-    maxUses: number;
-    tlsServerName: string;
   }) =>
     requestBlob('/api/integrations/castrelsign/enrollment-packages', {
       method: 'POST',

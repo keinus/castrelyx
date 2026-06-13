@@ -6,6 +6,7 @@ import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.OutputAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.ParserAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.TransformConfig;
+import org.keinus.logparser.domain.configuration.service.CastrelyxSeedService;
 import org.keinus.logparser.domain.configuration.service.ConfigValidator;
 import org.keinus.logparser.domain.configuration.service.DatabaseConfigLoader;
 
@@ -15,6 +16,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -22,13 +24,15 @@ class ApplicationPropertiesTest {
 
     private ConfigValidator configValidator;
     private DatabaseConfigLoader databaseConfigLoader;
+    private CastrelyxSeedService castrelyxSeedService;
     private ApplicationProperties applicationProperties;
 
     @BeforeEach
     void setUp() {
         configValidator = mock(ConfigValidator.class);
         databaseConfigLoader = mock(DatabaseConfigLoader.class);
-        applicationProperties = new ApplicationProperties(configValidator, databaseConfigLoader);
+        castrelyxSeedService = mock(CastrelyxSeedService.class);
+        applicationProperties = new ApplicationProperties(configValidator, databaseConfigLoader, castrelyxSeedService);
     }
 
     @Test
@@ -79,6 +83,17 @@ class ApplicationPropertiesTest {
         assertTrue(applicationProperties.getTransform().isEmpty());
         assertEquals(4, applicationProperties.getParserThreads());
         assertEquals(5000L, applicationProperties.getFlushInterval());
+    }
+
+    @Test
+    void loadConfigurationSeedsCastrelyxDefaultsBeforeReadingDatabaseConfiguration() {
+        when(databaseConfigLoader.loadConfiguration()).thenReturn(sampleConfiguration());
+
+        applicationProperties.loadConfigurationFromDatabase();
+
+        var inOrder = inOrder(castrelyxSeedService, databaseConfigLoader);
+        inOrder.verify(castrelyxSeedService).seedDefaults();
+        inOrder.verify(databaseConfigLoader).loadConfiguration();
     }
 
     private DatabaseConfigLoader.PipelineConfiguration sampleConfiguration() {

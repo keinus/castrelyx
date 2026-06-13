@@ -285,14 +285,35 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     ) {
         static EventRecord from(LogEvent event, boolean includeOriginText) {
             Map<String, Object> output = event.toOutputMap(includeOriginText);
-            String sourceId = firstNonBlank(asString(output.get("source_id")), event.getSourceHost(), "unknown");
+            String sourceId = firstNonBlank(
+                    asString(output.get("source_id")),
+                    asString(additional(output).get("source_id")),
+                    asString(common(output).get("srcHost")),
+                    event.getSourceHost(),
+                    "unknown"
+            );
             return new EventRecord(
                     sourceId,
-                    asString(output.get("tenant_id")),
+                    firstNonBlank(
+                            asString(output.get("tenant_id")),
+                            asString(additional(output).get("tenant_id"))
+                    ),
                     sourceId,
-                    asString(output.get("item_kind")),
-                    asString(output.get("item_type")),
-                    asString(output.get("item_key")),
+                    firstNonBlank(
+                            asString(output.get("item_kind")),
+                            asString(additional(output).get("item_kind")),
+                            asString(common(output).get("eventCategory"))
+                    ),
+                    firstNonBlank(
+                            asString(output.get("item_type")),
+                            asString(additional(output).get("item_type")),
+                            asString(common(output).get("eventType"))
+                    ),
+                    firstNonBlank(
+                            asString(output.get("item_key")),
+                            asString(additional(output).get("item_key")),
+                            asString(common(output).get("eventAction"))
+                    ),
                     event.toOutputJson(includeOriginText)
             );
         }
@@ -313,18 +334,32 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             }
         }
 
+        private static Map<?, ?> common(Map<String, Object> output) {
+            return mapValue(output.get("common"));
+        }
+
+        private static Map<?, ?> additional(Map<String, Object> output) {
+            return mapValue(output.get("additionalAttributes"));
+        }
+
+        private static Map<?, ?> mapValue(Object value) {
+            if (value instanceof Map<?, ?> map) {
+                return map;
+            }
+            return Map.of();
+        }
+
         private static String asString(Object value) {
             return value == null ? null : String.valueOf(value);
         }
 
-        private static String firstNonBlank(String first, String second, String fallback) {
-            if (first != null && !first.isBlank()) {
-                return first;
+        private static String firstNonBlank(String... values) {
+            for (String value : values) {
+                if (value != null && !value.isBlank()) {
+                    return value;
+                }
             }
-            if (second != null && !second.isBlank()) {
-                return second;
-            }
-            return fallback;
+            return null;
         }
     }
 }

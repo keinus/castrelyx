@@ -22,6 +22,7 @@ import org.castrelyx.manager.auth.Role;
 import org.castrelyx.manager.integration.CastrelSignClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -175,13 +176,13 @@ class CastrelSignIntegrationControllerTest {
   }
 
   @Test
-  void adminDownloadsEnrollmentPackageZipWithoutClientMaterial() throws Exception {
+  void adminDownloadsHostnameAutoEnrollmentPackageZipWithoutClientMaterial() throws Exception {
     Cookie admin = loginCookie("admin");
     jdbcTemplate.update("""
         insert into integration_configs(service_name, base_url, encrypted_secret, enabled, created_at, updated_at)
         values ('castrelsign', 'https://castrelsign:8443', 'v1:fixture', true, current_timestamp, current_timestamp)
         """);
-    Map<?, ?> token = Map.of("id", 7, "token", "enroll-token-zip", "name", "edge-01 initial enrollment", "agent_id", "edge-01",
+    Map<?, ?> token = Map.of("id", 7, "token", "enroll-token-zip", "name", "hostname auto enrollment",
         "max_uses", 1, "used_count", 0);
     doReturn(token).when(client).createEnrollmentToken(anyMap());
     doReturn("-----BEGIN CERTIFICATE-----\nfixture-ca\n-----END CERTIFICATE-----\n").when(client).rootCaPem();
@@ -190,22 +191,56 @@ class CastrelSignIntegrationControllerTest {
             .cookie(admin)
             .contentType(MediaType.APPLICATION_JSON)
         .content("""
-                {"agentId":"edge-01","tenantId":"default","ttlSeconds":3600,"maxUses":1,"tlsServerName":"castrelsign"}
+                {"tenantId":"default","ttlSeconds":3600}
                 """))
         .andExpect(status().isOk())
         .andReturn();
 
     Map<String, String> entries = unzip(result.getResponse().getContentAsByteArray());
     org.assertj.core.api.Assertions.assertThat(entries.keySet()).containsExactlyInAnyOrder(
-        "agent.yaml", "certs/ca.pem", "install.ps1", "install.sh", "install.md");
+        "agent.yaml", "certs/ca.pem", "bin/castrelyx-agent-linux-amd64",
+        "bin/castrelyx-agent-windows-amd64.exe", "install.bat", "install.ps1", "install.sh", "install.md");
     org.assertj.core.api.Assertions.assertThat(entries.keySet()).doesNotContain("certs/client.key", "certs/client.pem");
     org.assertj.core.api.Assertions.assertThat(entries.get("agent.yaml"))
         .contains("manager_url: https://castrelsign:8443")
         .contains("enrollment_token: enroll-token-zip")
-        .contains("agent_id: edge-01")
-        .contains("tls_server_name: castrelsign");
+        .contains("agent_id: __HOSTNAME__")
+        .contains("tls_server_name: castrelsign")
+        .contains("ingest_transport: tcp_mtls")
+        .contains("tcp_ingest_addr: castrelsign:9443")
+        .contains("tcp_ingest_server_name: castrelsign")
+        .doesNotContain("cert_dir: ./certs")
+        .doesNotContain("spool_dir: ./spool");
+    org.assertj.core.api.Assertions.assertThat(entries.get("install.bat"))
+        .contains("powershell.exe")
+        .contains("install.ps1");
+    org.assertj.core.api.Assertions.assertThat(entries.get("install.ps1"))
+        .contains("[System.Net.Dns]::GetHostName()")
+        .contains("__HOSTNAME__")
+        .contains("$env:ProgramData")
+        .contains("CastrelyxAgent")
+        .contains("New-Service")
+        .contains("Start-Service")
+        .contains("castrelyx-agent-windows-amd64.exe");
+    org.assertj.core.api.Assertions.assertThat(entries.get("install.sh"))
+        .contains("hostname")
+        .contains("__HOSTNAME__")
+        .contains("/etc/castrelyx/agent.yaml")
+        .contains("/etc/systemd/system/castrelyx-agent.service")
+        .contains("systemctl enable --now castrelyx-agent")
+        .contains("castrelyx-agent-linux-amd64");
+    org.assertj.core.api.Assertions.assertThat(entries.get("install.md"))
+        .contains("Windows")
+        .contains("install.bat")
+        .contains("Linux")
+        .contains("install.sh");
 
-    verify(client).createEnrollmentToken(anyMap());
+    ArgumentCaptor<Map<String, Object>> tokenRequest = ArgumentCaptor.forClass(Map.class);
+    verify(client).createEnrollmentToken(tokenRequest.capture());
+    org.assertj.core.api.Assertions.assertThat(tokenRequest.getValue())
+        .containsEntry("ttl_seconds", 3600)
+        .containsEntry("max_uses", 1)
+        .doesNotContainKey("agent_id");
     verify(client).rootCaPem();
   }
 

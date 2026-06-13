@@ -20,8 +20,6 @@ type PackageForm = {
   agentId: string;
   tenantId: string;
   ttlSeconds: number;
-  maxUses: number;
-  tlsServerName: string;
 };
 
 type AgentRow = CastrelSignAgent & {
@@ -33,9 +31,7 @@ type AgentRow = CastrelSignAgent & {
 const DEFAULT_PACKAGE_FORM: PackageForm = {
   agentId: '',
   tenantId: 'default',
-  ttlSeconds: 3600,
-  maxUses: 1,
-  tlsServerName: ''
+  ttlSeconds: 3600
 };
 
 export function CastrelSignView({ role }: CastrelSignViewProps) {
@@ -132,8 +128,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   function openPackageModal(agentId = '') {
     setPackageForm({
       ...DEFAULT_PACKAGE_FORM,
-      agentId,
-      tlsServerName: hostName(config?.baseUrl)
+      agentId
     });
     setPackageOpen(true);
     setError(null);
@@ -146,16 +141,15 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
     setError(null);
     setNotice(null);
     try {
-      const payload = {
-        agentId: packageForm.agentId.trim(),
+      const payload: { tenantId: string; ttlSeconds: number; agentId?: string } = {
         tenantId: packageForm.tenantId.trim() || 'default',
         ttlSeconds: packageForm.ttlSeconds,
-        maxUses: packageForm.maxUses,
-        tlsServerName: packageForm.tlsServerName.trim()
+        ...(packageForm.agentId.trim() ? { agentId: packageForm.agentId.trim() } : {})
       };
       const blob = await api.createCastrelSignEnrollmentPackage(payload);
-      downloadBlob(blob, `castrelsign-${safeFileName(payload.agentId)}-enrollment.zip`);
+      downloadBlob(blob, `castrelsign-${safeFileName(packageForm.agentId.trim() || 'hostname-auto')}-enrollment.zip`);
       setPackageOpen(false);
+      payload.agentId = packageForm.agentId.trim() || 'hostname auto';
       setNotice(`${payload.agentId} enrollment package 다운로드를 시작했습니다.`);
       await load();
     } catch {
@@ -375,10 +369,13 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <h3>새 agent 패키지</h3>
               <button className="icon-button" aria-label="닫기" type="button" onClick={() => setPackageOpen(false)}>×</button>
             </div>
-            <label>
-              <span>Agent ID</span>
-              <input aria-label="Agent ID" value={packageForm.agentId} onChange={(event) => setPackageForm((current) => ({ ...current, agentId: event.target.value }))} required />
-            </label>
+            {packageForm.agentId ? (
+              <dl className="kv-list compact">
+                <div><dt>Agent ID</dt><dd>{packageForm.agentId}</dd></div>
+              </dl>
+            ) : (
+              <p className="muted">Agent ID는 설치 대상 host name으로 자동 설정됩니다.</p>
+            )}
             <label>
               <span>Tenant ID</span>
               <input aria-label="Tenant ID" value={packageForm.tenantId} onChange={(event) => setPackageForm((current) => ({ ...current, tenantId: event.target.value }))} />
@@ -387,17 +384,9 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <span>TTL seconds</span>
               <input aria-label="TTL seconds" type="number" min={60} value={packageForm.ttlSeconds} onChange={(event) => setPackageForm((current) => ({ ...current, ttlSeconds: Number(event.target.value) }))} />
             </label>
-            <label>
-              <span>Max uses</span>
-              <input aria-label="Max uses" type="number" min={1} value={packageForm.maxUses} onChange={(event) => setPackageForm((current) => ({ ...current, maxUses: Number(event.target.value) }))} />
-            </label>
-            <label>
-              <span>TLS server name</span>
-              <input aria-label="TLS server name" value={packageForm.tlsServerName} onChange={(event) => setPackageForm((current) => ({ ...current, tlsServerName: event.target.value }))} required />
-            </label>
             <div className="modal-actions">
               <button type="button" onClick={() => setPackageOpen(false)}>취소</button>
-              <button type="submit" disabled={working || !packageForm.agentId.trim() || !packageForm.tlsServerName.trim()}>
+              <button type="submit" disabled={working}>
                 <Download size={16} />
                 패키지 생성
               </button>
@@ -465,14 +454,6 @@ function formatDate(value?: string): string {
     return value;
   }
   return date.toISOString().replace('.000Z', 'Z');
-}
-
-function hostName(baseUrl?: string): string {
-  if (!baseUrl) {
-    return '';
-  }
-  const match = baseUrl.match(/^https?:\/\/([^/:]+)/i);
-  return match?.[1] ?? '';
 }
 
 function downloadBlob(blob: Blob, filename: string) {

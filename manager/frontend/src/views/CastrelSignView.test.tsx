@@ -29,7 +29,7 @@ describe('CastrelSignView', () => {
     expect(screen.queryByText('agent_id')).not.toBeInTheDocument();
   });
 
-  it('creates an enrollment package with an agent-bound token request', async () => {
+  it('creates a hostname-auto enrollment package without advanced inputs', async () => {
     const fetchMock = mockFetch({
       '/api/integrations/castrelsign/enrollment-packages': {
         body: new Blob(['zip'], { type: 'application/zip' })
@@ -44,9 +44,10 @@ describe('CastrelSignView', () => {
     render(<CastrelSignView role="ADMIN" />);
 
     fireEvent.click(await screen.findByRole('button', { name: '새 agent 패키지' }));
-    fireEvent.change(screen.getByLabelText('Agent ID'), { target: { value: 'edge-02' } });
+    expect(screen.queryByLabelText('Agent ID')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Max uses')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('TLS server name')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Tenant ID'), { target: { value: 'default' } });
-    fireEvent.change(screen.getByLabelText('TLS server name'), { target: { value: 'castrelsign' } });
     fireEvent.click(screen.getByRole('button', { name: '패키지 생성' }));
 
     await waitFor(() => {
@@ -55,11 +56,8 @@ describe('CastrelSignView', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            agentId: 'edge-02',
             tenantId: 'default',
-            ttlSeconds: 3600,
-            maxUses: 1,
-            tlsServerName: 'castrelsign'
+            ttlSeconds: 3600
           })
         })
       );

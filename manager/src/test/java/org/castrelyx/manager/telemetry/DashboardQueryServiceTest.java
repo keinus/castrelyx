@@ -35,18 +35,28 @@ class DashboardQueryServiceTest {
   @Test
   void assetAndTargetDashboardsPassScopeToClickHouse() {
     AssetService assetService = mock(AssetService.class);
+    when(assetService.getAsset(7L)).thenReturn(new Asset(
+        7L,
+        "agent-01",
+        "app-01",
+        AssetType.LINUX_SERVER,
+        "10.1.0.10",
+        null,
+        "active",
+        Instant.now(),
+        Instant.now()));
     FakeClickHouseClient clickHouseClient = new FakeClickHouseClient();
     DashboardQueryService service = new DashboardQueryService(assetService, clickHouseClient);
 
     service.agentDashboard(7L);
     service.snmpDashboard(11L);
 
-    assertThat(clickHouseClient.agentAssetId).isEqualTo(7L);
+    assertThat(clickHouseClient.agentAssetUid).isEqualTo("agent-01");
     assertThat(clickHouseClient.snmpTargetId).isEqualTo(11L);
   }
 
   private static class FakeClickHouseClient extends ClickHouseClient {
-    Long agentAssetId;
+    String agentAssetUid;
     Long snmpTargetId;
 
     FakeClickHouseClient() {
@@ -64,8 +74,8 @@ class DashboardQueryServiceTest {
     }
 
     @Override
-    public Map<String, Object> queryAgentDashboard(Long assetId) {
-      agentAssetId = assetId;
+    public Map<String, Object> queryAgentDashboard(String assetUid) {
+      agentAssetUid = assetUid;
       return Map.of(
           "heartbeat", Map.of("healthy", 1, "stale", 1),
           "collectors", List.of("host", "network"),

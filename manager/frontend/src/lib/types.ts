@@ -37,6 +37,115 @@ export type DashboardSummary = {
   snmpPollHealth: { success: number; failure: number };
 };
 
+export type AgentDashboard = {
+  heartbeat?: {
+    healthy?: number;
+    stale?: number;
+    lastSeenAt?: string;
+  };
+  securityPosture?: {
+    exposedPorts?: number;
+    failedServices?: number;
+    firewallDisabled?: number;
+    securityEvents?: number;
+  };
+  agents?: AgentDashboardAgent[];
+  collectors?: AgentCollectorSummary[];
+  states?: {
+    sockets?: AgentSocketState[];
+    services?: AgentServiceState[];
+    firewalls?: AgentFirewallState[];
+    processes?: AgentProcessState[];
+    packages?: AgentPackageState[];
+  };
+  resources?: {
+    metrics?: AgentMetricSummary[];
+  };
+  events?: AgentEventSummary[];
+};
+
+export type AgentDashboardAgent = {
+  assetUid?: string;
+  sourceId?: string;
+  lastSeenAt?: string;
+};
+
+export type AgentCollectorSummary = {
+  name?: string;
+  sampleCount?: number;
+  lastSeenAt?: string;
+};
+
+export type AgentMetricSummary = {
+  assetUid?: string;
+  metricName?: string;
+  value?: number;
+  unit?: string;
+  observedAt?: string;
+};
+
+export type AgentEventSummary = {
+  assetUid?: string;
+  eventType?: string;
+  severity?: string;
+  message?: string;
+  sourceName?: string;
+  outcome?: string;
+  observedAt?: string;
+};
+
+export type AgentSocketState = {
+  assetUid?: string;
+  protocol?: string;
+  localAddress?: string;
+  localPort?: number;
+  remoteAddress?: string;
+  remotePort?: number;
+  direction?: string;
+  state?: string;
+  processName?: string;
+  processId?: number;
+  observedAt?: string;
+};
+
+export type AgentServiceState = {
+  assetUid?: string;
+  name?: string;
+  displayName?: string;
+  status?: string;
+  startupType?: string;
+  observedAt?: string;
+};
+
+export type AgentFirewallState = {
+  assetUid?: string;
+  backend?: string;
+  profile?: string;
+  enabled?: boolean;
+  ruleCount?: number;
+  observedAt?: string;
+};
+
+export type AgentProcessState = {
+  assetUid?: string;
+  pid?: number;
+  name?: string;
+  user?: string;
+  memoryBytes?: number;
+  listeningSocketCount?: number;
+  connectedSocketCount?: number;
+  observedAt?: string;
+};
+
+export type AgentPackageState = {
+  assetUid?: string;
+  name?: string;
+  version?: string;
+  vendor?: string;
+  source?: string;
+  observedAt?: string;
+};
+
 export type Surface = 'setup' | 'login' | 'console';
 
 export type SecretMask = {

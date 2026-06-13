@@ -20,6 +20,35 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     agentHealth: { healthy: 2, stale: 1 },
     snmpPollHealth: { success: 4, failure: 1 }
   }));
+  await page.route('/api/dashboards/agent', routeJson({
+    heartbeat: { healthy: 1, stale: 0, lastSeenAt: '2026-06-11T13:34:00Z' },
+    securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 },
+    agents: [{ assetUid: 'nas', sourceId: 'nas', lastSeenAt: '2026-06-11T13:34:00Z' }],
+    collectors: [{ name: 'package', sampleCount: 15477, lastSeenAt: '2026-06-11T13:34:00Z' }],
+    states: {
+      sockets: [{
+        assetUid: 'nas',
+        protocol: 'tcp',
+        localAddress: '0.0.0.0',
+        localPort: 22,
+        direction: 'listening',
+        processName: 'sshd',
+        observedAt: '2026-06-11T13:34:00Z'
+      }],
+      services: [{ assetUid: 'nas', name: 'ssh.service', status: 'failed', observedAt: '2026-06-11T13:34:00Z' }],
+      firewalls: [{ assetUid: 'nas', backend: 'ufw', enabled: false, observedAt: '2026-06-11T13:34:00Z' }]
+    },
+    resources: {
+      metrics: [{ assetUid: 'nas', metricName: 'disk.usage', value: 72.4, unit: 'percent', observedAt: '2026-06-11T13:34:00Z' }]
+    },
+    events: [{
+      assetUid: 'nas',
+      eventType: 'log',
+      severity: 'WARNING',
+      message: 'SSH login failed for alice',
+      observedAt: '2026-06-11T13:33:00Z'
+    }]
+  }));
   await page.route('/api/assets', async (route) => {
     if (route.request().method() === 'POST') {
       const payload = route.request().postDataJSON();

@@ -34,7 +34,10 @@ public class LogparserClient {
 
   public List<Map<String, String>> deepLinks() {
     IntegrationConfig config = integrationService.get("logparser");
-    String baseUrl = config.baseUrl() == null ? "" : config.baseUrl();
+    String baseUrl = config.baseUrl() == null ? "" : config.baseUrl().trim();
+    if (baseUrl.isBlank()) {
+      return List.of();
+    }
     return List.of(
         Map.of("label", "Pipeline", "url", baseUrl + "/"),
         Map.of("label", "Input adapters", "url", baseUrl + "/#input-adapters"),
