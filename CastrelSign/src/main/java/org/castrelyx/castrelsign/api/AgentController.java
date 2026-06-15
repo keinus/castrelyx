@@ -2,6 +2,7 @@ package org.castrelyx.castrelsign.api;
 
 import java.io.IOException;
 
+import org.castrelyx.castrelsign.persistence.AgentRepository;
 import org.castrelyx.castrelsign.security.ClientCertificateService;
 import org.castrelyx.castrelsign.security.EnrollmentTokenService;
 import org.springframework.http.HttpStatus;
@@ -22,13 +23,15 @@ public class AgentController {
   private final ClientCertificateService certificateService;
   private final AgentCertificateService certificateIssuer;
   private final IngestService ingestService;
+  private final AgentRepository agentRepository;
 
   public AgentController(EnrollmentTokenService tokenService, ClientCertificateService certificateService,
-      AgentCertificateService certificateIssuer, IngestService ingestService) {
+      AgentCertificateService certificateIssuer, IngestService ingestService, AgentRepository agentRepository) {
     this.tokenService = tokenService;
     this.certificateService = certificateService;
     this.certificateIssuer = certificateIssuer;
     this.ingestService = ingestService;
+    this.agentRepository = agentRepository;
   }
 
   @PostMapping("/enroll")
@@ -36,6 +39,9 @@ public class AgentController {
       @RequestBody EnrollmentRequest request) {
     validate(request);
     var csr = certificateIssuer.validateCsr(request);
+    if (agentRepository.isBlocked(request.agentId())) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "agent has been blocked");
+    }
     tokenService.consumeValid(authorization, request.agentId());
     return certificateIssuer.issue(request, csr, "ENROLL");
   }

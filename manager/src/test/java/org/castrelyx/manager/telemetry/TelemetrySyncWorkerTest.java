@@ -109,10 +109,57 @@ class TelemetrySyncWorkerTest {
     assertThat(cursor).contains("2026-06-09T10:02:00Z", "snmp-edge", "edge-router");
   }
 
+  @Test
+  void createsAgentAssetFromFirstNonIdentityTelemetry() {
+    clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
+        Instant.parse("2026-06-11T12:00:00Z"),
+        "nas",
+        "metric",
+        "disk",
+        "root",
+        """
+            {"metric_name":"disk.usage","metric_value":72.4,"unit":"percent"}
+            """));
+
+    TelemetrySyncWorker worker = new TelemetrySyncWorker(clickHouseClient, normalizer, assetService, jdbcTemplate);
+    worker.syncOnce();
+
+    Asset agentAsset = assetService.listAssets().stream()
+        .filter(asset -> asset.assetUid().equals("nas"))
+        .findFirst()
+        .orElseThrow();
+    assertThat(agentAsset.name()).isEqualTo("nas");
+    assertThat(assetService.sources(agentAsset.id()))
+        .extracting(AssetSourceBinding::sourceId)
+        .contains("nas");
+  }
+
+  @Test
+  void drainsMultipleRawTelemetryBatchesInOneSync() {
+    for (int index = 0; index < 1001; index++) {
+      clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
+          Instant.parse("2026-06-11T12:00:00Z").plusSeconds(index),
+          "agent-01",
+          "metric",
+          "runtime",
+          "runtime-" + index,
+          """
+              {"metric_name":"agent.runtime.uptime","metric_value":1,"unit":"seconds"}
+              """));
+    }
+
+    TelemetrySyncWorker worker = new TelemetrySyncWorker(clickHouseClient, normalizer, assetService, jdbcTemplate);
+    Map<String, Object> result = worker.syncOnce();
+
+    assertThat(result).containsEntry("rawRows", 1001).containsEntry("canonicalRows", 1001);
+    assertThat(clickHouseClient.insertedRecords).hasSize(1001);
+  }
+
   private static class FakeClickHouseClient extends ClickHouseClient {
     final List<RawTelemetryRow> rawRows = new ArrayList<>();
     final List<CanonicalTelemetryRecord> insertedRecords = new ArrayList<>();
     boolean schemaEnsured;
+    int nextRow;
 
     FakeClickHouseClient() {
       super(new ManagerProperties(
@@ -129,7 +176,13 @@ class TelemetrySyncWorkerTest {
 
     @Override
     public List<RawTelemetryRow> fetchRawTelemetryRows(String cursorValue, int limit) {
-      return rawRows;
+      if (nextRow >= rawRows.size()) {
+        return List.of();
+      }
+      int end = Math.min(nextRow + limit, rawRows.size());
+      List<RawTelemetryRow> batch = new ArrayList<>(rawRows.subList(nextRow, end));
+      nextRow = end;
+      return batch;
     }
 
     @Override

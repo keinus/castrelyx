@@ -23,7 +23,7 @@ class TcpMtlsGzipInputAdapterTest {
                   "observed_at": "2026-06-07T00:00:00Z",
                   "sent_at": "2026-06-07T00:00:01Z",
                   "items": [
-                    {"kind":"event","type":"health","key":"heartbeat","payload":{"status":"ok"}}
+                    {"kind":"event","type":"health","key":"heartbeat","payload":{"status":"ok","observed_at":"2026-06-07T00:00:00.500Z","process-id":1234}}
                   ]
                 }
                 """);
@@ -41,6 +41,9 @@ class TcpMtlsGzipInputAdapterTest {
         assertEquals("event", event.getField("item_kind"));
         assertEquals("health", event.getField("item_type"));
         assertEquals("heartbeat", event.getField("item_key"));
+        assertEquals("ok", event.getField("payload_status"));
+        assertEquals("2026-06-07T00:00:00.500Z", event.getField("payload_observed_at"));
+        assertEquals(1234, event.getField("payload_process_id"));
         assertTrue(event.getOriginalText().contains("\"type\":\"health\""));
     }
 

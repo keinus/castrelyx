@@ -5,6 +5,7 @@ import java.security.cert.X509Certificate;
 import javax.naming.ldap.LdapName;
 
 import org.castrelyx.castrelsign.crypto.CertificateAuthority;
+import org.castrelyx.castrelsign.persistence.AgentRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -16,9 +17,11 @@ public class ClientCertificateService {
   private static final String CERTIFICATE_ATTRIBUTE = "jakarta.servlet.request.X509Certificate";
   private static final String CLIENT_AUTH_EKU = "1.3.6.1.5.5.7.3.2";
   private final CertificateAuthority authority;
+  private final AgentRepository agentRepository;
 
-  public ClientCertificateService(CertificateAuthority authority) {
+  public ClientCertificateService(CertificateAuthority authority, AgentRepository agentRepository) {
     this.authority = authority;
+    this.agentRepository = agentRepository;
   }
 
   public ClientIdentity requireClientIdentity(HttpServletRequest request) {
@@ -37,6 +40,12 @@ public class ClientCertificateService {
     String commonName = commonName(certificate);
     if (commonName == null || commonName.isBlank()) {
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "client certificate common name is missing");
+    }
+    if (agentRepository.isBlocked(commonName)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "agent has been blocked");
+    }
+    if (!agentRepository.isActiveCertificate(commonName, certificate)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "client certificate is not active");
     }
     return new ClientIdentity(commonName, certificate);
   }

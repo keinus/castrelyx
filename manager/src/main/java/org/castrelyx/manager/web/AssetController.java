@@ -7,6 +7,7 @@ import org.castrelyx.manager.asset.AssetCreateRequest;
 import org.castrelyx.manager.asset.AssetService;
 import org.castrelyx.manager.asset.AssetSourceBinding;
 import org.castrelyx.manager.asset.MergeCandidate;
+import org.castrelyx.manager.telemetry.TelemetrySyncWorker;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,13 +22,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/assets")
 public class AssetController {
   private final AssetService assetService;
+  private final TelemetrySyncWorker telemetrySyncWorker;
 
-  public AssetController(AssetService assetService) {
+  public AssetController(AssetService assetService, TelemetrySyncWorker telemetrySyncWorker) {
     this.assetService = assetService;
+    this.telemetrySyncWorker = telemetrySyncWorker;
   }
 
   @GetMapping
   public List<Asset> list() {
+    syncObservedAgentsBestEffort();
     return assetService.listAssets();
   }
 
@@ -66,5 +70,13 @@ public class AssetController {
   @PostMapping("/merge-candidates/{id}/reject")
   public MergeCandidate rejectMergeCandidate(@PathVariable long id) {
     return assetService.rejectMergeCandidate(id);
+  }
+
+  private void syncObservedAgentsBestEffort() {
+    try {
+      telemetrySyncWorker.syncObservedAgents();
+    } catch (RuntimeException ignored) {
+      // Asset inventory remains readable even when telemetry storage is temporarily unavailable.
+    }
   }
 }

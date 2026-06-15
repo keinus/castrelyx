@@ -8,6 +8,7 @@ import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.OutputAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.ParserAdapterConfig;
 import org.keinus.logparser.domain.configuration.model.TransformConfig;
+import org.keinus.logparser.domain.configuration.service.CastrelyxSeedService;
 import org.keinus.logparser.domain.configuration.service.ConfigValidator;
 import org.keinus.logparser.domain.configuration.service.DatabaseConfigLoader;
 import org.springframework.context.annotation.Configuration;
@@ -40,6 +41,7 @@ public class ApplicationProperties {
 
     // === DB 설정 로더 ===
     private final DatabaseConfigLoader databaseConfigLoader;
+    private final CastrelyxSeedService castrelyxSeedService;
 
     @PostConstruct
     public void loadConfigurationFromDatabase() {
@@ -49,6 +51,7 @@ public class ApplicationProperties {
 
         // DB에서 설정 로드 (검증 실패 시 빈 설정으로 초기화)
         try {
+            castrelyxSeedService.seedDefaults();
             DatabaseConfigLoader.PipelineConfiguration config = databaseConfigLoader.loadConfiguration();
 
             this.input = config.getInput();

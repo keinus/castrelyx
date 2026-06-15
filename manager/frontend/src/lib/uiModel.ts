@@ -50,7 +50,7 @@ export function formatBps(value: number): string {
   if (value >= 1_000) {
     return `${(value / 1_000).toFixed(2)} Kbps`;
   }
-  return `${value} bps`;
+  return `${Number.isInteger(value) ? value : value.toFixed(2)} bps`;
 }
 
 export function summarizeDashboard(summary: DashboardSummary): [string, string][] {

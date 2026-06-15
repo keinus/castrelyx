@@ -104,6 +104,38 @@ export default function App({ bootstrap }: AppProps) {
     setAlerts((current) => current.map((alert) => (alert.id === id ? updated : alert)));
   }
 
+  async function openLogparserUi() {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) {
+      popup.opener = null;
+    }
+    try {
+      const links = await api.logparserLinks();
+      const url = links.find((link) => link.url.trim().length > 0)?.url;
+      if (url && popup) {
+        popup.location.href = url;
+        return;
+      }
+      if (url) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      popup?.close();
+      setActive('logparser');
+    } catch {
+      popup?.close();
+      setActive('logparser');
+    }
+  }
+
+  function openMenuItem(itemId: string) {
+    if (itemId === 'logparser') {
+      void openLogparserUi();
+      return;
+    }
+    setActive(itemId);
+  }
+
   if (!boot) {
     return <main className="loading">Castrelyx Manager</main>;
   }
@@ -135,7 +167,7 @@ export default function App({ bootstrap }: AppProps) {
               <button
                 className={activeView === item.id ? 'active' : ''}
                 key={item.id}
-                onClick={() => setActive(item.id)}
+                onClick={() => openMenuItem(item.id)}
                 type="button"
               >
                 <Icon size={18} />
@@ -149,7 +181,7 @@ export default function App({ bootstrap }: AppProps) {
           <span>로그아웃</span>
         </button>
       </aside>
-      <section className="content">
+      <section className={`content ${activeView === 'overview' ? 'content-command-center' : ''}`}>
         <TopBar username={boot.user?.username ?? 'viewer'} />
         <ViewSwitch
           active={activeView}
@@ -215,6 +247,6 @@ function ViewSwitch({
     case 'settings':
       return <SettingsView />;
     default:
-      return <OverviewView summary={summary} />;
+      return <OverviewView summary={summary} alerts={alerts} />;
   }
 }

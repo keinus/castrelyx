@@ -31,19 +31,25 @@ func main() {
   once := flag.Bool("once", false, "run collectors once and exit")
   flag.Parse()
 
-  cfg, err := config.Load(*configPath)
+  if err := runServiceOrConsole(*configPath, *once); err != nil {
+    log.Fatal(err)
+  }
+}
+
+func runAgent(parentCtx context.Context, configPath string, once bool) error {
+  cfg, err := config.Load(configPath)
   if err != nil {
-    log.Fatalf("load config: %v", err)
+    return fmt.Errorf("load config: %w", err)
   }
 
   queue, err := spool.Open(cfg.SpoolDir, cfg.MaxSpoolRecord)
   if err != nil {
-    log.Fatalf("open spool: %v", err)
+    return fmt.Errorf("open spool: %w", err)
   }
 
   collectorSet, err := collectors.Build(cfg.EnabledCollectors)
   if err != nil {
-    log.Fatalf("build collectors: %v", err)
+    return fmt.Errorf("build collectors: %w", err)
   }
 
   certPaths := tlsidentity.Paths{
@@ -54,12 +60,12 @@ func main() {
     MetadataPath:   filepath.Join(cfg.CertDir, "enrollment.json"),
   }
 
-  ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+  ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
   defer stop()
 
   ingestURL, err := ensureIdentity(ctx, cfg, certPaths)
   if err != nil {
-    log.Fatalf("ensure mTLS identity: %v", err)
+    return fmt.Errorf("ensure mTLS identity: %w", err)
   }
 
   telemetryServerName := cfg.TLSServerName
@@ -68,7 +74,7 @@ func main() {
   }
   tlsConfig, err := tlsidentity.BuildTLSConfig(certPaths, telemetryServerName)
   if err != nil {
-    log.Fatalf("build tls config: %v", err)
+    return fmt.Errorf("build tls config: %w", err)
   }
   var telemetrySender agentruntime.Sender
   if cfg.IngestTransport == "tcp_mtls" {
@@ -77,18 +83,15 @@ func main() {
     telemetrySender, err = sender.New(ingestURL, tlsConfig)
   }
   if err != nil {
-    log.Fatalf("create sender: %v", err)
+    return fmt.Errorf("create sender: %w", err)
   }
   runtime := agentruntime.New(agentruntime.Config{
     AgentID:  cfg.AgentID,
     TenantID: cfg.TenantID,
   }, telemetrySender, queue, collectorSet)
 
-  if *once {
-    if err := runtime.RunOnce(ctx); err != nil {
-      log.Fatalf("run once: %v", err)
-    }
-    return
+  if once {
+    return runtime.RunOnce(ctx)
   }
 
   ticker := time.NewTicker(cfg.BatchInterval)
@@ -102,7 +105,7 @@ func main() {
     select {
     case <-ctx.Done():
       log.Print("agent stopped")
-      return
+      return nil
     case <-ticker.C:
     }
   }

@@ -11,9 +11,11 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class AgentRepository {
   private final JdbcTemplate jdbcTemplate;
+  private final EnrollmentTokenRepository enrollmentTokenRepository;
 
-  public AgentRepository(JdbcTemplate jdbcTemplate) {
+  public AgentRepository(JdbcTemplate jdbcTemplate, EnrollmentTokenRepository enrollmentTokenRepository) {
     this.jdbcTemplate = jdbcTemplate;
+    this.enrollmentTokenRepository = enrollmentTokenRepository;
   }
 
   public void upsertAgent(String agentId, String hostname, String version) {
@@ -53,6 +55,64 @@ public class AgentRepository {
         """, eventType, agentId, message, Instant.now().toString());
   }
 
+  public void blockAgent(String agentId) {
+    String normalized = requireAgentId(agentId);
+    String now = Instant.now().toString();
+    int updated = jdbcTemplate.update("""
+        update agents
+        set status = 'BLOCKED', last_seen_at = ?
+        where agent_id = ?
+        """, now, normalized);
+    if (updated == 0) {
+      jdbcTemplate.update("""
+          insert into agents(agent_id, status, first_seen_at, last_seen_at)
+          values (?, 'BLOCKED', ?, ?)
+          """, normalized, now, now);
+    }
+    jdbcTemplate.update("""
+        update issued_certificates
+        set status = 'REVOKED'
+        where agent_id = ? and status = 'ACTIVE'
+        """, normalized);
+    int revokedTokens = enrollmentTokenRepository.revokeUnusedForAgent(normalized);
+    audit("AGENT_BLOCKED", normalized, "blocked agent and revoked " + revokedTokens + " unused enrollment token(s)");
+  }
+
+  public void reactivateAgent(String agentId) {
+    String normalized = requireAgentId(agentId);
+    String now = Instant.now().toString();
+    int updated = jdbcTemplate.update("""
+        update agents
+        set status = 'PENDING', last_seen_at = ?
+        where agent_id = ?
+        """, now, normalized);
+    if (updated == 0) {
+      jdbcTemplate.update("""
+          insert into agents(agent_id, status, first_seen_at, last_seen_at)
+          values (?, 'PENDING', ?, ?)
+          """, normalized, now, now);
+    }
+    audit("AGENT_REACTIVATED", normalized, "reactivated agent; new enrollment is required");
+  }
+
+  public boolean isBlocked(String agentId) {
+    var rows = jdbcTemplate.query("""
+        select status from agents
+        where agent_id = ?
+        """, (rs, rowNum) -> rs.getString("status"), agentId);
+    return !rows.isEmpty() && "BLOCKED".equals(rows.getFirst());
+  }
+
+  public boolean isActiveCertificate(String agentId, X509Certificate certificate) {
+    String serial = certificate.getSerialNumber().toString(16);
+    Integer count = jdbcTemplate.queryForObject("""
+        select count(*)
+        from issued_certificates
+        where agent_id = ? and serial_number = ? and status = 'ACTIVE'
+        """, Integer.class, agentId, serial);
+    return count != null && count > 0;
+  }
+
   public List<AgentRecord> listAgents() {
     return jdbcTemplate.query("""
         select agent_id, hostname, version, status, first_seen_at, last_seen_at
@@ -83,6 +143,26 @@ public class AgentRepository {
             rs.getString("issued_at")));
   }
 
+  public List<AuditEventRecord> listAuditEvents() {
+    return jdbcTemplate.query("""
+        select id, event_type, agent_id, message, created_at
+        from audit_events
+        order by created_at desc, id desc
+        """, (rs, rowNum) -> new AuditEventRecord(
+            rs.getLong("id"),
+            rs.getString("event_type"),
+            rs.getString("agent_id"),
+            rs.getString("message"),
+            rs.getString("created_at")));
+  }
+
+  private static String requireAgentId(String agentId) {
+    if (agentId == null || agentId.isBlank()) {
+      throw new IllegalArgumentException("agent_id is required");
+    }
+    return agentId.trim();
+  }
+
   public record AgentRecord(
       String agentId,
       String hostname,
@@ -101,5 +181,13 @@ public class AgentRepository {
       String notAfter,
       String status,
       String issuedAt) {
+  }
+
+  public record AuditEventRecord(
+      long id,
+      String eventType,
+      String agentId,
+      String message,
+      String createdAt) {
   }
 }

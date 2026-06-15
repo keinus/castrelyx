@@ -63,6 +63,34 @@ class ClickHouseOutputAdapterTest {
     }
 
     @Test
+    void createsEventRecordFromStructuredLogEventFields() {
+        LogEvent event = new LogEvent("{\"type\":\"health\"}", "agent-01", "castrelyx-agent-item");
+        event.setFields(Map.of(
+                "common", Map.of(
+                        "srcHost", "agent-01",
+                        "eventCategory", "event",
+                        "eventType", "health",
+                        "eventAction", "heartbeat"
+                ),
+                "additionalAttributes", Map.of(
+                        "tenant_id", "tenant-01",
+                        "payload", Map.of("status", "ok")
+                )
+        ));
+        event.markAsTransformed();
+
+        ClickHouseOutputAdapter.EventRecord record = ClickHouseOutputAdapter.EventRecord.from(event, false);
+
+        assertEquals("agent-01", record.agentId());
+        assertEquals("tenant-01", record.tenantId());
+        assertEquals("agent-01", record.sourceId());
+        assertEquals("event", record.itemKind());
+        assertEquals("health", record.itemType());
+        assertEquals("heartbeat", record.itemKey());
+        assertTrue(record.eventJson().contains("\"common\""));
+    }
+
+    @Test
     void sendsCreateSchemaAndJsonEachRowBatchToClickHouseHttpEndpoint() throws Exception {
         List<CapturedRequest> requests = new ArrayList<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

@@ -24,6 +24,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -215,10 +216,35 @@ public class TcpMtlsGzipInputAdapter extends InputAdapter {
             JsonNode payload = item.get("payload");
             if (payload != null && !payload.isNull()) {
                 event.setField("payload", OBJECT_MAPPER.convertValue(payload, Object.class));
+                exposePayloadFields(event, payload);
             }
             events.add(event);
         }
         return events;
+    }
+
+    private static void exposePayloadFields(LogEvent event, JsonNode payload) {
+        if (!payload.isObject()) {
+            return;
+        }
+        Iterator<Map.Entry<String, JsonNode>> fields = payload.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            event.setField(payloadFieldName(field.getKey()), OBJECT_MAPPER.convertValue(field.getValue(), Object.class));
+        }
+    }
+
+    private static String payloadFieldName(String key) {
+        StringBuilder normalized = new StringBuilder("payload_");
+        for (int i = 0; i < key.length(); i++) {
+            char ch = key.charAt(i);
+            if (Character.isLetterOrDigit(ch) || ch == '_') {
+                normalized.append(ch);
+            } else {
+                normalized.append('_');
+            }
+        }
+        return normalized.toString();
     }
 
     private static String requiredText(JsonNode node, String fieldName) {

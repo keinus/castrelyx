@@ -76,6 +76,7 @@ func (metricCollector) Name() string { return "metric" }
 func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
+	cpuCount := runtime.NumCPU()
 	items := []envelope.Item{
 		{
 			Kind: "metric",
@@ -103,10 +104,11 @@ func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 			Key:  "agent.host.cpu_count",
 			Payload: map[string]any{
 				"metric_name": "agent.host.cpu_count",
-				"value":       runtime.NumCPU(),
+				"value":       cpuCount,
 				"unit":        "count",
 			},
 		},
+		metricItem("host.cpu.count", cpuCount, "count"),
 	}
 
 	if runtime.GOOS == "linux" {
@@ -115,11 +117,19 @@ func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 			_ = f.Close()
 			if total, ok := values["MemTotal"]; ok {
 				items = append(items, metricItem("host.memory.total_bytes", total, "bytes"))
+				if available, ok := values["MemAvailable"]; ok && total > 0 {
+					usedPct := float64(total-available) * 100 / float64(total)
+					items = append(items, metricItem("memory.usage", usedPct, "percent"))
+				}
 			}
 			if available, ok := values["MemAvailable"]; ok {
 				items = append(items, metricItem("host.memory.available_bytes", available, "bytes"))
 			}
 		}
+		items = append(items, collectLinuxCPUMetricItems(cpuCount)...)
+		items = append(items, collectLinuxLoadMetricItems(cpuCount)...)
+	} else if runtime.GOOS == "windows" {
+		items = append(items, collectWindowsHostMetricItems(cpuCount)...)
 	}
 
 	items = append(items, collectNetworkTrafficMetricItems()...)

@@ -24,7 +24,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class TelemetrySyncWorker {
   private static final String CURSOR_NAME = "clickhouse.raw.castrelyx_agent_events";
-  private static final int BATCH_SIZE = 500;
+  private static final int BATCH_SIZE = 1000;
+  private static final int MAX_BATCHES = 100;
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
   private final ClickHouseClient clickHouseClient;
@@ -48,30 +49,81 @@ public class TelemetrySyncWorker {
     this(clickHouseClient, telemetryNormalizer, assetService, jdbcTemplate, new AlertEvaluator());
   }
 
-  public Map<String, Object> syncOnce() {
+  public synchronized Map<String, Object> syncOnce() {
     clickHouseClient.ensureCanonicalTables();
     String cursor = cursorValue();
-    List<ClickHouseClient.RawTelemetryRow> rawRows = clickHouseClient.fetchRawTelemetryRows(cursor, BATCH_SIZE);
+    int rawRowCount = 0;
+    int canonicalRowCount = 0;
+    ClickHouseClient.RawTelemetryRow lastRow = null;
     List<CanonicalTelemetryRecord> canonicalRows = new ArrayList<>();
-    for (ClickHouseClient.RawTelemetryRow row : rawRows) {
-      List<CanonicalTelemetryRecord> normalized = telemetryNormalizer.normalizeRawLogparserEvent(rawJson(row));
-      for (CanonicalTelemetryRecord record : normalized) {
-        upsertObservedIdentity(record);
-        evaluateAndPersistAlert(record);
+    for (int batch = 0; batch < MAX_BATCHES; batch++) {
+      List<ClickHouseClient.RawTelemetryRow> rawRows = clickHouseClient.fetchRawTelemetryRows(cursor, BATCH_SIZE);
+      if (rawRows.isEmpty()) {
+        break;
       }
-      canonicalRows.addAll(normalized);
+      rawRowCount += rawRows.size();
+      for (ClickHouseClient.RawTelemetryRow row : rawRows) {
+        List<CanonicalTelemetryRecord> normalized = telemetryNormalizer.normalizeRawLogparserEvent(rawJson(row));
+        for (CanonicalTelemetryRecord record : normalized) {
+          upsertObservedAgent(record);
+          evaluateAndPersistAlert(record);
+        }
+        canonicalRows.addAll(normalized);
+      }
+      lastRow = rawRows.getLast();
+      cursor = cursorValue(lastRow);
+      if (rawRows.size() < BATCH_SIZE) {
+        break;
+      }
     }
+    canonicalRowCount = canonicalRows.size();
     clickHouseClient.insertCanonicalRecords(canonicalRows);
-    if (!rawRows.isEmpty()) {
-      updateCursor(rawRows.getLast());
+    if (lastRow != null) {
+      updateCursor(lastRow);
     }
-    return Map.of("synced", true, "rawRows", rawRows.size(), "canonicalRows", canonicalRows.size());
+    return Map.of("synced", true, "rawRows", rawRowCount, "canonicalRows", canonicalRowCount);
+  }
+
+  public Map<String, Object> syncObservedAgents() {
+    int count = 0;
+    for (ClickHouseClient.ObservedAgentSource source : clickHouseClient.fetchObservedAgentSources()) {
+      ObservedIdentity identity = observedIdentity(source);
+      Asset asset = assetService.upsertObservedAsset(
+          identity.assetUid(),
+          identity.name(),
+          identity.assetType(),
+          identity.managementIp());
+      bindSourceIfMissing(asset.id(), SourceType.AGENT, source.sourceId(), "raw-agent", 90);
+      count++;
+    }
+    return Map.of("synced", true, "agents", count);
+  }
+
+  private void upsertObservedAgent(CanonicalTelemetryRecord record) {
+    if (!"AGENT".equalsIgnoreCase(record.sourceType())) {
+      return;
+    }
+    if (record.kind() == CanonicalTelemetryRecord.Kind.STATE && "identity".equals(record.stateType())) {
+      upsertObservedIdentity(record);
+      return;
+    }
+    Asset asset = touchObservedAgent(record.assetUid());
+    bindSourceIfMissing(asset.id(), SourceType.AGENT, record.sourceId(), null, 80);
+  }
+
+  private Asset touchObservedAgent(String assetUid) {
+    List<Long> existing = jdbcTemplate.query("select id from assets where asset_uid = ?",
+        (rs, rowNum) -> rs.getLong("id"), assetUid);
+    if (existing.isEmpty()) {
+      return assetService.upsertObservedAsset(assetUid, assetUid, AssetType.UNKNOWN, null);
+    }
+    Instant now = Instant.now();
+    jdbcTemplate.update("update assets set last_seen_at = ?, updated_at = ? where id = ?",
+        Timestamp.from(now), Timestamp.from(now), existing.getFirst());
+    return assetService.getAsset(existing.getFirst());
   }
 
   private void upsertObservedIdentity(CanonicalTelemetryRecord record) {
-    if (record.kind() != CanonicalTelemetryRecord.Kind.STATE || !"identity".equals(record.stateType())) {
-      return;
-    }
     try {
       JsonNode identity = OBJECT_MAPPER.readTree(record.stateJson());
       String assetUid = nonBlank(text(identity, "asset_uid"), record.assetUid());
@@ -174,20 +226,68 @@ public class TelemetrySyncWorker {
   }
 
   private void updateCursor(ClickHouseClient.RawTelemetryRow row) {
+    String value = cursorValue(row);
+    Integer count = jdbcTemplate.queryForObject("select count(*) from sync_cursors where name = ?", Integer.class, CURSOR_NAME);
+    if (count == null || count == 0) {
+      jdbcTemplate.update("insert into sync_cursors(name, cursor_value, updated_at) values (?, ?, ?)",
+          CURSOR_NAME, value, Timestamp.from(Instant.now()));
+    } else {
+      jdbcTemplate.update("update sync_cursors set cursor_value = ?, updated_at = ? where name = ?",
+          value, Timestamp.from(Instant.now()), CURSOR_NAME);
+    }
+  }
+
+  private ObservedIdentity observedIdentity(ClickHouseClient.ObservedAgentSource source) {
+    String assetUid = source.sourceId();
+    String name = source.sourceId();
+    AssetType assetType = AssetType.UNKNOWN;
+    String managementIp = null;
+    if (source.identityJson() != null && !source.identityJson().isBlank()) {
+      try {
+        JsonNode root = OBJECT_MAPPER.readTree(source.identityJson());
+        JsonNode payload = root.path("additionalAttributes").path("payload");
+        if (payload.isMissingNode() || payload.isNull()) {
+          JsonNode rawLog = root.path("common").path("rawLog");
+          if (rawLog.isTextual()) {
+            payload = OBJECT_MAPPER.readTree(rawLog.asText()).path("payload");
+          }
+        }
+        assetUid = nonBlank(text(payload, "asset_uid"), source.sourceId());
+        name = nonBlank(text(payload, "hostname"), text(root, "source_host"), assetUid);
+        managementIp = nonBlank(text(payload, "management_ip"), text(payload, "ip_address"), null);
+        assetType = assetTypeFromIdentity(payload);
+      } catch (JsonProcessingException ignored) {
+        assetUid = source.sourceId();
+        name = source.sourceId();
+        assetType = AssetType.UNKNOWN;
+        managementIp = null;
+      }
+    }
+    return new ObservedIdentity(assetUid, name, assetType, managementIp);
+  }
+
+  private static AssetType assetTypeFromIdentity(JsonNode payload) {
+    String explicit = text(payload, "asset_type");
+    if (explicit != null && !explicit.isBlank()) {
+      return assetType(explicit);
+    }
+    String os = text(payload, "os");
+    if ("linux".equalsIgnoreCase(os)) {
+      return AssetType.LINUX_SERVER;
+    }
+    if ("windows".equalsIgnoreCase(os)) {
+      return AssetType.WINDOWS_SERVER;
+    }
+    return AssetType.UNKNOWN;
+  }
+
+  private static String cursorValue(ClickHouseClient.RawTelemetryRow row) {
     Map<String, Object> cursor = new LinkedHashMap<>();
     cursor.put("received_at", row.receivedAt().toString());
     cursor.put("source_id", row.sourceId());
     cursor.put("item_key", row.itemKey());
     try {
-      String value = OBJECT_MAPPER.writeValueAsString(cursor);
-      Integer count = jdbcTemplate.queryForObject("select count(*) from sync_cursors where name = ?", Integer.class, CURSOR_NAME);
-      if (count == null || count == 0) {
-        jdbcTemplate.update("insert into sync_cursors(name, cursor_value, updated_at) values (?, ?, ?)",
-            CURSOR_NAME, value, Timestamp.from(Instant.now()));
-      } else {
-        jdbcTemplate.update("update sync_cursors set cursor_value = ?, updated_at = ? where name = ?",
-            value, Timestamp.from(Instant.now()), CURSOR_NAME);
-      }
+      return OBJECT_MAPPER.writeValueAsString(cursor);
     } catch (JsonProcessingException exception) {
       throw new IllegalStateException("failed to serialize telemetry cursor", exception);
     }
@@ -239,5 +339,8 @@ public class TelemetrySyncWorker {
   private static String nonBlank(String first, String second, String fallback) {
     String value = nonBlank(first, null);
     return value == null ? nonBlank(second, fallback) : value;
+  }
+
+  private record ObservedIdentity(String assetUid, String name, AssetType assetType, String managementIp) {
   }
 }

@@ -37,6 +37,39 @@ class TelemetryNormalizerTest {
   }
 
   @Test
+  void normalizesAgentNetworkMetricPayloadWithInterfaceLabels() {
+    List<CanonicalTelemetryRecord> records = normalizer.normalizeRawLogparserEvent("""
+        {
+          "received_at":"2026-06-11T13:34:00Z",
+          "source_id":"nas",
+          "item_kind":"metric",
+          "item_type":"network",
+          "item_key":"host.network.rx_bytes:enp2s0:ingress",
+          "event_json":{
+            "additionalAttributes":{
+              "payload":{
+                "metric_name":"host.network.rx_bytes",
+                "value":120000,
+                "unit":"bytes",
+                "interface":"enp2s0",
+                "direction":"ingress"
+              }
+            }
+          }
+        }
+        """);
+
+    assertThat(records).singleElement().satisfies(record -> {
+      assertThat(record.kind()).isEqualTo(CanonicalTelemetryRecord.Kind.METRIC);
+      assertThat(record.assetUid()).isEqualTo("nas");
+      assertThat(record.metricName()).isEqualTo("host.network.rx_bytes");
+      assertThat(record.metricValue()).isEqualTo(120000.0);
+      assertThat(record.labelsJson()).contains("\"interface\":\"enp2s0\"");
+      assertThat(record.labelsJson()).contains("\"direction\":\"ingress\"");
+    });
+  }
+
+  @Test
   void normalizesSnmpInterfaceCountersAndPollFailure() {
     List<CanonicalTelemetryRecord> records = normalizer.normalizeRawLogparserEvent("""
         {

@@ -1,14 +1,20 @@
 import type {
   AlertRow,
+  AgentDashboard,
+  AssetMetricDetail,
+  AssetMetricsOverview,
   Asset,
   BootstrapState,
+  CastrelSignAuditEvent,
   CastrelSignAgent,
   CastrelSignCertificate,
   CastrelSignToken,
   DashboardSummary,
   DeepLink,
   IntegrationConfig,
-  LogparserStatus
+  InterfaceTraffic,
+  LogparserStatus,
+  SnmpDashboard
 } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -24,6 +30,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    ...init
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.blob();
 }
 
 export async function bootstrap(): Promise<BootstrapState> {
@@ -45,6 +63,18 @@ export const api = {
     }),
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   overview: () => request<DashboardSummary>('/api/dashboards/overview'),
+  agentDashboard: () => request<AgentDashboard>('/api/dashboards/agent'),
+  snmpDashboard: () => request<SnmpDashboard>('/api/dashboards/snmp'),
+  trafficInterfaces: (range = '1h') =>
+    request<InterfaceTraffic[]>(`/api/traffic/interfaces?range=${encodeURIComponent(range)}`),
+  assetTrafficInterfaces: (assetId: number, range = '1h') =>
+    request<InterfaceTraffic[]>(`/api/traffic/assets/${assetId}/interfaces?range=${encodeURIComponent(range)}`),
+  assetMetrics: (range = '1h') =>
+    request<AssetMetricsOverview>(`/api/metrics/assets?range=${encodeURIComponent(range)}`),
+  assetMetricDetail: (assetUid: string, range = '1h', bucket = 'auto') =>
+    request<AssetMetricDetail>(
+      `/api/metrics/assets/${encodeURIComponent(assetUid)}?range=${encodeURIComponent(range)}&bucket=${encodeURIComponent(bucket)}`
+    ),
   assets: () => request<Asset[]>('/api/assets'),
   createAsset: (payload: { name: string; assetType: string; managementIp?: string; description?: string }) =>
     request<Asset>('/api/assets', { method: 'POST', body: JSON.stringify(payload) }),
@@ -55,8 +85,24 @@ export const api = {
   castrelSignTokens: () => request<CastrelSignToken[]>('/api/integrations/castrelsign/tokens'),
   castrelSignAgents: () => request<CastrelSignAgent[]>('/api/integrations/castrelsign/agents'),
   castrelSignCertificates: () => request<CastrelSignCertificate[]>('/api/integrations/castrelsign/certificates'),
-  createCastrelSignToken: (payload: { description?: string } = {}) =>
+  castrelSignAuditEvents: () => request<CastrelSignAuditEvent[]>('/api/integrations/castrelsign/audit-events'),
+  createCastrelSignToken: (payload: { name?: string; agentId?: string; ttlSeconds?: number; maxUses?: number } = {}) =>
     request<CastrelSignToken>('/api/integrations/castrelsign/tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  revokeCastrelSignToken: (id: number) =>
+    request(`/api/integrations/castrelsign/tokens/${id}/revoke`, { method: 'POST' }),
+  blockCastrelSignAgent: (agentId: string) =>
+    request(`/api/integrations/castrelsign/agents/${encodeURIComponent(agentId)}/block`, { method: 'POST' }),
+  reactivateCastrelSignAgent: (agentId: string) =>
+    request(`/api/integrations/castrelsign/agents/${encodeURIComponent(agentId)}/reactivate`, { method: 'POST' }),
+  createCastrelSignEnrollmentPackage: (payload: {
+    agentId?: string;
+    tenantId: string;
+    ttlSeconds: number;
+  }) =>
+    requestBlob('/api/integrations/castrelsign/enrollment-packages', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),

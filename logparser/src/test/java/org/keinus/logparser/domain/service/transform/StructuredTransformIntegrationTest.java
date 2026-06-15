@@ -146,4 +146,24 @@ public class StructuredTransformIntegrationTest {
         // 8. Verify Repository was called TWICE (1 initial + 1 after reload)
         org.mockito.Mockito.verify(mappingRepository, org.mockito.Mockito.times(2)).findByMessageType("cache_test");
     }
+
+    @Test
+    void mapsConfiguredLogSourceCommonField() {
+        MappingConfiguration config = new MappingConfiguration();
+        config.setMessageType("castrelyx-agent-item");
+        config.setCommonMappings(Arrays.asList(
+                new FieldMapping("source", "log_source", null)
+        ));
+        config.setSubTableRules(Arrays.asList());
+
+        when(mappingRepository.findByMessageType("castrelyx-agent-item")).thenReturn(Optional.of(config));
+
+        LogEvent event = new LogEvent("original log", "agent-01", "castrelyx-agent-item");
+        event.setField("source", "agent");
+
+        transformService.applyToLogEvent(event);
+
+        Map<?, ?> common = (Map<?, ?>) event.getFields().get("common");
+        assertEquals("agent", common.get("logSource"));
+    }
 }

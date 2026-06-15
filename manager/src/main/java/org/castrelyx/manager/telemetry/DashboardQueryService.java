@@ -31,7 +31,11 @@ public class DashboardQueryService {
   }
 
   public Map<String, Object> agentDashboard(Long assetId) {
-    return clickHouseClient.queryAgentDashboard(assetId);
+    String assetUid = null;
+    if (assetId != null) {
+      assetUid = assetService.getAsset(assetId).assetUid();
+    }
+    return clickHouseClient.queryAgentDashboard(assetUid);
   }
 
   public Map<String, Object> snmpDashboard() {
