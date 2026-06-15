@@ -14,6 +14,7 @@ describe('App shell', () => {
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
     expect(await screen.findByRole('heading', { name: 'Castrelyx Manager' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'NMS 보안 통합 관제' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Traffic/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'LogParser' })).toBeInTheDocument();
@@ -60,9 +61,13 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
         activeAssets: 0,
         criticalAlerts: 0,
         agentHealth: { healthy: 0, stale: 0 },
-        snmpPollHealth: { success: 0, failure: 0 }
+        snmpPollHealth: { success: 0, failure: 0 },
+        trafficTopInterfaces: []
       }
     },
+    '/api/dashboards/agent': { body: { heartbeat: { healthy: 0, stale: 0 }, collectors: [], events: [] } },
+    '/api/dashboards/snmp': { body: { polls: { success: 0, failure: 0 }, targets: [], interfaces: [] } },
+    '/api/traffic/interfaces?range=1h': { body: [] },
     '/api/assets': { body: [] },
     '/api/alerts': { body: [] },
     ...overrides

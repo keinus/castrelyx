@@ -19,7 +19,10 @@ export type Asset = {
   name: string;
   assetType: string;
   managementIp?: string;
+  description?: string;
   status: string;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
 };
 
 export type AlertRow = {
@@ -35,6 +38,112 @@ export type DashboardSummary = {
   criticalAlerts: number;
   agentHealth: { healthy: number; stale: number };
   snmpPollHealth: { success: number; failure: number };
+  trafficTopInterfaces?: InterfaceTraffic[];
+};
+
+export type InterfaceTraffic = {
+  assetUid: string;
+  interfaceName: string;
+  inBps: number;
+  outBps: number;
+  utilizationPct: number;
+  errors: number;
+  discards: number;
+  status: string;
+};
+
+export type MetricPoint = {
+  timestamp: string;
+  value?: number | null;
+  inBps?: number | null;
+  outBps?: number | null;
+};
+
+export type AssetMetricSummary = {
+  assetUid: string;
+  name: string;
+  assetType: string;
+  managementIp?: string | null;
+  status?: string | null;
+  lastSeenAt?: string | null;
+  stale?: boolean;
+  health: 'healthy' | 'warning' | 'critical' | 'unknown';
+  sources: {
+    registered?: boolean;
+    agent?: boolean;
+    snmp?: boolean;
+    traffic?: boolean;
+    security?: boolean;
+    observed?: boolean;
+  };
+  metrics: {
+    cpuUsagePct?: number | null;
+    memoryUsagePct?: number | null;
+    memoryTotalBytes?: number | null;
+    memoryAvailableBytes?: number | null;
+    diskUsagePct?: number | null;
+    load1?: number | null;
+    load5?: number | null;
+    load15?: number | null;
+    normalizedLoadPct?: number | null;
+    cpuCount?: number | null;
+    networkInBps?: number | null;
+    networkOutBps?: number | null;
+    interfaceErrorCount?: number | null;
+  };
+  security?: {
+    openPorts?: number;
+    failedServices?: number;
+    firewallDisabled?: number;
+    securityEvents?: number;
+    events?: AgentEventSummary[];
+  };
+};
+
+export type AssetMetricsOverview = {
+  range: string;
+  summary: {
+    totalAssets: number;
+    observedAssets: number;
+    staleAssets: number;
+    criticalAssets: number;
+    warningAssets: number;
+    avgCpuUsagePct?: number | null;
+    avgMemoryUsagePct?: number | null;
+    maxDiskUsagePct?: number | null;
+  };
+  assets: AssetMetricSummary[];
+};
+
+export type AssetMetricDetail = {
+  range: string;
+  bucket: string;
+  asset: AssetMetricSummary;
+  series: {
+    cpu?: MetricPoint[];
+    memory?: MetricPoint[];
+    disk?: MetricPoint[];
+    load?: MetricPoint[];
+    network?: MetricPoint[];
+  };
+  disks?: Array<{
+    mountPoint?: string;
+    filesystem?: string;
+    totalBytes?: number;
+    usedBytes?: number;
+    availableBytes?: number;
+    usedPct?: number;
+  }>;
+  interfaces?: InterfaceTraffic[];
+  processes?: AgentProcessState[];
+  security?: AssetMetricSummary['security'];
+  collectors?: AgentCollectorSummary[];
+};
+
+export type SnmpDashboard = {
+  polls?: { success?: number; failure?: number };
+  targets?: unknown[];
+  interfaces?: InterfaceTraffic[];
 };
 
 export type AgentDashboard = {

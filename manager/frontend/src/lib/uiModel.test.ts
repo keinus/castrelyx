@@ -39,6 +39,7 @@ describe('manager UI model', () => {
   it('formats traffic rates and dashboard summaries for compact cards', () => {
     expect(formatBps(1200000)).toBe('1.20 Mbps');
     expect(formatBps(900)).toBe('900 bps');
+    expect(formatBps(653.5394)).toBe('653.54 bps');
     expect(summarizeDashboard({
       activeAssets: 12,
       criticalAlerts: 2,

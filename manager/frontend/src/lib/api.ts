@@ -1,6 +1,8 @@
 import type {
   AlertRow,
   AgentDashboard,
+  AssetMetricDetail,
+  AssetMetricsOverview,
   Asset,
   BootstrapState,
   CastrelSignAuditEvent,
@@ -10,7 +12,9 @@ import type {
   DashboardSummary,
   DeepLink,
   IntegrationConfig,
-  LogparserStatus
+  InterfaceTraffic,
+  LogparserStatus,
+  SnmpDashboard
 } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -60,6 +64,17 @@ export const api = {
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   overview: () => request<DashboardSummary>('/api/dashboards/overview'),
   agentDashboard: () => request<AgentDashboard>('/api/dashboards/agent'),
+  snmpDashboard: () => request<SnmpDashboard>('/api/dashboards/snmp'),
+  trafficInterfaces: (range = '1h') =>
+    request<InterfaceTraffic[]>(`/api/traffic/interfaces?range=${encodeURIComponent(range)}`),
+  assetTrafficInterfaces: (assetId: number, range = '1h') =>
+    request<InterfaceTraffic[]>(`/api/traffic/assets/${assetId}/interfaces?range=${encodeURIComponent(range)}`),
+  assetMetrics: (range = '1h') =>
+    request<AssetMetricsOverview>(`/api/metrics/assets?range=${encodeURIComponent(range)}`),
+  assetMetricDetail: (assetUid: string, range = '1h', bucket = 'auto') =>
+    request<AssetMetricDetail>(
+      `/api/metrics/assets/${encodeURIComponent(assetUid)}?range=${encodeURIComponent(range)}&bucket=${encodeURIComponent(bucket)}`
+    ),
   assets: () => request<Asset[]>('/api/assets'),
   createAsset: (payload: { name: string; assetType: string; managementIp?: string; description?: string }) =>
     request<Asset>('/api/assets', { method: 'POST', body: JSON.stringify(payload) }),

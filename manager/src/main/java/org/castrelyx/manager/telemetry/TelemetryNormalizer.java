@@ -24,15 +24,16 @@ public class TelemetryNormalizer {
         return normalizeSnmp(observedAt, sourceId, event);
       }
       if ("metric".equalsIgnoreCase(kind)) {
+        JsonNode metric = payloadNode(event);
         return List.of(CanonicalTelemetryRecord.metric(
             observedAt,
-            textOr(event, "asset_uid", sourceId),
+            textOr(metric, "asset_uid", textOr(event, "asset_uid", sourceId)),
             "AGENT",
             sourceId,
-            textOr(event, "metric_name", textOr(root, "item_key", text(root, "item_type"))),
-            event.path("metric_value").isMissingNode() ? null : event.path("metric_value").asDouble(),
-            nullableText(event, "unit"),
-            json(event.path("labels"))));
+            textOr(metric, "metric_name", textOr(event, "metric_name", textOr(root, "item_key", text(root, "item_type")))),
+            metricValue(metric),
+            nullableText(metric, "unit"),
+            json(metricLabels(metric))));
       }
       if ("state".equalsIgnoreCase(kind)) {
         return List.of(CanonicalTelemetryRecord.state(
@@ -128,6 +129,54 @@ public class TelemetryNormalizer {
       return objectMapper.readTree(node.asText());
     }
     return node.isMissingNode() || node.isNull() ? objectMapper.createObjectNode() : node;
+  }
+
+  private JsonNode payloadNode(JsonNode event) throws JsonProcessingException {
+    JsonNode payload = event.path("payload");
+    if (payload.isObject()) {
+      return payload;
+    }
+    JsonNode nestedPayload = event.path("additionalAttributes").path("payload");
+    if (nestedPayload.isObject()) {
+      return nestedPayload;
+    }
+    JsonNode rawLog = event.path("common").path("rawLog");
+    if (rawLog.isTextual()) {
+      JsonNode rawPayload = objectMapper.readTree(rawLog.asText()).path("payload");
+      if (rawPayload.isObject()) {
+        return rawPayload;
+      }
+    }
+    return event;
+  }
+
+  private JsonNode metricLabels(JsonNode metric) {
+    ObjectNode labels = objectMapper.createObjectNode();
+    JsonNode existing = metric.path("labels");
+    if (existing.isObject()) {
+      existing.fields().forEachRemaining(field -> labels.set(field.getKey(), field.getValue()));
+    }
+    copyLabel(metric, labels, "collector");
+    copyLabel(metric, labels, "interface");
+    copyLabel(metric, labels, "direction");
+    return labels;
+  }
+
+  private static void copyLabel(JsonNode source, ObjectNode labels, String field) {
+    JsonNode value = source.get(field);
+    if (value != null && !value.isNull() && !labels.has(field)) {
+      labels.set(field, value);
+    }
+  }
+
+  private static Double metricValue(JsonNode metric) {
+    if (metric.hasNonNull("metric_value")) {
+      return metric.path("metric_value").asDouble();
+    }
+    if (metric.hasNonNull("value")) {
+      return metric.path("value").asDouble();
+    }
+    return null;
   }
 
   private String json(JsonNode node) {

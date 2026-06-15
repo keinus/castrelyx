@@ -14,6 +14,21 @@ class ClickHouseClientTest {
   }
 
   @Test
+  void limitsTrafficRangeToKnownClickHouseIntervals() {
+    assertThat(ClickHouseClient.rangeInterval("15m")).isEqualTo("INTERVAL 15 MINUTE");
+    assertThat(ClickHouseClient.rangeInterval("6h")).isEqualTo("INTERVAL 6 HOUR");
+    assertThat(ClickHouseClient.rangeInterval("1h; DROP TABLE metrics")).isEqualTo("INTERVAL 1 HOUR");
+  }
+
+  @Test
+  void limitsMetricBucketsToKnownClickHouseIntervals() {
+    assertThat(ClickHouseClient.bucketInterval("15m", "auto")).isEqualTo("INTERVAL 1 MINUTE");
+    assertThat(ClickHouseClient.bucketInterval("6h", "auto")).isEqualTo("INTERVAL 15 MINUTE");
+    assertThat(ClickHouseClient.bucketInterval("24h", "auto")).isEqualTo("INTERVAL 1 HOUR");
+    assertThat(ClickHouseClient.bucketInterval("1h", "1h; DROP TABLE metrics")).isEqualTo("INTERVAL 5 MINUTE");
+  }
+
+  @Test
   void extractsTopLevelAgentPayloadForDashboardStateRows() {
     Map<String, Object> row = ClickHouseClient.rawStateRow(Map.of(
         "source_id", "nas",

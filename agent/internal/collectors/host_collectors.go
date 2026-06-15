@@ -37,6 +37,17 @@ type mountUsage struct {
 	UsedPercent    float64
 }
 
+type cpuTimes struct {
+	User    uint64
+	Nice    uint64
+	System  uint64
+	Idle    uint64
+	IOWait  uint64
+	IRQ     uint64
+	SoftIRQ uint64
+	Steal   uint64
+}
+
 type socketState struct {
 	Protocol      string
 	LocalAddress  string
@@ -193,7 +204,11 @@ func collectNetworkTrafficMetricItems() []envelope.Item {
 func collectDiskUsageMetricItems() []envelope.Item {
 	mounts := collectDiskUsage()
 	items := make([]envelope.Item, 0, len(mounts)*4)
+	maxUsedPercent := 0.0
 	for _, mount := range mounts {
+		if mount.UsedPercent > maxUsedPercent {
+			maxUsedPercent = mount.UsedPercent
+		}
 		labels := map[string]any{
 			"filesystem":  mount.Filesystem,
 			"mount_point": mount.MountPoint,
@@ -205,7 +220,156 @@ func collectDiskUsageMetricItems() []envelope.Item {
 			metricItemWithLabels("host.disk.used_percent", mount.UsedPercent, "percent", labels),
 		)
 	}
+	if len(mounts) > 0 {
+		items = append(items, metricItem("disk.usage", maxUsedPercent, "percent"))
+	}
 	return items
+}
+
+func collectLinuxCPUMetricItems(cpuCount int) []envelope.Item {
+	first, ok := readProcStatCPU()
+	if !ok {
+		return nil
+	}
+	time.Sleep(100 * time.Millisecond)
+	second, ok := readProcStatCPU()
+	if !ok {
+		return nil
+	}
+	usage, ok := cpuUsagePercent(first, second)
+	if !ok {
+		return nil
+	}
+	return []envelope.Item{
+		metricItem("cpu.usage", usage, "percent"),
+		metricItem("host.cpu.usage_percent", usage, "percent"),
+		metricItem("host.cpu.count", cpuCount, "count"),
+	}
+}
+
+func collectLinuxLoadMetricItems(cpuCount int) []envelope.Item {
+	f, err := os.Open("/proc/loadavg")
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	load1, load5, load15, ok := parseLoadAverage(f)
+	if !ok {
+		return nil
+	}
+	items := []envelope.Item{
+		metricItem("host.load.1", load1, "count"),
+		metricItem("host.load.5", load5, "count"),
+		metricItem("host.load.15", load15, "count"),
+	}
+	if cpuCount > 0 {
+		items = append(items, metricItem("host.load.normalized_1", load1/float64(cpuCount)*100, "percent"))
+	}
+	return items
+}
+
+func collectWindowsHostMetricItems(cpuCount int) []envelope.Item {
+	items := []envelope.Item{}
+	if out, err := runPowerShell(`Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average | Select-Object Average | ConvertTo-Json -Compress`); err == nil {
+		for _, row := range decodeJSONObjects(out) {
+			if usage := jsonFloat(row, "Average"); usage > 0 {
+				items = append(items, metricItem("cpu.usage", usage, "percent"))
+				items = append(items, metricItem("host.cpu.usage_percent", usage, "percent"))
+				break
+			}
+		}
+	}
+	if out, err := runPowerShell(`Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress`); err == nil {
+		for _, row := range decodeJSONObjects(out) {
+			total := jsonFloat(row, "TotalVisibleMemorySize") * 1024
+			free := jsonFloat(row, "FreePhysicalMemory") * 1024
+			if total > 0 {
+				items = append(items,
+					metricItem("host.memory.total_bytes", total, "bytes"),
+					metricItem("host.memory.available_bytes", free, "bytes"),
+					metricItem("memory.usage", (total-free)*100/total, "percent"),
+				)
+				break
+			}
+		}
+	}
+	items = append(items, metricItem("host.cpu.count", cpuCount, "count"))
+	return items
+}
+
+func readProcStatCPU() (cpuTimes, bool) {
+	f, err := os.Open("/proc/stat")
+	if err != nil {
+		return cpuTimes{}, false
+	}
+	defer f.Close()
+	return parseProcStatCPU(f)
+}
+
+func parseProcStatCPU(r io.Reader) (cpuTimes, bool) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 || fields[0] != "cpu" {
+			continue
+		}
+		values := make([]uint64, 8)
+		for i := 0; i < len(values) && i+1 < len(fields); i++ {
+			value, err := strconv.ParseUint(fields[i+1], 10, 64)
+			if err != nil {
+				return cpuTimes{}, false
+			}
+			values[i] = value
+		}
+		return cpuTimes{
+			User:    values[0],
+			Nice:    values[1],
+			System:  values[2],
+			Idle:    values[3],
+			IOWait:  values[4],
+			IRQ:     values[5],
+			SoftIRQ: values[6],
+			Steal:   values[7],
+		}, true
+	}
+	return cpuTimes{}, false
+}
+
+func cpuUsagePercent(first, second cpuTimes) (float64, bool) {
+	firstIdle := first.Idle + first.IOWait
+	secondIdle := second.Idle + second.IOWait
+	firstTotal := first.User + first.Nice + first.System + firstIdle + first.IRQ + first.SoftIRQ + first.Steal
+	secondTotal := second.User + second.Nice + second.System + secondIdle + second.IRQ + second.SoftIRQ + second.Steal
+	if secondTotal <= firstTotal {
+		return 0, false
+	}
+	totalDelta := secondTotal - firstTotal
+	idleDelta := uint64(0)
+	if secondIdle > firstIdle {
+		idleDelta = secondIdle - firstIdle
+	}
+	if idleDelta > totalDelta {
+		return 0, false
+	}
+	return float64(totalDelta-idleDelta) * 100 / float64(totalDelta), true
+}
+
+func parseLoadAverage(r io.Reader) (float64, float64, float64, bool) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return 0, 0, 0, false
+	}
+	load1, err1 := strconv.ParseFloat(fields[0], 64)
+	load5, err5 := strconv.ParseFloat(fields[1], 64)
+	load15, err15 := strconv.ParseFloat(fields[2], 64)
+	if err1 != nil || err5 != nil || err15 != nil {
+		return 0, 0, 0, false
+	}
+	return load1, load5, load15, true
 }
 
 func metricItemWithLabels(name string, value any, unit string, labels map[string]any) envelope.Item {
@@ -1269,6 +1433,26 @@ func jsonUint64(row map[string]any, key string) uint64 {
 	case string:
 		i, _ := strconv.ParseUint(v, 10, 64)
 		return i
+	default:
+		return 0
+	}
+}
+
+func jsonFloat(row map[string]any, key string) float64 {
+	value, ok := row[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch v := value.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
 	default:
 		return 0
 	}

@@ -1,5 +1,8 @@
 import type { Page, Route } from '@playwright/test';
 
+type MockAsset = { id?: number; assetUid: string; name: string; assetType: string; managementIp?: string; status: string };
+type MockMetricAsset = ReturnType<typeof metricOverview>['assets'][number];
+
 export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' = 'ADMIN') {
   const assets = [
     { id: 1, assetUid: 'edge-router', name: 'edge-router', assetType: 'ROUTER', managementIp: '10.0.0.1', status: 'active' }
@@ -18,7 +21,17 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     activeAssets: 3,
     criticalAlerts: 1,
     agentHealth: { healthy: 2, stale: 1 },
-    snmpPollHealth: { success: 4, failure: 1 }
+    snmpPollHealth: { success: 4, failure: 1 },
+    trafficTopInterfaces: [{
+      assetUid: 'edge-router',
+      interfaceName: 'wan0',
+      inBps: 2400000,
+      outBps: 1800000,
+      utilizationPct: 42.5,
+      errors: 2,
+      discards: 1,
+      status: 'up'
+    }]
   }));
   await page.route('/api/dashboards/agent', routeJson({
     heartbeat: { healthy: 1, stale: 0, lastSeenAt: '2026-06-11T13:34:00Z' },
@@ -49,6 +62,50 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
       observedAt: '2026-06-11T13:33:00Z'
     }]
   }));
+  await page.route('/api/dashboards/snmp', routeJson({
+    polls: { success: 4, failure: 1 },
+    targets: ['edge-router'],
+    interfaces: [{
+      assetUid: 'edge-router',
+      interfaceName: 'wan0',
+      inBps: 2400000,
+      outBps: 1800000,
+      utilizationPct: 42.5,
+      errors: 2,
+      discards: 1,
+      status: 'up'
+    }]
+  }));
+  await page.route('/api/traffic/interfaces?range=1h', routeJson([
+    {
+      assetUid: 'nas',
+      interfaceName: 'enp2s0',
+      inBps: 4621.02,
+      outBps: 11663.97,
+      utilizationPct: 0,
+      errors: 0,
+      discards: 0,
+      status: 'up'
+    },
+    {
+      assetUid: 'edge-router',
+      interfaceName: 'wan0',
+      inBps: 1200000,
+      outBps: 900000,
+      utilizationPct: 12.4,
+      errors: 1,
+      discards: 0,
+      status: 'up'
+    }
+  ]));
+  await page.route('/api/metrics/assets?range=1h', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(metricOverview(assets)) });
+  });
+  await page.route(/\/api\/metrics\/assets\/[^/?]+\?range=1h&bucket=auto$/, async (route) => {
+    const url = new URL(route.request().url());
+    const assetUid = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(metricDetail(assetUid, assets)) });
+  });
   await page.route('/api/assets', async (route) => {
     if (route.request().method() === 'POST') {
       const payload = route.request().postDataJSON();
@@ -87,6 +144,7 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
   await page.route('/api/integrations/castrelsign/certificates', routeJson([
     { serialNumber: '01', subject: 'CN=edge-agent', status: 'ISSUED' }
   ]));
+  await page.route('/api/integrations/castrelsign/audit-events', routeJson([]));
   await page.route('/api/integrations/castrelsign/tokens', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({
@@ -100,6 +158,13 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([{ id: 2, description: 'Existing token', revoked: false }])
+    });
+  });
+  await page.route('/api/integrations/castrelsign/enrollment-packages', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/zip',
+      body: 'zip'
     });
   });
   await page.route('/api/integrations/logparser', routeJson({
@@ -117,6 +182,87 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     { label: 'Pipeline', url: 'http://logparser:8765/' },
     { label: 'Input adapters', url: 'http://logparser:8765/#input-adapters' }
   ]));
+}
+
+function metricOverview(assets: MockAsset[]) {
+  const metricAssets = [
+    ...assets.map((asset) => ({
+      assetUid: asset.assetUid,
+      name: asset.name,
+      assetType: asset.assetType,
+      managementIp: asset.managementIp,
+      status: asset.status,
+      lastSeenAt: '2026-06-11T13:34:00Z',
+      stale: false,
+      health: asset.assetUid === 'edge-router' ? 'warning' : 'unknown',
+      sources: { registered: true, observed: asset.assetUid === 'edge-router', traffic: asset.assetUid === 'edge-router' },
+      metrics: asset.assetUid === 'edge-router'
+        ? { cpuUsagePct: 42.1, memoryUsagePct: 55.4, diskUsagePct: 68.2, normalizedLoadPct: 25, networkInBps: 1200000, networkOutBps: 900000, interfaceErrorCount: 1 }
+        : {}
+    })),
+    {
+      assetUid: 'nas',
+      name: 'nas',
+      assetType: 'LINUX_SERVER',
+      managementIp: '192.168.50.21',
+      status: 'active',
+      lastSeenAt: '2026-06-11T13:34:00Z',
+      stale: false,
+      health: 'critical',
+      sources: { registered: false, agent: true, traffic: true, security: true, observed: true },
+      metrics: { cpuUsagePct: 91.2, memoryUsagePct: 67.8, diskUsagePct: 72.4, normalizedLoadPct: 45, networkInBps: 4621.02, networkOutBps: 11663.97, interfaceErrorCount: 0 },
+      security: { openPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 }
+    }
+  ] as Array<{
+    assetUid: string;
+    name: string;
+    assetType: string;
+    managementIp?: string;
+    status: string;
+    lastSeenAt?: string;
+    stale: boolean;
+    health: 'healthy' | 'warning' | 'critical' | 'unknown';
+    sources: { registered?: boolean; agent?: boolean; traffic?: boolean; security?: boolean; observed?: boolean };
+    metrics: Record<string, number | null | undefined>;
+    security?: { openPorts: number; failedServices: number; firewallDisabled: number; securityEvents: number };
+  }>;
+  return {
+    range: '1h',
+    summary: {
+      totalAssets: metricAssets.length,
+      observedAssets: metricAssets.filter((asset) => asset.sources.observed).length,
+      staleAssets: 0,
+      criticalAssets: metricAssets.filter((asset) => asset.health === 'critical').length,
+      warningAssets: metricAssets.filter((asset) => asset.health === 'warning').length,
+      avgCpuUsagePct: 66.7,
+      avgMemoryUsagePct: 61.6,
+      maxDiskUsagePct: 72.4
+    },
+    assets: metricAssets
+  };
+}
+
+function metricDetail(assetUid: string, assets: MockAsset[]) {
+  const overview = metricOverview(assets);
+  const asset = (overview.assets.find((row) => row.assetUid === assetUid) ?? overview.assets[0]) as MockMetricAsset;
+  return {
+    range: '1h',
+    bucket: 'auto',
+    asset,
+    series: {
+      cpu: [{ timestamp: '2026-06-11T13:30:00Z', value: 82 }, { timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.cpuUsagePct ?? null }],
+      memory: [{ timestamp: '2026-06-11T13:30:00Z', value: 60 }, { timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.memoryUsagePct ?? null }],
+      disk: [{ timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.diskUsagePct ?? null }],
+      network: [{ timestamp: '2026-06-11T13:35:00Z', inBps: asset.metrics.networkInBps ?? 0, outBps: asset.metrics.networkOutBps ?? 0 }]
+    },
+    disks: assetUid === 'nas' ? [{ mountPoint: '/data', filesystem: '/dev/sdb1', usedPct: 72.4 }] : [],
+    interfaces: assetUid === 'nas'
+      ? [{ assetUid: 'nas', interfaceName: 'enp2s0', inBps: 4621.02, outBps: 11663.97, utilizationPct: 0, errors: 0, discards: 0, status: 'up' }]
+      : [{ assetUid: 'edge-router', interfaceName: 'wan0', inBps: 1200000, outBps: 900000, utilizationPct: 12.4, errors: 1, discards: 0, status: 'up' }],
+    processes: assetUid === 'nas' ? [{ assetUid: 'nas', pid: 22, name: 'sshd', user: 'root', memoryBytes: 4096, listeningSocketCount: 1 }] : [],
+    security: asset.security ?? { openPorts: 0, failedServices: 0, firewallDisabled: 0, securityEvents: 0 },
+    collectors: [{ name: 'metric', sampleCount: 10, lastSeenAt: '2026-06-11T13:34:00Z' }]
+  };
 }
 
 export function routeJson(body: unknown, status = 200) {

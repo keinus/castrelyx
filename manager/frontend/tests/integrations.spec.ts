@@ -10,26 +10,36 @@ test('CastrelSign and LogParser have dedicated navigation panels', async ({ page
   await page.getByRole('button', { name: 'CastrelSign' }).click();
   await expect(page.getByRole('heading', { name: 'CastrelSign' })).toBeVisible();
   await expect(
-    page.locator('.data-panel').filter({ has: page.getByRole('heading', { name: 'Agents' }) })
+    page.locator('.data-panel').filter({ has: page.getByRole('heading', { name: 'Agent lifecycle' }) })
       .getByText('edge-agent', { exact: true })
   ).toBeVisible();
 
+  await page.context().route('http://logparser:8765/', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>LogParser</title><main>RUNNING</main>'
+  }));
+  const popupPromise = page.waitForEvent('popup');
   await page.getByRole('button', { name: 'LogParser' }).click();
-  await expect(page.getByRole('heading', { name: 'LogParser' })).toBeVisible();
-  await expect(page.getByText('RUNNING')).toBeVisible();
+  const popup = await popupPromise;
+  await expect.poll(() => popup.url()).toContain('http://logparser:8765/');
+  await expect(popup.getByText('RUNNING')).toBeVisible();
+  await popup.close();
 
   await page.getByRole('button', { name: '알림' }).click();
   await expect(page.getByText('CPU threshold exceeded')).toBeVisible();
 });
 
-test('admin can issue a CastrelSign enrollment token from the panel', async ({ page }) => {
+test('admin can create a CastrelSign enrollment package from the panel', async ({ page }) => {
   await mockApi(page, 'ADMIN');
 
   await page.goto('/');
   await page.getByRole('button', { name: 'CastrelSign' }).click();
-  await page.getByRole('button', { name: '토큰 갱신' }).click();
+  await page.getByRole('button', { name: '새 agent 패키지' }).click();
+  await expect(page.getByRole('dialog', { name: '새 agent 패키지' })).toBeVisible();
+  await page.getByRole('button', { name: '패키지 생성' }).click();
 
-  await expect(page.getByText('enroll-token-123')).toBeVisible();
+  await expect(page.getByText('hostname auto enrollment package 다운로드를 시작했습니다.')).toBeVisible();
 });
 
 test('operator can acknowledge and resolve alerts', async ({ page }) => {
