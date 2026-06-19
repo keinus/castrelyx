@@ -311,12 +311,28 @@ create table if not exists castrelyx_agent_events (
 | `GET/PUT/DELETE` | `/api/v1/transforms/{id}` | transform 조회/수정/삭제 |
 | `GET/POST` | `/api/v1/output-adapters` | 출력 어댑터 목록/생성 |
 | `GET/PUT/DELETE` | `/api/v1/output-adapters/{id}` | 출력 어댑터 조회/수정/삭제 |
+| `GET/POST` | `/api/v1/structure/templates` | Schema mapping template 목록/생성 |
+| `GET/PUT/DELETE` | `/api/v1/structure/templates/{id}` | Schema mapping template 조회/수정/삭제 |
+| `POST` | `/api/v1/structure/templates/{id}/apply?messageType=...` | Template을 message type mapping에 덮어쓰기 적용 |
 | `GET` | `/api/v1/metadata/*` | adapter/parser/transform 타입과 schema 조회 |
 | `POST` | `/api/v1/validate/*` | 개별 설정 또는 pipeline 검증 |
 | `POST` | `/api/v1/pipeline/reload` | 런타임 파이프라인 재적재 |
 | `GET` | `/api/v1/pipeline/status` | 파이프라인 상태 조회 |
 | `GET` | `/api/v1/docs/content?path=...` | 허용된 문서 텍스트 조회 |
 | `GET` | `/api/v1/docs/raw?path=...` | 허용된 문서/이미지 raw 조회 |
+
+### Schema mapping template
+
+Schema mapping template은 특정 message type에서 만든 `MappingConfiguration`을 전역 template으로 저장해 다른 message type에 재사용하는 기능입니다. Template 생성/수정 payload는 다음 필드를 사용합니다.
+
+| Field | 설명 |
+| --- | --- |
+| `name` | template 이름. 비어 있을 수 없고 기존 template 이름과 중복될 수 없습니다. |
+| `description` | 선택 설명입니다. |
+| `sourceMessageType` | template을 만든 기준 message type입니다. 추적용이며 apply 대상은 별도 `messageType` query로 지정합니다. |
+| `config` | 저장할 `MappingConfiguration` 전체입니다. |
+
+`POST /api/v1/structure/templates/{id}/apply?messageType=...`는 template의 `config`를 deep copy한 뒤 대상 message type mapping으로 저장합니다. 이미 저장된 대상 mapping은 덮어쓰고, template record는 변경하지 않습니다. 적용 후 structured mapping cache는 해당 message type 기준으로 무효화됩니다.
 
 ## 설정 저장소와 migration
 

@@ -125,6 +125,20 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 - `messagetype`은 파이프라인 연결 키입니다. 새 흐름을 추가할 때 입력, parser, output의 message type 연결을 함께 검증합니다.
 - Live Tail은 dispatcher 단계에서 브로드캐스트합니다. output adapter 구현에 Live Tail 전용 처리를 넣지 않습니다.
 
+## Schema mapping template 지침
+
+Schema Map의 template 기능은 message type별 mapping을 재사용하기 위한 전역 저장소입니다. 템플릿을 바꾸는 작업은 UI만 보지 말고 저장소, 서비스, cache invalidation, REST API를 함께 확인합니다.
+
+- 모델은 `domain/model/mapping/MappingTemplate`입니다. `name`, `description`, `sourceMessageType`, `config`, `createdAt`, `updatedAt`를 유지합니다.
+- 저장소는 `MappingTemplateRepository`와 `SqliteMappingTemplateRepository`입니다. SQLite table은 `mapping_templates`이고 `config_json`에 `MappingConfiguration` 전체를 저장합니다.
+- 서비스는 `MappingTemplateService`입니다. 생성/수정 시 이름 중복과 빈 이름, 빈 config를 검증합니다.
+- apply 동작은 선택한 template의 config를 deep copy한 뒤 대상 `messageType`으로 저장합니다. 기존 message type mapping은 덮어쓰며, template 자체는 변경하지 않습니다.
+- apply 이후에는 `StructuredTransformService.invalidateCache(messageType)`를 호출해야 런타임 structured mapping cache가 오래된 설정을 쓰지 않습니다.
+- REST API는 `StructuredTransformController`의 `/api/v1/structure/templates` 계열 endpoint에서 제공합니다.
+- UI는 `static/js/api.js`, `static/js/app.js`, `static/index.html`의 Schema Map toolbar와 연결합니다. 사용자는 template 생성, 선택, 적용, 수정, 삭제를 같은 화면에서 수행할 수 있어야 합니다.
+- 변경 시 `MappingTemplateServiceTest`, `MappingTemplateRepositoryTest`, `StructuredTransformControllerTest`를 함께 갱신합니다.
+- 사용자 문서는 `README.md`, `readme/logparser-user-manual.md`, 흐름 다이어그램은 `readme/diagram_samples.md`에 반영합니다.
+
 ## 테스트 지침
 
 - adapter 동작이 바뀌면 해당 adapter 단위 테스트를 추가하거나 갱신합니다.

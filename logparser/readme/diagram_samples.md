@@ -102,3 +102,38 @@ OutputAdapter <|.. MariaDbOutputAdapter
 OutputAdapter <|.. ClickHouseOutputAdapter
 @enduml
 ```
+
+## Mermaid: Schema Mapping Template Lifecycle
+
+```mermaid
+sequenceDiagram
+  participant UI as Schema Map UI
+  participant API as StructuredTransformController
+  participant Service as MappingTemplateService
+  participant Repo as MappingTemplateRepository
+  participant MappingRepo as MappingRepository
+  participant Runtime as StructuredTransformService
+
+  UI->>API: POST /api/v1/structure/templates
+  API->>Service: create(template)
+  Service->>Repo: save(config_json)
+  Repo-->>UI: MappingTemplate
+
+  UI->>API: POST /api/v1/structure/templates/{id}/apply?messageType=target
+  API->>Service: apply(id, target)
+  Service->>Repo: findById(id)
+  Service->>MappingRepo: save(config with target messageType)
+  Service->>Runtime: invalidateCache(target)
+  Service-->>UI: applied MappingConfiguration
+```
+
+## Mermaid: Schema Mapping Template Storage
+
+```mermaid
+flowchart LR
+  Template["mapping_templates\nid/name/description/source_message_type/config_json"] --> Service["MappingTemplateService"]
+  Service --> Apply["apply(templateId, messageType)"]
+  Apply --> Mapping["mapping_configurations\nmessage_type/config_json"]
+  Apply --> Cache["StructuredTransformService\ninvalidateCache(messageType)"]
+  Mapping --> Runtime["Runtime structured mapping"]
+```

@@ -15,7 +15,8 @@ const App = (function() {
         },
         outputMetricsById: {},
         editingId: null,
-        schemaMapRendered: false
+        schemaMapRendered: false,
+        schemaTemplates: []
     };
 
     // --- Initialization ---
@@ -985,6 +986,8 @@ const App = (function() {
             state.schemaMapRendered = true;
         }
 
+        await loadSchemaTemplates({ silent: true });
+
         if (!container.dataset.loaded) {
             await loadSchemaMapping();
         }
@@ -1047,6 +1050,186 @@ const App = (function() {
             showToast("Mapping saved", "success");
         } catch (e) {
             showToast("Failed to save mapping: " + e.message, "error");
+        }
+    }
+
+    async function loadSchemaTemplates(options = {}) {
+        const select = document.getElementById('schema-template-select');
+        if (!select) return;
+
+        const selectedId = options.selectedId || select.value || '';
+        try {
+            const templates = await structureAPI.getTemplates();
+            state.schemaTemplates = Array.isArray(templates) ? templates : [];
+            renderSchemaTemplateSelect(selectedId);
+            if (!options.silent) {
+                showToast("Templates loaded", "success");
+            }
+        } catch (e) {
+            state.schemaTemplates = [];
+            renderSchemaTemplateSelect('');
+            if (!options.silent) {
+                showToast("Failed to load templates: " + e.message, "error");
+            }
+        }
+    }
+
+    function renderSchemaTemplateSelect(selectedId) {
+        const select = document.getElementById('schema-template-select');
+        if (!select) return;
+
+        select.innerHTML = '';
+        if (state.schemaTemplates.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No templates';
+            select.appendChild(option);
+            select.disabled = true;
+            return;
+        }
+
+        select.disabled = false;
+        state.schemaTemplates.forEach(template => {
+            const option = document.createElement('option');
+            option.value = template.id;
+            option.textContent = template.sourceMessageType
+                ? `${template.name} (${template.sourceMessageType})`
+                : template.name;
+            option.selected = template.id === selectedId;
+            select.appendChild(option);
+        });
+    }
+
+    async function refreshSchemaTemplates() {
+        await loadSchemaTemplates({ silent: false });
+    }
+
+    function getSelectedSchemaTemplate() {
+        const select = document.getElementById('schema-template-select');
+        const id = select ? select.value : '';
+        return state.schemaTemplates.find(template => template.id === id) || null;
+    }
+
+    function currentSchemaMessageType() {
+        const input = document.getElementById('schema-map-message-type');
+        return (input && input.value.trim()) || '';
+    }
+
+    function currentSchemaMappingConfig() {
+        if (!state.schemaMapRendered) {
+            showToast("Schema map is not loaded", "error");
+            return null;
+        }
+
+        const messageType = currentSchemaMessageType();
+        if (!messageType) {
+            showToast("Message type is required", "error");
+            return null;
+        }
+
+        const config = MapperUI.getData();
+        config.messageType = messageType;
+        return config;
+    }
+
+    async function saveCurrentMappingAsTemplate() {
+        const config = currentSchemaMappingConfig();
+        if (!config) return;
+
+        const suggestedName = `${config.messageType} template`;
+        const name = prompt('Template name', suggestedName);
+        if (name === null) return;
+
+        const description = prompt('Template description', '') || '';
+        try {
+            const template = await structureAPI.createTemplate({
+                name,
+                description,
+                sourceMessageType: config.messageType,
+                config
+            });
+            await loadSchemaTemplates({ selectedId: template.id, silent: true });
+            showToast("Template saved", "success");
+        } catch (e) {
+            showToast("Failed to save template: " + e.message, "error");
+        }
+    }
+
+    async function updateSelectedSchemaTemplate() {
+        const selected = getSelectedSchemaTemplate();
+        if (!selected) {
+            showToast("Select a template first", "error");
+            return;
+        }
+
+        const config = currentSchemaMappingConfig();
+        if (!config) return;
+
+        const name = prompt('Template name', selected.name || '');
+        if (name === null) return;
+
+        const description = prompt('Template description', selected.description || '') || '';
+        try {
+            const updated = await structureAPI.updateTemplate(selected.id, {
+                ...selected,
+                name,
+                description,
+                sourceMessageType: config.messageType,
+                config
+            });
+            await loadSchemaTemplates({ selectedId: updated.id, silent: true });
+            showToast("Template updated", "success");
+        } catch (e) {
+            showToast("Failed to update template: " + e.message, "error");
+        }
+    }
+
+    async function deleteSelectedSchemaTemplate() {
+        const selected = getSelectedSchemaTemplate();
+        if (!selected) {
+            showToast("Select a template first", "error");
+            return;
+        }
+
+        if (!confirm(`Delete template "${selected.name}"?`)) return;
+
+        try {
+            await structureAPI.deleteTemplate(selected.id);
+            await loadSchemaTemplates({ silent: true });
+            showToast("Template deleted", "success");
+        } catch (e) {
+            showToast("Failed to delete template: " + e.message, "error");
+        }
+    }
+
+    async function applySchemaTemplate() {
+        const selected = getSelectedSchemaTemplate();
+        if (!selected) {
+            showToast("Select a template first", "error");
+            return;
+        }
+
+        const messageType = currentSchemaMessageType();
+        if (!messageType) {
+            showToast("Message type is required", "error");
+            return;
+        }
+
+        if (!confirm(`Apply "${selected.name}" to "${messageType}" and overwrite the current mapping?`)) return;
+
+        try {
+            const config = await structureAPI.applyTemplate(selected.id, messageType);
+            const schemaMetadata = await structureAPI.getSchema();
+            await MapperUI.loadData(messageType, config, schemaMetadata);
+
+            const container = document.getElementById('schema-map-container');
+            if (container) {
+                container.dataset.loaded = 'true';
+            }
+
+            showToast("Template applied", "success");
+        } catch (e) {
+            showToast("Failed to apply template: " + e.message, "error");
         }
     }
 
@@ -1258,6 +1441,11 @@ const App = (function() {
         restartPipeline,
         loadSchemaMapping,
         saveSchemaMapping,
+        refreshSchemaTemplates,
+        saveCurrentMappingAsTemplate,
+        updateSelectedSchemaTemplate,
+        deleteSelectedSchemaTemplate,
+        applySchemaTemplate,
         openSchemaMapForMessageType,
         saveSettings,
         togglePauseTail,

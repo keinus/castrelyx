@@ -300,8 +300,19 @@ Schema Map은 `/api/v1/structure/*` API를 사용합니다.
 | `GET` | `/api/v1/structure/mapping/{messageType}` | message type별 mapping 조회 |
 | `POST` | `/api/v1/structure/mapping` | mapping 저장 |
 | `POST` | `/api/v1/structure/simulate` | mapping 시뮬레이션 |
+| `GET` | `/api/v1/structure/templates` | mapping template 목록 조회 |
+| `POST` | `/api/v1/structure/templates` | 현재 mapping을 재사용 가능한 template으로 저장 |
+| `PUT` | `/api/v1/structure/templates/{id}` | template 수정 |
+| `DELETE` | `/api/v1/structure/templates/{id}` | template 삭제 |
+| `POST` | `/api/v1/structure/templates/{id}/apply?messageType=...` | template을 지정 message type mapping에 덮어쓰기 적용 |
 
 Castrelyx agent 이벤트처럼 `source_id`, `tenant_id`, `item_kind`, `item_type`, `item_key`, `payload_*` field가 있는 이벤트는 output adapter가 조회용 컬럼을 자동 추출합니다. 별도 structured mapping을 적용하는 경우, mapping 결과가 `LogEvent.toOutputMap()`에 들어가는 구조를 확인합니다.
+
+Schema Map 상단의 Template 영역에서 전역 template을 관리할 수 있습니다. `Save Template`은 현재 화면의 mapping을 template으로 저장하고, `Apply`는 선택한 template을 현재 `messageType`의 mapping으로 덮어씁니다. Template 삭제는 저장된 template만 삭제하며 이미 적용된 message type mapping은 삭제하지 않습니다.
+
+Template에는 `name`, `description`, `sourceMessageType`, `config`가 저장됩니다. `sourceMessageType`은 template을 만든 기준을 남기는 값이고, 실제 적용 대상은 화면의 Message Type 입력값 또는 apply API의 `messageType` query 값입니다. 같은 이름의 template은 중복 생성할 수 없습니다.
+
+적용 동작은 overwrite 방식입니다. 예를 들어 `firewall` template을 `vpn` message type에 적용하면 `vpn`의 기존 structured mapping이 template 내용으로 교체되고, 이후 들어오는 `vpn` 이벤트는 새 mapping cache를 다시 구성해서 처리합니다. 원본 template과 `firewall` mapping은 변경되지 않습니다.
 
 ## 9. Destinations: 출력 어댑터
 

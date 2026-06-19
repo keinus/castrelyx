@@ -198,6 +198,33 @@ const structureAPI = {
         return api.post('/structure/mapping', config);
     },
 
+    getTemplates() {
+        return api.get('/structure/templates');
+    },
+
+    getTemplate(id) {
+        return api.get(`/structure/templates/${encodeURIComponent(id)}`);
+    },
+
+    createTemplate(template) {
+        return api.post('/structure/templates', template);
+    },
+
+    updateTemplate(id, template) {
+        return api.put(`/structure/templates/${encodeURIComponent(id)}`, template);
+    },
+
+    deleteTemplate(id) {
+        return api.delete(`/structure/templates/${encodeURIComponent(id)}`);
+    },
+
+    applyTemplate(id, messageType) {
+        return api.post(
+            `/structure/templates/${encodeURIComponent(id)}/apply?messageType=${encodeURIComponent(messageType)}`,
+            {}
+        );
+    },
+
     simulate(payload) {
         return api.post('/structure/simulate', payload);
     }

@@ -515,18 +515,54 @@
 
             <!-- SCHEMA MAP VIEW -->
             <div id="view-schema-map" class="hidden h-full flex flex-col gap-4">
-                <div class="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                    <div class="join w-full sm:w-auto">
-                        <input type="text" id="schema-map-message-type" value="syslog" class="input input-sm input-bordered join-item bg-slate-800 border-slate-700 text-white w-full sm:w-64 font-mono" placeholder="messageType" />
-                        <button class="btn btn-sm btn-outline join-item border-slate-700 text-slate-300 hover:bg-slate-800" onclick="App.loadSchemaMapping()">
-                            <span class="material-icons-round text-sm">download</span>
-                            Load
+                <div class="grid grid-cols-1 2xl:grid-cols-[minmax(22rem,auto)_1fr_auto] gap-3 items-end">
+                    <div>
+                        <label class="label py-1">
+                            <span class="label-text text-slate-400 text-xs font-mono uppercase">Message Type</span>
+                        </label>
+                        <div class="join w-full">
+                            <input type="text" id="schema-map-message-type" value="syslog" class="input input-sm input-bordered join-item bg-slate-800 border-slate-700 text-white w-full font-mono" placeholder="messageType" />
+                            <button class="btn btn-sm btn-outline join-item border-slate-700 text-slate-300 hover:bg-slate-800" onclick="App.loadSchemaMapping()">
+                                <span class="material-icons-round text-sm">download</span>
+                                Load
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="label py-1">
+                            <span class="label-text text-slate-400 text-xs font-mono uppercase">Template</span>
+                        </label>
+                        <div class="join w-full">
+                            <select id="schema-template-select" class="select select-sm select-bordered join-item bg-slate-800 border-slate-700 text-slate-300 min-w-0 w-full">
+                                <option value="">No templates</option>
+                            </select>
+                            <button class="btn btn-sm btn-outline join-item border-slate-700 text-slate-300 hover:bg-slate-800" title="Refresh templates" onclick="App.refreshSchemaTemplates()">
+                                <span class="material-icons-round text-sm">refresh</span>
+                            </button>
+                            <button class="btn btn-sm btn-outline join-item border-slate-700 text-slate-300 hover:bg-slate-800" onclick="App.applySchemaTemplate()">
+                                <span class="material-icons-round text-sm">file_download</span>
+                                Apply
+                            </button>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 justify-start 2xl:justify-end">
+                        <button class="btn btn-sm btn-outline border-slate-700 text-slate-300 gap-2" onclick="App.saveCurrentMappingAsTemplate()">
+                            <span class="material-icons-round text-sm">library_add</span>
+                            Save Template
+                        </button>
+                        <button class="btn btn-sm btn-outline border-slate-700 text-slate-300 gap-2" onclick="App.updateSelectedSchemaTemplate()">
+                            <span class="material-icons-round text-sm">edit</span>
+                            Update
+                        </button>
+                        <button class="btn btn-sm btn-ghost text-rose-300 hover:bg-rose-950/30 gap-2" onclick="App.deleteSelectedSchemaTemplate()">
+                            <span class="material-icons-round text-sm">delete</span>
+                            Delete
+                        </button>
+                        <button class="btn btn-sm btn-primary gap-2" onclick="App.saveSchemaMapping()">
+                            <span class="material-icons-round text-sm">save</span>
+                            Save Mapping
                         </button>
                     </div>
-                    <button class="btn btn-sm btn-primary gap-2 w-full sm:w-auto" onclick="App.saveSchemaMapping()">
-                        <span class="material-icons-round text-sm">save</span>
-                        Save Mapping
-                    </button>
                 </div>
                 <div id="schema-map-container" class="flex-1 min-h-[720px]"></div>
             </div>
