@@ -1,6 +1,8 @@
 package org.keinus.logparser.domain.input.service;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.Locale;
+import java.util.Map;
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.input.model.InputAdapter;
 
@@ -21,6 +23,23 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public class InputFactory {
+	private static final Map<String, String> TYPE_ALIASES = Map.ofEntries(
+		Map.entry("file", "FileInputAdapter"),
+		Map.entry("tcp", "TcpInputAdapter"),
+		Map.entry("udp", "UdpInputAdapter"),
+		Map.entry("http", "HttpInputAdapter"),
+		Map.entry("https", "HttpsInputAdapter"),
+		Map.entry("kafka", "KafkaInputAdapter"),
+		Map.entry("snmp", "SnmpInputAdapter"),
+		Map.entry("rabbitmq", "RabbitMqInputAdapter"),
+		Map.entry("tls_tcp", "TlsTcpInputAdapter"),
+		Map.entry("tlstcp", "TlsTcpInputAdapter"),
+		Map.entry("tls_rabbitmq", "TlsRabbitMqInputAdapter"),
+		Map.entry("tlsrabbitmq", "TlsRabbitMqInputAdapter"),
+		Map.entry("tcp_mtls_gzip", "TcpMtlsGzipInputAdapter"),
+		Map.entry("fake", "FakeInputAdapter")
+	);
+
 	private InputFactory() {
 		throw new IllegalStateException("Utility class");
 	}
@@ -33,7 +52,7 @@ public class InputFactory {
 	 * @throws IllegalStateException 어댑터 생성 실패 시
 	 */
 	public static InputAdapter getInputAdapter(InputAdapterConfig config) {
-		String type = config.getType();
+		String type = normalizeType(config.getType());
 		try {
 			Class<?> cls = Class.forName("org.keinus.logparser.domain.input.model." + type);
 			return (InputAdapter) cls.getDeclaredConstructor(InputAdapterConfig.class).newInstance(config);
@@ -44,5 +63,13 @@ public class InputFactory {
 			log.error("Invalid Input Adapter. {}", e.getMessage());
 			throw new IllegalStateException("Invalid Input Adapter.");
 		}
+	}
+
+	private static String normalizeType(String type) {
+		if (type == null) {
+			return "";
+		}
+		String trimmed = type.trim();
+		return TYPE_ALIASES.getOrDefault(trimmed.toLowerCase(Locale.ROOT), trimmed);
 	}
 }

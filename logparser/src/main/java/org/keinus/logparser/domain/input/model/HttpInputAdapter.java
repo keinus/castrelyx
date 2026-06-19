@@ -33,22 +33,31 @@ public class HttpInputAdapter extends InputAdapter {
 	private static final int READ_BUFFER_SIZE = 8192;
 	private static final String LINE_SEPARATOR = System.lineSeparator();
 
+	@FunctionalInterface
+	protected interface ServerSocketProvider {
+		ServerSocket create(InputAdapterConfig config, int port) throws IOException;
+	}
+
 	private ServerSocket serverSocket;
 	private final String localHostAddress;
 
 	public HttpInputAdapter(InputAdapterConfig config) throws IOException {
+		this(config, (adapterConfig, port) -> new ServerSocket(port), "HTTP");
+	}
+
+	protected HttpInputAdapter(InputAdapterConfig config, ServerSocketProvider serverSocketProvider, String adapterLabel) throws IOException {
 		super(config);
 		try {
 			if (config.getPort() == null) {
-				throw new IllegalArgumentException("Port is required for HTTP Input Adapter");
+				throw new IllegalArgumentException("Port is required for " + adapterLabel + " Input Adapter");
 			}
 			int port = config.getPort();
-			serverSocket = new ServerSocket(port);
+			serverSocket = serverSocketProvider.create(config, port);
 			localHostAddress = InetAddress.getLocalHost().getHostAddress();
 
-			log.info("HTTP Input Adapter start at port {}", port);
+			log.info("{} Input Adapter start at port {}", adapterLabel, port);
 		} catch (IOException e) {
-			log.error("Failed to initialize HTTP input adapter: {}", e.getMessage(), e);
+			log.error("Failed to initialize {} input adapter: {}", adapterLabel, e.getMessage(), e);
 			throw e;
 		}
 	}

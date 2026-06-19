@@ -46,6 +46,8 @@ public class ConfigValidationService {
                     errors.add("Port is required for " + entity.getType());
                 }
             }
+            case "https", "httpsinputadapter", "tls_tcp", "tlstcp", "tlstcpinputadapter" ->
+                    validateTlsServerInputConfigParams(entity, errors);
             case "tcpmtlsgzipinputadapter", "tcp_mtls_gzip" -> validateTcpMtlsGzipConfigParams(entity, errors);
             case "kafka", "kafkainputadapter" -> {
                 if (entity.getBootstrapservers() == null || entity.getTopicid() == null) {
@@ -58,7 +60,14 @@ public class ConfigValidationService {
                 }
             }
             case "snmpinputadapter" -> validateSnmpConfigParams(entity, errors);
-            case "rabbitmq", "rabbitmqinputadapter" -> validateRabbitMqConfigParams(entity, errors);
+            case "rabbitmq", "rabbitmqinputadapter" -> {
+                validateRabbitMqConfigParams(entity, errors);
+                validateRabbitMqTlsConfigParams(entity, errors, false);
+            }
+            case "tls_rabbitmq", "tlsrabbitmq", "tlsrabbitmqinputadapter" -> {
+                validateRabbitMqConfigParams(entity, errors);
+                validateRabbitMqTlsConfigParams(entity, errors, true);
+            }
             case "fake", "fakeinputadapter" -> {
                 break;
             }
@@ -160,18 +169,116 @@ public class ConfigValidationService {
     private void validateRabbitMqConfigParams(InputAdapterEntity entity, List<String> errors) {
         String configParams = entity.getConfigParams();
         if (configParams == null || configParams.trim().isEmpty()) {
-            errors.add("configParams is required for RabbitMqInputAdapter");
+            errors.add("configParams is required for " + entity.getType());
             return;
         }
 
         try {
             JsonNode root = OBJECT_MAPPER.readTree(configParams);
             if (!root.hasNonNull("queue") || root.get("queue").asText().isBlank()) {
-                errors.add("configParams.queue is required for RabbitMqInputAdapter");
+                errors.add("configParams.queue is required for " + entity.getType());
             }
         } catch (Exception e) {
-            errors.add("configParams must be valid JSON for RabbitMqInputAdapter");
+            errors.add("configParams must be valid JSON for " + entity.getType());
         }
+    }
+
+    private void validateTlsServerInputConfigParams(InputAdapterEntity entity, List<String> errors) {
+        if (entity.getPort() == null) {
+            errors.add("Port is required for " + entity.getType());
+        }
+
+        String configParams = entity.getConfigParams();
+        if (configParams == null || configParams.trim().isEmpty()) {
+            errors.add("configParams is required for " + entity.getType());
+            return;
+        }
+
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(configParams);
+            requireText(root, "keyStorePath", errors);
+            requireSecretReference(root, "keyStorePassword", "keyStorePasswordEnv", errors);
+
+            String clientAuth = readClientAuth(root, errors);
+            if ("need".equals(clientAuth) || "want".equals(clientAuth)) {
+                requireText(root, "trustStorePath", errors);
+                requireSecretReference(root, "trustStorePassword", "trustStorePasswordEnv", errors);
+            } else {
+                validateOptionalStoreSecret(root, "trustStorePath", "trustStorePassword", "trustStorePasswordEnv", errors);
+            }
+        } catch (Exception e) {
+            errors.add("configParams must be valid JSON for " + entity.getType());
+        }
+    }
+
+    private void validateRabbitMqTlsConfigParams(InputAdapterEntity entity, List<String> errors, boolean tlsRequired) {
+        String configParams = entity.getConfigParams();
+        if (configParams == null || configParams.trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(configParams);
+            boolean tlsEnabled = bool(root, "tlsEnabled", bool(root, "ssl", tlsRequired));
+            if (tlsRequired && root.has("tlsEnabled") && !root.get("tlsEnabled").asBoolean()) {
+                errors.add("configParams.tlsEnabled must be true for " + entity.getType());
+            }
+            if (!tlsEnabled && !tlsRequired) {
+                return;
+            }
+
+            validateOptionalStoreSecret(root, "keyStorePath", "keyStorePassword", "keyStorePasswordEnv", errors);
+            validateOptionalStoreSecret(root, "trustStorePath", "trustStorePassword", "trustStorePasswordEnv", errors);
+            if (root.has("hostnameVerification") && !root.get("hostnameVerification").isBoolean()) {
+                errors.add("configParams.hostnameVerification must be boolean");
+            }
+        } catch (Exception e) {
+            errors.add("configParams must be valid JSON for " + entity.getType());
+        }
+    }
+
+    private String readClientAuth(JsonNode root, List<String> errors) {
+        String clientAuth = bool(root, "needClientAuth", false)
+                ? "need"
+                : bool(root, "wantClientAuth", false) ? "want" : text(root, "clientAuth", "none");
+        String normalized = clientAuth.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("none", "false", "want", "optional", "need", "required", "true").contains(normalized)) {
+            errors.add("configParams.clientAuth must be one of none, want, need");
+            return "none";
+        }
+        return switch (normalized) {
+            case "need", "required", "true" -> "need";
+            case "want", "optional" -> "want";
+            default -> "none";
+        };
+    }
+
+    private void validateOptionalStoreSecret(
+            JsonNode root,
+            String pathField,
+            String passwordField,
+            String passwordEnvField,
+            List<String> errors
+    ) {
+        if (root.hasNonNull(pathField) && !root.get(pathField).asText().isBlank()) {
+            requireSecretReference(root, passwordField, passwordEnvField, errors);
+        }
+    }
+
+    private void requireSecretReference(JsonNode root, String directField, String envField, List<String> errors) {
+        String direct = text(root, directField, null);
+        String env = text(root, envField, null);
+        if ((direct == null || direct.isBlank()) && (env == null || env.isBlank())) {
+            errors.add("configParams." + directField + " or " + envField + " is required");
+        }
+    }
+
+    private boolean bool(JsonNode root, String fieldName, boolean defaultValue) {
+        JsonNode value = root == null ? null : root.get(fieldName);
+        if (value == null || !value.isBoolean()) {
+            return defaultValue;
+        }
+        return value.asBoolean();
     }
 
     private void validateTcpMtlsGzipConfigParams(InputAdapterEntity entity, List<String> errors) {
@@ -346,7 +453,7 @@ public class ConfigValidationService {
             requireText(root, "jdbcUrl", errors);
             requireText(root, "usernameEnv", errors);
             requireText(root, "passwordEnv", errors);
-            requireText(root, "tableName", errors);
+            validateIdentifier(root, "tableName", errors);
             if (root.has("batchSize") && root.get("batchSize").asInt() <= 0) {
                 errors.add("configParams.batchSize must be greater than zero");
             }

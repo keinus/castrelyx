@@ -15,11 +15,14 @@ public class ConfigMetadataService {
     public List<AdapterTypeInfo> getInputAdapterTypes() {
         return Arrays.asList(
                 new AdapterTypeInfo("TcpInputAdapter", "TCP Input", "Listen for TCP connections"),
+                new AdapterTypeInfo("TlsTcpInputAdapter", "TCP TLS Input", "Listen for newline-delimited TCP over TLS"),
                 new AdapterTypeInfo("UdpInputAdapter", "UDP Input", "Listen for UDP datagrams"),
                 new AdapterTypeInfo("HttpInputAdapter", "HTTP Input", "HTTP REST endpoint"),
+                new AdapterTypeInfo("HttpsInputAdapter", "HTTPS Input", "HTTP REST endpoint over TLS"),
                 new AdapterTypeInfo("KafkaInputAdapter", "Kafka Input", "Consume from Kafka topic"),
                 new AdapterTypeInfo("SnmpInputAdapter", "SNMP Collector", "Poll SNMP v1/v2c/v3 targets"),
                 new AdapterTypeInfo("RabbitMqInputAdapter", "RabbitMQ Input", "Consume from RabbitMQ queue"),
+                new AdapterTypeInfo("TlsRabbitMqInputAdapter", "RabbitMQ TLS Input", "Consume from RabbitMQ queue over TLS"),
                 new AdapterTypeInfo("TcpMtlsGzipInputAdapter", "Castrelyx TCP mTLS Gzip Input", "Receive gzip batches over TCP/mTLS"),
                 new AdapterTypeInfo("FileInputAdapter", "File Input", "Read from files"),
                 new AdapterTypeInfo("FakeInputAdapter", "Fake Input", "Generate test data")
@@ -69,11 +72,26 @@ public class ConfigMetadataService {
                             new FieldSchema("port", "Integer", true, "Port to listen on")
                     )
             );
+            case "TlsTcpInputAdapter" -> new AdapterSchema(
+                    type,
+                    Arrays.asList(
+                            new FieldSchema("port", "Integer", true, "Port to listen on"),
+                            new FieldSchema("configParams", "String", true, "TLS server JSON configuration")
+                    )
+            );
             case "HttpInputAdapter" -> new AdapterSchema(
                     type,
                     List.of(
                             new FieldSchema("port", "Integer", true, "Port to listen on"),
                             new FieldSchema("path_pattern", "String", false, "HTTP path pattern (default: /)")
+                    )
+            );
+            case "HttpsInputAdapter" -> new AdapterSchema(
+                    type,
+                    Arrays.asList(
+                            new FieldSchema("port", "Integer", true, "Port to listen on"),
+                            new FieldSchema("path_pattern", "String", false, "HTTP path pattern (default: /)"),
+                            new FieldSchema("configParams", "String", true, "TLS server JSON configuration")
                     )
             );
             case "KafkaInputAdapter" -> new AdapterSchema(
@@ -99,6 +117,15 @@ public class ConfigMetadataService {
                             new FieldSchema("host", "String", false, "RabbitMQ host"),
                             new FieldSchema("port", "Integer", false, "RabbitMQ port"),
                             new FieldSchema("configParams", "String", true, "RabbitMQ input JSON configuration"),
+                            new FieldSchema("timeoutMs", "Integer", false, "RabbitMQ connection timeout")
+                    )
+            );
+            case "TlsRabbitMqInputAdapter" -> new AdapterSchema(
+                    type,
+                    Arrays.asList(
+                            new FieldSchema("host", "String", false, "RabbitMQ host"),
+                            new FieldSchema("port", "Integer", false, "RabbitMQ TLS port (default: 5671)"),
+                            new FieldSchema("configParams", "String", true, "RabbitMQ TLS input JSON configuration"),
                             new FieldSchema("timeoutMs", "Integer", false, "RabbitMQ connection timeout")
                     )
             );

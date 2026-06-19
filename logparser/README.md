@@ -1,48 +1,51 @@
 # Logparser
 
-Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 파일, UDP, TCP, HTTP, Kafka, SNMP, RabbitMQ 같은 입력에서 이벤트를 받아 파서와 변환 규칙을 적용한 뒤 파일, HTTP, OpenSearch, Kafka, Debug 출력으로 전달합니다.
+Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 parser, transform, structured mapping, output 단계를 연결합니다.
 
-런타임 설정은 REST API와 정적 웹 UI에서 관리하며, SQLite와 Flyway를 사용해 로컬 데이터베이스에 저장합니다.
+설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다.
 
-## 주요 기능
+## 현재 구현 요약
 
-- 여러 입력 어댑터를 통한 로그, 메시지, 메트릭 이벤트 수집
-- JSON, regex, delimiter, fixed length, key-value 기반 파싱
-- 필드 이름 변경, 값 치환, 타입 변환, 필드 추가/삭제 같은 변환 규칙
-- OpenSearch, Kafka, HTTP, 파일, 디버그 출력 지원
-- SQLite 기반 설정 저장과 Flyway migration
-- REST API와 브라우저 관리 UI
-- 입력별 timeout, worker thread, queue size 기반 처리 제한
+- 입력: File, TCP, TCP/TLS, UDP, HTTP, HTTPS, Kafka, SNMP, RabbitMQ, RabbitMQ/TLS, Castrelyx TCP mTLS gzip, Fake
+- 출력: Console, TCP, HTTP, Kafka, OpenSearch, RabbitMQ, MariaDB, ClickHouse, Benchmark
+- parser: JSON, Grok, Regex, RFC3164 Syslog, RFC5424 Syslog, HTTP
+- transform: Filter, AddProperty, RemoveProperty
+- Live Tail: `/ws/tail` WebSocket과 `/api/v1/pipeline/livetail/*` API로 처리 중 이벤트를 브로드캐스트
+- 설정 메타데이터: `/api/v1/metadata/*`
+- 문서 자산: `README.md`, `AGENTS.md`, `readme/`, `docs/` 아래 파일을 `/api/v1/docs/*`에서 제공
 
 ## 기술 스택
 
 - Java 21
 - Spring Boot 3
 - Gradle
-- SQLite JDBC
-- Flyway
-- SNMP4J
+- SQLite JDBC, Flyway, Spring Data JPA
+- Kafka, RabbitMQ Java client, SNMP4J
+- MariaDB JDBC driver
+- Java HTTP client, OpenSearch HTTP client
 - JUnit 5
-- Docker / Docker Compose
 
 ## 프로젝트 구조
 
 ```text
 src/main/java/org/keinus/logparser/
-  application/pipeline/          # 런타임 로그 처리 파이프라인
-  domain/configuration/          # 설정 모델, 저장/검증 서비스
+  application/pipeline/          # 런타임 파이프라인 구동
+  application/service/           # Live Tail, 문서, thread monitoring 등 애플리케이션 서비스
+  domain/configuration/          # 설정 모델, 메타데이터, 검증, seed
   domain/input/                  # 입력 어댑터
   domain/output/                 # 출력 어댑터
-  domain/parse/                  # 파서 모델
-  domain/transformation/         # 변환 규칙 모델
-  infrastructure/persistence/    # SQLite 저장소와 DB loader
+  domain/parse/                  # parser 모델과 서비스
+  domain/transformation/         # transform, structured mapping
+  infrastructure/persistence/    # SQLite entity/repository, migration 보조
   interfaces/controller/         # REST API
+  interfaces/websocket/          # Live Tail WebSocket
 
 src/main/resources/
   static/                        # 관리 UI 정적 파일
   db/migration/                  # Flyway migration
 
 src/test/                        # JUnit 테스트
+readme/                          # 상세 사용자 문서와 다이어그램 샘플
 ```
 
 ## 빠른 시작
@@ -57,7 +60,7 @@ Java 21이 필요합니다.
 
 - 관리 UI: `http://localhost:8765`
 - API base URL: `http://localhost:8765/api/v1`
-- Health check: `http://localhost:8765/actuator/health`
+- Swagger UI: `http://localhost:8765/swagger-ui.html`
 
 테스트와 빌드는 다음 명령으로 실행합니다.
 
@@ -66,7 +69,7 @@ Java 21이 필요합니다.
 .\gradlew build
 ```
 
-Gradle이 Java를 찾지 못하면 PowerShell에서 Java 21 설치 경로를 지정합니다.
+Gradle이 Java를 찾지 못하면 Java 21 설치 경로를 `JAVA_HOME`에 지정합니다.
 
 ```powershell
 $env:JAVA_HOME='C:\Path\To\Java21'
@@ -90,45 +93,105 @@ docker compose up --build
 
 ```mermaid
 flowchart LR
-  A["Input Adapter"] --> B["MessageDispatcher"]
-  B --> C["ProcessingDispatcher"]
-  C --> D["Parser"]
-  D --> E["Transformation Rules"]
-  E --> F["Structured Log"]
-  F --> G["Output Adapter"]
+  Input["InputAdapter"] --> MessageDispatcher["MessageDispatcher"]
+  MessageDispatcher --> ProcessingDispatcher["ProcessingDispatcher"]
+  ProcessingDispatcher --> Parser["Parser"]
+  Parser --> Transform["Transform Rules"]
+  Transform --> Structure["Structured Mapping"]
+  Structure --> Output["OutputAdapter"]
+  ProcessingDispatcher --> LiveTail["LiveTailService /ws/tail"]
 ```
 
-입력 어댑터는 원본 이벤트를 `LogEvent`로 만들고 dispatcher에 전달합니다. 파싱, 변환, 출력은 파이프라인의 뒤쪽 단계에서 처리합니다.
+`messagetype`은 입력, parser, transform, output을 연결하는 주요 키입니다. 출력 어댑터의 `messagetype`을 비워 두면 `OutputFactory`가 `all`로 정규화하고, 모든 message type을 받을 수 있습니다.
 
 ## 입력 어댑터
 
-| Type | 설명 |
-| --- | --- |
-| `FileInputAdapter` | 파일 tail 기반 로그 수집 |
-| `UdpInputAdapter` | UDP socket 기반 로그 수집 |
-| `TcpInputAdapter` | TCP socket 기반 로그 수집 |
-| `HttpInputAdapter` | HTTP endpoint 이벤트 수집 |
-| `KafkaInputAdapter` | Kafka topic 메시지 수집 |
-| `SnmpInputAdapter` | SNMP v1/v2c/v3 polling 기반 장비 메트릭 수집 |
-| `RabbitMqInputAdapter` | RabbitMQ queue 메시지 수집 |
+| Type | Alias | 필수 설정 | 설명 |
+| --- | --- | --- | --- |
+| `FileInputAdapter` | `file` | `path` | 파일 tail 방식으로 라인 단위 로그를 읽습니다. |
+| `TcpInputAdapter` | `tcp` | `port` | newline-delimited TCP 로그를 수신합니다. |
+| `TlsTcpInputAdapter` | `tls_tcp`, `tlstcp` | `port`, `configParams` | `TcpInputAdapter`와 같은 라인 프로토콜을 TLS 서버 소켓으로 수신합니다. |
+| `UdpInputAdapter` | `udp` | `port` | UDP datagram 로그를 수신합니다. |
+| `HttpInputAdapter` | `http` | `port` | HTTP 요청 전체를 원문 이벤트로 받습니다. |
+| `HttpsInputAdapter` | `https` | `port`, `configParams` | `HttpInputAdapter`와 같은 HTTP 수신을 TLS 서버 소켓으로 처리합니다. |
+| `KafkaInputAdapter` | `kafka` | `bootstrapservers`, `topicid` | Kafka topic을 consume합니다. |
+| `SnmpInputAdapter` | `snmp` | `configParams` | SNMP v1/v2c/v3 target과 OID를 주기적으로 polling합니다. |
+| `RabbitMqInputAdapter` | `rabbitmq` | `configParams.queue` | RabbitMQ queue를 `basicGet` 방식으로 polling합니다. `tlsEnabled=true`면 TLS 연결을 사용합니다. |
+| `TlsRabbitMqInputAdapter` | `tls_rabbitmq`, `tlsrabbitmq` | `configParams.queue` | RabbitMQ TLS 입력입니다. 포트 생략 시 `5671`을 사용합니다. |
+| `TcpMtlsGzipInputAdapter` | `tcp_mtls_gzip` | `port`, `configParams` | Castrelyx agent gzip batch를 TCP/mTLS로 수신합니다. |
+| `FakeInputAdapter` | `fake` | 없음 | 테스트 이벤트를 생성합니다. |
 
-공통 설정 필드는 다음과 같습니다.
+### 서버 TLS 입력
 
-| Field | 설명 |
-| --- | --- |
-| `type` | 입력 어댑터 타입 |
-| `messagetype` | 파서 매칭에 사용할 메시지 타입 |
-| `timeoutMs` | 입력 처리 timeout |
-| `workerThreads` | 입력 처리 worker 수 |
-| `queueSize` | 입력 queue 크기 |
-| `enabled` | 활성화 여부 |
-| `configParams` | 어댑터별 JSON 설정 |
+`TlsTcpInputAdapter`와 `HttpsInputAdapter`는 `configParams`에 서버 인증서 key store를 요구합니다. `clientAuth`가 `want` 또는 `need`이면 trust store도 필요합니다.
 
-## SNMP 수집 예시
+```json
+{
+  "keyStorePath": "/app/certs/logparser-server.p12",
+  "keyStorePasswordEnv": "LOGPARSER_KEYSTORE_PASSWORD",
+  "keyStoreType": "PKCS12",
+  "keyPasswordEnv": "LOGPARSER_KEY_PASSWORD",
+  "clientAuth": "need",
+  "trustStorePath": "/app/certs/client-ca.p12",
+  "trustStorePasswordEnv": "LOGPARSER_TRUSTSTORE_PASSWORD",
+  "trustStoreType": "PKCS12",
+  "enabledProtocols": ["TLSv1.3", "TLSv1.2"]
+}
+```
 
-`SnmpInputAdapter`는 여러 target과 여러 OID를 주기적으로 polling하고, 각 응답을 JSON 문자열 형태의 `LogEvent`로 전달합니다. 현재 구현은 SNMP v1/v2c community 기반 수집과 SNMPv3 USM 기반 수집을 지원합니다.
+지원 필드는 `keyStorePath`, `keyStorePassword` 또는 `keyStorePasswordEnv`, `keyStoreType`, `keyPassword` 또는 `keyPasswordEnv`, `trustStorePath`, `trustStorePassword` 또는 `trustStorePasswordEnv`, `trustStoreType`, `tlsAlgorithm`, `enabledProtocols`, `clientAuth`, `needClientAuth`, `wantClientAuth`입니다.
 
-예시 설정:
+### RabbitMQ 입력
+
+`RabbitMqInputAdapter`는 `configParams.queue`가 필수입니다. host와 port는 DTO 필드 또는 `configParams` 둘 다에서 받을 수 있으며, DTO 값이 우선합니다.
+
+```json
+{
+  "queue": "logs.input",
+  "username": "guest",
+  "password": "guest",
+  "virtualHost": "/",
+  "autoAck": false,
+  "prefetchCount": 10,
+  "declareQueue": false
+}
+```
+
+TLS 연결을 쓰려면 기존 RabbitMQ 입력에 `tlsEnabled=true`를 주거나, `TlsRabbitMqInputAdapter`를 사용합니다.
+
+```json
+{
+  "queue": "logs.input",
+  "username": "guest",
+  "password": "guest",
+  "virtualHost": "/",
+  "tlsEnabled": true,
+  "hostnameVerification": true,
+  "trustStorePath": "/app/certs/rabbitmq-truststore.p12",
+  "trustStorePasswordEnv": "RABBITMQ_TRUSTSTORE_PASSWORD"
+}
+```
+
+### Castrelyx TCP mTLS gzip 입력
+
+`TcpMtlsGzipInputAdapter`는 Castrelyx agent batch 전용 입력입니다. 서버는 client certificate을 필수로 요구하고, 인증서 CN이 batch의 `source_id`와 일치해야 합니다.
+
+```json
+{
+  "keyStorePath": "/var/lib/castrelsign/certs/server.p12",
+  "keyStorePasswordEnv": "CASTRELSIGN_KEYSTORE_PASSWORD",
+  "trustStorePath": "/var/lib/castrelsign/certs/truststore.p12",
+  "trustStorePasswordEnv": "CASTRELSIGN_TRUSTSTORE_PASSWORD",
+  "maxFrameBytes": 10485760,
+  "ackMode": "queueAccepted"
+}
+```
+
+batch payload는 4-byte frame length 뒤에 gzip JSON body가 오는 형식입니다. JSON body는 `source_id`, `tenant_id`, `items[]`를 포함하고, 각 item은 `kind`, `type`, `key`, `payload`를 가질 수 있습니다. adapter는 payload의 object field를 `payload_<field>` 형태로 추가 노출합니다.
+
+### SNMP 입력
+
+SNMP 설정은 `configParams.targets[]`와 `configParams.oids[]`가 필수입니다.
 
 ```json
 {
@@ -147,186 +210,128 @@ flowchart LR
     {
       "name": "sysName",
       "oid": "1.3.6.1.2.1.1.5.0"
-    },
-    {
-      "name": "ifNumber",
-      "oid": "1.3.6.1.2.1.2.1.0"
     }
   ]
 }
 ```
 
-SNMPv3 `authPriv` 예시:
+SNMPv3는 `securityName`과 security level별 passphrase를 요구합니다. passphrase는 `authPassphraseEnv`, `privPassphraseEnv` 사용을 권장합니다.
 
-```json
-{
-  "intervalMs": 60000,
-  "retries": 1,
-  "targets": [
-    {
-      "name": "fw-edge-01",
-      "host": "192.0.2.20",
-      "port": 161,
-      "version": "3",
-      "securityName": "poller",
-      "securityLevel": "authPriv",
-      "authProtocol": "SHA256",
-      "authPassphraseEnv": "SNMP_AUTH_PASSPHRASE",
-      "privProtocol": "AES128",
-      "privPassphraseEnv": "SNMP_PRIV_PASSPHRASE"
-    }
-  ],
-  "oids": [
-    {
-      "name": "sysName",
-      "oid": "1.3.6.1.2.1.1.5.0"
-    }
-  ]
-}
-```
+## Parser와 Transform
 
-API 등록 예시:
+| Type | 필수 설정 | 설명 |
+| --- | --- | --- |
+| `JsonParser` | 없음 | JSON 원문을 field map으로 파싱합니다. |
+| `GrokParser` | `param` | Grok pattern을 적용합니다. |
+| `RegexParser` | `param` | 정규식 capture group을 적용합니다. |
+| `RFC3164SyslogParser` | 없음 | RFC3164 syslog를 파싱합니다. |
+| `RFC5424SyslogParser` | 없음 | RFC5424 syslog를 파싱합니다. |
+| `HttpParser` | 없음 | HTTP access log 형식을 파싱합니다. |
 
-```powershell
-curl -X POST http://localhost:8765/api/v1/input-adapters `
-  -H 'Content-Type: application/json' `
-  -d '{
-    "type": "SnmpInputAdapter",
-    "messagetype": "snmp-metrics",
-    "timeoutMs": 1500,
-    "workerThreads": 10,
-    "queueSize": 1000,
-    "enabled": true,
-    "configParams": "{\"intervalMs\":60000,\"retries\":1,\"targets\":[{\"name\":\"sw-core-01\",\"host\":\"192.0.2.10\",\"port\":161,\"community\":\"public\",\"version\":\"2c\"}],\"oids\":[{\"name\":\"sysName\",\"oid\":\"1.3.6.1.2.1.1.5.0\"}]}"
-  }'
-```
-
-운영 기준으로 20-150대 규모를 수집하려면 target 수, OID 수, `intervalMs`, `timeoutMs`, `retries`를 함께 조정해야 합니다. 예를 들어 150대에 OID 10개를 60초마다 polling하면 한 주기에 1500개 요청이 발생합니다. timeout이 길거나 retry가 많으면 다음 주기와 겹칠 수 있으므로 timeout과 interval을 보수적으로 잡는 것이 좋습니다.
-
-SNMP community나 SNMPv3 passphrase 같은 민감 값은 `configParams`에 저장될 수 있으므로 운영 환경에서는 접근 권한과 DB 보관 정책을 별도로 관리해야 합니다. SNMPv3 passphrase는 `authPassphraseEnv`, `privPassphraseEnv`로 환경 변수 참조를 사용하는 방식을 권장합니다.
-
-## RabbitMQ 입력 예시
-
-`RabbitMqInputAdapter`는 지정된 queue에서 `basicGet` 방식으로 메시지를 polling하고 메시지 본문을 `LogEvent` 원문으로 전달합니다. 기본값은 `autoAck=false`이며, 메시지를 읽어 이벤트로 만들기 전에 delivery tag를 ack 처리합니다.
-
-예시 설정:
-
-```json
-{
-  "queue": "logs.input",
-  "username": "guest",
-  "password": "guest",
-  "virtualHost": "/",
-  "autoAck": false,
-  "prefetchCount": 10,
-  "declareQueue": false
-}
-```
-
-queue를 어댑터가 생성해야 하는 환경에서는 `declareQueue=true`를 사용할 수 있습니다. exchange와 binding까지 필요하면 다음 필드를 추가합니다.
-
-```json
-{
-  "queue": "logs.input",
-  "exchange": "logs.topic",
-  "routingKey": "logs.#",
-  "declareQueue": true,
-  "bindQueue": true
-}
-```
-
-API 등록 예시:
-
-```powershell
-curl -X POST http://localhost:8765/api/v1/input-adapters `
-  -H 'Content-Type: application/json' `
-  -d '{
-    "type": "RabbitMqInputAdapter",
-    "messagetype": "rabbit-logs",
-    "host": "rabbit.local",
-    "port": 5672,
-    "timeoutMs": 5000,
-    "enabled": true,
-    "configParams": "{\"queue\":\"logs.input\",\"username\":\"guest\",\"password\":\"guest\",\"virtualHost\":\"/\",\"autoAck\":false,\"prefetchCount\":10}"
-  }'
-```
-
-RabbitMQ password 같은 민감 값도 `configParams`에 저장될 수 있으므로 운영 환경에서는 DB 접근 권한과 secret 관리 방식을 별도로 정해야 합니다.
-
-## 파서
-
-| Type | 설명 |
-| --- | --- |
-| `JsonParser` | JSON 로그를 필드로 파싱 |
-| `RegexParser` | 정규식 capture group 기반 파싱 |
-| `DelimiterParser` | 구분자 기반 파싱 |
-| `FixedLengthParser` | 고정 길이 필드 파싱 |
-| `KeyValueParser` | key=value 형태 파싱 |
-
-SNMP 수집 이벤트는 JSON 문자열로 생성되므로 일반적으로 `JsonParser`와 함께 사용합니다. RabbitMQ 입력은 메시지 본문을 그대로 전달하므로 queue에 들어오는 payload 형식에 맞는 파서를 연결합니다.
+| Type | 필수 설정 | 설명 |
+| --- | --- | --- |
+| `Filter` | `filterPass` 또는 `filterDrop` | 조건에 맞는 이벤트를 통과 또는 제거합니다. |
+| `AddProperty` | `addProperties` | 이벤트에 필드를 추가합니다. |
+| `RemoveProperty` | `removeProperties` | 이벤트에서 필드를 제거합니다. |
 
 ## 출력 어댑터
 
-| Type | 설명 |
-| --- | --- |
-| `FileOutputAdapter` | 파일 출력 |
-| `HttpOutputAdapter` | HTTP endpoint 전송 |
-| `OpenSearchOutputAdapter` | OpenSearch index 전송 |
-| `KafkaOutputAdapter` | Kafka topic 전송 |
-| `ClickHouseOutputAdapter` | ClickHouse HTTP endpoint에 이벤트 저장 |
-| `DebugOutputAdapter` | 로그/디버그 출력 |
+| Type | Alias | 필수 설정 | 설명 |
+| --- | --- | --- | --- |
+| `ConsoleOutputAdapter` | `console` | 없음 | 서버 로그/콘솔로 출력합니다. |
+| `TcpOutputAdapter` | `tcp` | `host`, `port` | TCP로 이벤트를 전송합니다. |
+| `HttpOutputAdapter` | `http` | `url` | HTTP `POST`, `PUT`, `PATCH`로 이벤트를 전송합니다. |
+| `KafkaOutputAdapter` | `kafka` | `bootstrapservers`, `topicid` | Kafka topic으로 produce합니다. |
+| `OpenSearchOutputAdapter` | `opensearch` | `url`, `index` | OpenSearch/Elasticsearch index에 전송합니다. |
+| `RabbitMQAdapter` | `rabbitmq` | `host`, `exchange`, `routingkey` | RabbitMQ exchange로 publish합니다. |
+| `MariaDbOutputAdapter` | `mariadb` | `configParams.jdbcUrl`, `usernameEnv`, `passwordEnv` | Castrelyx event row를 MariaDB에 batch insert합니다. |
+| `ClickHouseOutputAdapter` | `clickhouse` | `configParams.endpointUrl`, `tableName` | ClickHouse HTTP API로 JSONEachRow batch insert합니다. |
+| `BenchmarkAdapter` | `benchmark` | 없음 | 성능 측정용 출력입니다. |
 
-### ClickHouseOutputAdapter
+### MariaDB 출력
 
-`ClickHouseOutputAdapter`는 `LogEvent.toOutputMap()` 결과를 `event_json` 문자열로 저장하고, 조회에 자주 쓰는 `agent_id`, `tenant_id`, `source_id`, `item_kind`, `item_type`, `item_key`를 별도 컬럼으로 함께 전송합니다. ClickHouse HTTP API를 사용하므로 별도 JDBC 드라이버가 필요하지 않습니다.
-
-예시:
+`MariaDbOutputAdapter`는 `event_json` JSON 컬럼에 `LogEvent.toOutputJson()` 결과를 저장하고, 조회에 자주 쓰는 `agent_id`, `tenant_id`, `source_id`, `item_kind`, `item_type`, `item_key`를 별도 컬럼으로 저장합니다.
 
 ```json
 {
-  "type": "ClickHouseOutputAdapter",
-  "messagetype": "castrelyx-agent-item",
-  "enabled": true,
-  "configParams": "{\"endpointUrl\":\"http://clickhouse:8123\",\"database\":\"default\",\"tableName\":\"castrelyx_agent_events\",\"usernameEnv\":\"CLICKHOUSE_USER\",\"passwordEnv\":\"CLICKHOUSE_PASSWORD\",\"batchSize\":100,\"flushIntervalMs\":5000,\"autoCreateSchema\":true}"
+  "jdbcUrl": "jdbc:mariadb://mariadb:3306/castrelyx",
+  "usernameEnv": "CASTRELYX_DB_USER",
+  "passwordEnv": "CASTRELYX_DB_PASSWORD",
+  "tableName": "castrelyx_agent_events",
+  "batchSize": 100,
+  "flushIntervalMs": 5000,
+  "autoCreateSchema": true
 }
 ```
 
-`usernameEnv`, `passwordEnv`는 선택 사항입니다. 둘 다 지정하면 Basic 인증 헤더로 전송하고, 지정하지 않으면 인증 없이 요청합니다. `autoCreateSchema=true`이면 `MergeTree` 기반 기본 테이블을 생성합니다.
+`tableName` 기본값은 `castrelyx_agent_events`이며 영문, 숫자, underscore만 허용합니다. `autoCreateSchema=true`이면 다음 형태의 table을 생성합니다.
+
+```sql
+create table if not exists castrelyx_agent_events (
+  id bigint primary key auto_increment,
+  received_at timestamp not null default current_timestamp,
+  agent_id varchar(255) not null,
+  tenant_id varchar(255),
+  source_id varchar(255) not null,
+  item_kind varchar(100),
+  item_type varchar(255),
+  item_key varchar(500),
+  event_json json not null
+);
+```
+
+### ClickHouse 출력
+
+`ClickHouseOutputAdapter`는 ClickHouse HTTP API에 `FORMAT JSONEachRow`로 batch insert합니다.
+
+```json
+{
+  "endpointUrl": "http://clickhouse:8123",
+  "database": "castrelyx",
+  "tableName": "castrelyx_agent_events",
+  "usernameEnv": "CLICKHOUSE_USER",
+  "passwordEnv": "CLICKHOUSE_PASSWORD",
+  "batchSize": 100,
+  "flushIntervalMs": 5000,
+  "autoCreateSchema": true
+}
+```
+
+`database` 기본값은 `default`, `tableName` 기본값은 `castrelyx_agent_events`입니다. `usernameEnv`와 `passwordEnv`는 함께 지정해야 하며, 둘 다 없으면 인증 없이 요청합니다.
 
 ## REST API 요약
 
 | Method | Path | 설명 |
 | --- | --- | --- |
-| `GET` | `/api/v1/input-adapters` | 입력 어댑터 목록 조회 |
-| `POST` | `/api/v1/input-adapters` | 입력 어댑터 생성 |
-| `PUT` | `/api/v1/input-adapters/{id}` | 입력 어댑터 수정 |
-| `DELETE` | `/api/v1/input-adapters/{id}` | 입력 어댑터 삭제 |
-| `GET` | `/api/v1/parsers` | 파서 목록 조회 |
-| `POST` | `/api/v1/parsers` | 파서 생성 |
-| `GET` | `/api/v1/output-adapters` | 출력 어댑터 목록 조회 |
-| `POST` | `/api/v1/output-adapters` | 출력 어댑터 생성 |
-| `GET` | `/api/v1/config-metadata` | UI/API 설정 메타데이터 조회 |
+| `GET/POST` | `/api/v1/input-adapters` | 입력 어댑터 목록/생성 |
+| `GET/PUT/DELETE` | `/api/v1/input-adapters/{id}` | 입력 어댑터 조회/수정/삭제 |
+| `GET/POST` | `/api/v1/parsers` | parser 목록/생성 |
+| `GET/PUT/DELETE` | `/api/v1/parsers/{id}` | parser 조회/수정/삭제 |
+| `GET/POST` | `/api/v1/transforms` | transform 목록/생성 |
+| `GET/PUT/DELETE` | `/api/v1/transforms/{id}` | transform 조회/수정/삭제 |
+| `GET/POST` | `/api/v1/output-adapters` | 출력 어댑터 목록/생성 |
+| `GET/PUT/DELETE` | `/api/v1/output-adapters/{id}` | 출력 어댑터 조회/수정/삭제 |
+| `GET` | `/api/v1/metadata/*` | adapter/parser/transform 타입과 schema 조회 |
+| `POST` | `/api/v1/validate/*` | 개별 설정 또는 pipeline 검증 |
+| `POST` | `/api/v1/pipeline/reload` | 런타임 파이프라인 재적재 |
+| `GET` | `/api/v1/pipeline/status` | 파이프라인 상태 조회 |
+| `GET` | `/api/v1/docs/content?path=...` | 허용된 문서 텍스트 조회 |
+| `GET` | `/api/v1/docs/raw?path=...` | 허용된 문서/이미지 raw 조회 |
 
-상세 요청/응답 필드는 각 configuration model과 `ConfigMetadataService`의 schema 정의를 기준으로 합니다.
+## 설정 저장소와 migration
 
-## 런타임 데이터와 설정
-
-SQLite 설정 DB는 기본적으로 사용자 홈 아래에 생성됩니다.
+기본 SQLite 설정 DB 경로는 다음과 같습니다.
 
 ```text
 ${user.home}/logparser/data/config.db
 ```
 
-Flyway migration은 `src/main/resources/db/migration`에서 관리합니다. 새 adapter type이나 DB 제약을 추가하면 기존 DB에도 적용될 migration을 함께 작성해야 합니다.
+Flyway migration은 `src/main/resources/db/migration`에서 관리합니다. 새 adapter type이나 alias를 추가하면 초기 schema와 기존 DB용 migration을 모두 확인해야 합니다. 현재 입력 trigger는 TLS 계열 input alias를 포함하고, 출력 trigger는 MariaDB와 ClickHouse alias를 포함합니다.
 
-## 개발 시 주의사항
+## 운영 주의
 
-- 생성 산출물과 런타임 DB를 커밋하지 않습니다.
-- 입력 어댑터는 `close()`에서 socket, scheduler, executor 같은 리소스를 정리해야 합니다.
-- 새 설정 필드를 추가하면 저장, 로드, 검증, metadata, README를 함께 갱신합니다.
-- 네트워크 수집 기능은 timeout, retry, queue size를 명시적으로 제한합니다.
-- 완료 전 `.\gradlew test`로 회귀를 확인합니다.
-
-## 라이선스
-
-프로젝트 라이선스는 저장소의 라이선스 파일 또는 배포 정책을 따릅니다.
+- `configParams`는 adapter별 JSON이며, 일부 구현은 secret 값을 그대로 저장할 수 있습니다.
+- MariaDB와 ClickHouse 출력 인증은 환경 변수 참조만 지원합니다.
+- TLS key/trust store password는 직접 값 또는 `*PasswordEnv`를 지원하지만, 운영에서는 env 참조를 권장합니다.
+- SNMP community, RabbitMQ password처럼 직접 입력하는 secret은 DB 접근 권한과 백업 정책으로 보호해야 합니다.
+- 네트워크 입력은 timeout, queue size, worker count를 운영 부하에 맞춰 조정해야 합니다.

@@ -38,6 +38,9 @@ public class TcpInputAdapter extends InputAdapter {
 	private static final Logger LOGGER = LoggerFactory.getLogger( TcpInputAdapter.class );
 	private ServerSocket serverSocket;
 	private int port = 0;
+	private final InputAdapterConfig adapterConfig;
+	private final ServerSocketProvider serverSocketProvider;
+	private final String adapterLabel;
 	private ExecutorService clientHandlerPool;
 	private final AtomicInteger activeConnections = new AtomicInteger(0);
 	private static final int MAX_CLIENTS = 100;  // 최대 동시 클라이언트 수
@@ -47,12 +50,24 @@ public class TcpInputAdapter extends InputAdapter {
 	private int retryCount = 0;
 	private static final int MAX_RETRIES = 3;
 	private final AtomicBoolean terminated = new AtomicBoolean(false);
+
+	@FunctionalInterface
+	protected interface ServerSocketProvider {
+		ServerSocket create(InputAdapterConfig config, int port) throws IOException;
+	}
     
 	public TcpInputAdapter(InputAdapterConfig config) throws IOException {
+		this(config, (adapterConfig, port) -> new ServerSocket(port), "TCP");
+	}
+
+	protected TcpInputAdapter(InputAdapterConfig config, ServerSocketProvider serverSocketProvider, String adapterLabel) throws IOException {
 		super(config);
+		this.adapterConfig = config;
+		this.serverSocketProvider = serverSocketProvider;
+		this.adapterLabel = adapterLabel;
 		try {
             if (config.getPort() == null) {
-                throw new IllegalArgumentException("Port is required for TCP Input Adapter");
+                throw new IllegalArgumentException("Port is required for " + adapterLabel + " Input Adapter");
             }
             port = config.getPort();
 
@@ -67,19 +82,19 @@ public class TcpInputAdapter extends InputAdapter {
 
             initServerSocket();
 
-            LOGGER.info("TCP Input Adapter started at port {} with max {} concurrent clients",
-                port, MAX_CLIENTS);
+            LOGGER.info("{} Input Adapter started at port {} with max {} concurrent clients",
+                adapterLabel, port, MAX_CLIENTS);
         } catch (IOException e) {
-            LOGGER.error("Failed to initialize TCP Input Adapter: {}", e.getMessage(), e);
+            LOGGER.error("Failed to initialize {} Input Adapter: {}", adapterLabel, e.getMessage(), e);
             throw e;
         }
 	}
 
 	private void initServerSocket() throws IOException {
-		serverSocket = new ServerSocket(port);
+		serverSocket = serverSocketProvider.create(adapterConfig, port);
 		serverSocket.setReuseAddress(true);
 		serverSocket.setSoTimeout(50);  // 50ms 타임아웃 (논블로킹 모드)
-		LOGGER.debug("ServerSocket initialized on port {} with 50ms timeout", port);
+		LOGGER.debug("{} ServerSocket initialized on port {} with 50ms timeout", adapterLabel, port);
 	}
 
 	@Override
@@ -120,14 +135,14 @@ public class TcpInputAdapter extends InputAdapter {
             // 타임아웃은 정상 - 계속 진행
         } catch(SocketException e) {
             if (terminated.get() || serverSocket == null || serverSocket.isClosed()) {
-                LOGGER.debug("TCP input adapter is closed, skipping socket retry");
+                LOGGER.debug("{} input adapter is closed, skipping socket retry", adapterLabel);
                 return null;
             }
 
             retryCount++;
 
             if (retryCount >= MAX_RETRIES) {
-                LOGGER.error("TcpInputAdapter failed after {} retries. Terminating adapter.", MAX_RETRIES);
+                LOGGER.error("{} Input Adapter failed after {} retries. Terminating adapter.", adapterLabel, MAX_RETRIES);
                 terminated.set(true);
                 try {
                     close();
@@ -236,7 +251,7 @@ public class TcpInputAdapter extends InputAdapter {
 	@Override
 	public void close() throws IOException {
 		terminated.set(true);
-		LOGGER.info("Closing TCP Input Adapter on port {}", port);
+		LOGGER.info("Closing {} Input Adapter on port {}", adapterLabel, port);
 
 		// 1. ServerSocket 닫기 (새 연결 거부)
 		if (serverSocket != null && !serverSocket.isClosed()) {
@@ -271,6 +286,6 @@ public class TcpInputAdapter extends InputAdapter {
 			}
 		}
 
-		LOGGER.info("TCP Input Adapter closed. Final active connections: {}", activeConnections.get());
+		LOGGER.info("{} Input Adapter closed. Final active connections: {}", adapterLabel, activeConnections.get());
 	}
 }

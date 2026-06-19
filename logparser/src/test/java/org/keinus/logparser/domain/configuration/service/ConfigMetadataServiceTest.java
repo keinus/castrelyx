@@ -15,8 +15,11 @@ class ConfigMetadataServiceTest {
         List<ConfigMetadataService.AdapterTypeInfo> types = service.getInputAdapterTypes();
         assertFalse(types.isEmpty());
         assertTrue(types.stream().anyMatch(t -> t.type().equals("TcpInputAdapter")));
+        assertTrue(types.stream().anyMatch(t -> t.type().equals("TlsTcpInputAdapter")));
+        assertTrue(types.stream().anyMatch(t -> t.type().equals("HttpsInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("SnmpInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("RabbitMqInputAdapter")));
+        assertTrue(types.stream().anyMatch(t -> t.type().equals("TlsRabbitMqInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("TcpMtlsGzipInputAdapter")));
     }
 
@@ -49,12 +52,26 @@ class ConfigMetadataServiceTest {
         assertFalse(schema.fields().isEmpty());
         assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("port")));
 
+        schema = service.getInputAdapterSchema("TlsTcpInputAdapter");
+        assertEquals("TlsTcpInputAdapter", schema.type());
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("port") && f.required()));
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
+
+        schema = service.getInputAdapterSchema("HttpsInputAdapter");
+        assertEquals("HttpsInputAdapter", schema.type());
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("port") && f.required()));
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
+
         schema = service.getInputAdapterSchema("SnmpInputAdapter");
         assertEquals("SnmpInputAdapter", schema.type());
         assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
 
         schema = service.getInputAdapterSchema("RabbitMqInputAdapter");
         assertEquals("RabbitMqInputAdapter", schema.type());
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
+
+        schema = service.getInputAdapterSchema("TlsRabbitMqInputAdapter");
+        assertEquals("TlsRabbitMqInputAdapter", schema.type());
         assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
 
         schema = service.getInputAdapterSchema("TcpMtlsGzipInputAdapter");

@@ -90,6 +90,29 @@ class RabbitMqInputAdapterTest {
         assertTrue(client.closed);
     }
 
+    @Test
+    void tlsRabbitMqInputAdapterUsesRabbitMqPollingFlow() throws Exception {
+        InputAdapterConfig config = rabbitMqConfig("""
+                {
+                  "queue": "logs.input",
+                  "hostnameVerification": true
+                }
+                """);
+        config.setType("TlsRabbitMqInputAdapter");
+        FakeRabbitMqClient client = new FakeRabbitMqClient(
+                List.of(new RabbitMqInputAdapter.RabbitMqMessage("tls-rabbit-msg", "rabbit.local", 77L))
+        );
+
+        TlsRabbitMqInputAdapter adapter = new TlsRabbitMqInputAdapter(config, client);
+
+        LogEvent event = adapter.run();
+
+        assertNotNull(event);
+        assertEquals("tls-rabbit-msg", event.getOriginalText());
+        assertEquals(List.of(false), client.autoAckRequests);
+        assertEquals(List.of(77L), client.ackedDeliveryTags);
+    }
+
     private InputAdapterConfig rabbitMqConfig(String configParams) {
         InputAdapterConfig config = new InputAdapterConfig();
         config.setId(10L);

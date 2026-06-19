@@ -145,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_output_adapters_messagetype ON output_adapters(me
 CREATE TRIGGER IF NOT EXISTS validate_input_adapter_type
 BEFORE INSERT ON input_adapters
 FOR EACH ROW
-WHEN NEW.type NOT IN ('TcpInputAdapter', 'UdpInputAdapter', 'HttpInputAdapter', 'KafkaInputAdapter', 'SnmpInputAdapter', 'RabbitMqInputAdapter', 'FileInputAdapter', 'FakeInputAdapter', 'tcp', 'udp', 'http', 'kafka', 'snmp', 'rabbitmq', 'file', 'fake')
+WHEN NEW.type NOT IN ('TcpInputAdapter', 'TlsTcpInputAdapter', 'UdpInputAdapter', 'HttpInputAdapter', 'HttpsInputAdapter', 'KafkaInputAdapter', 'SnmpInputAdapter', 'RabbitMqInputAdapter', 'TlsRabbitMqInputAdapter', 'TcpMtlsGzipInputAdapter', 'FileInputAdapter', 'FakeInputAdapter', 'tcp', 'tls_tcp', 'tlstcp', 'udp', 'http', 'https', 'kafka', 'snmp', 'rabbitmq', 'tls_rabbitmq', 'tlsrabbitmq', 'tcp_mtls_gzip', 'file', 'fake')
 BEGIN
     SELECT RAISE(ABORT, 'Invalid input adapter type');
 END;
@@ -172,7 +172,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS validate_output_adapter_type
 BEFORE INSERT ON output_adapters
 FOR EACH ROW
-WHEN NEW.type NOT IN ('ConsoleOutputAdapter', 'TcpOutputAdapter', 'HttpOutputAdapter', 'KafkaOutputAdapter', 'OpenSearchOutputAdapter', 'RabbitMQAdapter', 'BenchmarkAdapter', 'console', 'tcp', 'http', 'kafka', 'opensearch', 'rabbitmq', 'benchmark')
+WHEN NEW.type NOT IN ('ConsoleOutputAdapter', 'TcpOutputAdapter', 'HttpOutputAdapter', 'KafkaOutputAdapter', 'OpenSearchOutputAdapter', 'RabbitMQAdapter', 'MariaDbOutputAdapter', 'ClickHouseOutputAdapter', 'BenchmarkAdapter', 'console', 'tcp', 'http', 'kafka', 'opensearch', 'rabbitmq', 'mariadb', 'clickhouse', 'benchmark')
 BEGIN
     SELECT RAISE(ABORT, 'Invalid output adapter type');
 END;

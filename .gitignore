@@ -13,12 +13,18 @@ output/
 logparser/src/main/java/org/keinus/logparser/domain/output/**
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/
 logparser/src/main/java/org/keinus/logparser/domain/output/model/**
+!logparser/src/main/java/org/keinus/logparser/domain/output/model/MariaDbOutputAdapter.java
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/ClickHouseOutputAdapter.java
+!logparser/src/main/java/org/keinus/logparser/domain/output/service/
+!logparser/src/main/java/org/keinus/logparser/domain/output/service/OutputFactory.java
 !logparser/src/test/java/org/keinus/logparser/domain/output/
 logparser/src/test/java/org/keinus/logparser/domain/output/**
 !logparser/src/test/java/org/keinus/logparser/domain/output/model/
 logparser/src/test/java/org/keinus/logparser/domain/output/model/**
+!logparser/src/test/java/org/keinus/logparser/domain/output/model/MariaDbOutputAdapterTest.java
 !logparser/src/test/java/org/keinus/logparser/domain/output/model/ClickHouseOutputAdapterTest.java
+!logparser/src/test/java/org/keinus/logparser/domain/output/service/
+!logparser/src/test/java/org/keinus/logparser/domain/output/service/OutputFactoryTest.java
 data/
 dlq/
 

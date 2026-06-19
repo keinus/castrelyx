@@ -23,7 +23,16 @@ public class OutputAdapterConfig {
         "RabbitMQAdapter",
         "MariaDbOutputAdapter",
         "ClickHouseOutputAdapter",
-        "BenchmarkAdapter"
+        "BenchmarkAdapter",
+        "console",
+        "tcp",
+        "http",
+        "kafka",
+        "opensearch",
+        "rabbitmq",
+        "mariadb",
+        "clickhouse",
+        "benchmark"
     })
     @Description("출력 어댑터의 타입")
     private String type;
@@ -172,41 +181,48 @@ public class OutputAdapterConfig {
 
         switch (type) {
             case "HttpOutputAdapter":
+            case "http":
                 if (url == null || url.trim().isEmpty()) {
-                    throw new IllegalArgumentException("HttpOutputAdapter requires 'url' field");
+                    throw new IllegalArgumentException(type + " requires 'url' field");
                 }
                 break;
             case "TcpOutputAdapter":
+            case "tcp":
                 if (port == null || host == null) {
-                    throw new IllegalArgumentException("TcpOutputAdapter requires 'port' and 'host' fields");
+                    throw new IllegalArgumentException(type + " requires 'port' and 'host' fields");
                 }
                 break;
             case "KafkaOutputAdapter":
+            case "kafka":
                 if (topicid == null || bootstrapservers == null) {
-                    throw new IllegalArgumentException("KafkaOutputAdapter requires 'topicid' and 'bootstrapservers' fields");
+                    throw new IllegalArgumentException(type + " requires 'topicid' and 'bootstrapservers' fields");
                 }
                 break;
             case "OpenSearchOutputAdapter":
+            case "opensearch":
                 if (url == null || url.trim().isEmpty()) {
-                    throw new IllegalArgumentException("OpenSearchOutputAdapter requires 'url' field");
+                    throw new IllegalArgumentException(type + " requires 'url' field");
                 }
                 if (index == null || index.trim().isEmpty()) {
-                    throw new IllegalArgumentException("OpenSearchOutputAdapter requires 'index' field");
+                    throw new IllegalArgumentException(type + " requires 'index' field");
                 }
                 break;
             case "RabbitMQAdapter":
+            case "rabbitmq":
                 if (host == null || routingkey == null || exchange == null) {
-                    throw new IllegalArgumentException("RabbitMQAdapter requires 'host', 'routingkey', and 'exchange' fields");
+                    throw new IllegalArgumentException(type + " requires 'host', 'routingkey', and 'exchange' fields");
                 }
                 break;
             case "MariaDbOutputAdapter":
+            case "mariadb":
                 if (configParams == null || configParams.trim().isEmpty()) {
-                    throw new IllegalArgumentException("MariaDbOutputAdapter requires 'configParams' field");
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }
                 break;
             case "ClickHouseOutputAdapter":
+            case "clickhouse":
                 if (configParams == null || configParams.trim().isEmpty()) {
-                    throw new IllegalArgumentException("ClickHouseOutputAdapter requires 'configParams' field");
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }
                 break;
         }

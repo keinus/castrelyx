@@ -64,6 +64,43 @@ class InputAdapterConfigTest {
     }
 
     @Test
+    void testHttpsInputAdapterValidation() {
+        InputAdapterConfig config = new InputAdapterConfig();
+        config.setType("HttpsInputAdapter");
+
+        assertThrows(IllegalArgumentException.class, config::validate);
+
+        config.setPort(9443);
+        assertThrows(IllegalArgumentException.class, config::validate);
+
+        config.setConfigParams("{\"keyStorePath\":\"/app/certs/logparser-server.p12\",\"keyStorePasswordEnv\":\"LOGPARSER_KEYSTORE_PASSWORD\"}");
+        assertDoesNotThrow(config::validate);
+    }
+
+    @Test
+    void testTlsTcpInputAdapterValidation() {
+        InputAdapterConfig config = new InputAdapterConfig();
+        config.setType("TlsTcpInputAdapter");
+
+        assertThrows(IllegalArgumentException.class, config::validate);
+
+        config.setPort(6514);
+        config.setConfigParams("{\"keyStorePath\":\"/app/certs/logparser-server.p12\",\"keyStorePasswordEnv\":\"LOGPARSER_KEYSTORE_PASSWORD\"}");
+        assertDoesNotThrow(config::validate);
+    }
+
+    @Test
+    void testTlsRabbitMqInputAdapterValidation() {
+        InputAdapterConfig config = new InputAdapterConfig();
+        config.setType("TlsRabbitMqInputAdapter");
+
+        assertThrows(IllegalArgumentException.class, config::validate);
+
+        config.setConfigParams("{\"queue\":\"logs.input\",\"hostnameVerification\":true}");
+        assertDoesNotThrow(config::validate);
+    }
+
+    @Test
     void testTcpMtlsGzipInputAdapterValidation() {
         InputAdapterConfig config = new InputAdapterConfig();
         config.setType("TcpMtlsGzipInputAdapter");

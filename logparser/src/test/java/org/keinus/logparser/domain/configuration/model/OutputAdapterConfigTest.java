@@ -83,6 +83,9 @@ class OutputAdapterConfigTest {
                 {"jdbcUrl":"jdbc:mariadb://mariadb:3306/castrelyx","usernameEnv":"CASTRELYX_DB_USER","passwordEnv":"CASTRELYX_DB_PASSWORD","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"autoCreateSchema":true}
                 """);
         assertDoesNotThrow(config::validate);
+
+        config.setType("mariadb");
+        assertDoesNotThrow(config::validate);
     }
 
     @Test

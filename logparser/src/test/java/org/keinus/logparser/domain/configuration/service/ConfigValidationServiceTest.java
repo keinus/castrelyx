@@ -170,6 +170,91 @@ class ConfigValidationServiceTest {
     }
 
     @Test
+    void tlsServerInputAdaptersRequirePortAndKeyStoreConfig() {
+        InputAdapterEntity missingParams = InputAdapterEntity.builder()
+                .type("HttpsInputAdapter")
+                .messagetype("https-logs")
+                .port(9443)
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult missingParamsResult =
+                configValidationService.validateInputAdapter(missingParams);
+
+        assertFalse(missingParamsResult.isValid());
+        assertTrue(missingParamsResult.errors().stream().anyMatch(error -> error.contains("configParams")));
+
+        InputAdapterEntity missingKeyStore = InputAdapterEntity.builder()
+                .type("TlsTcpInputAdapter")
+                .messagetype("tls-tcp-logs")
+                .port(6514)
+                .configParams("{}")
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult missingKeyStoreResult =
+                configValidationService.validateInputAdapter(missingKeyStore);
+
+        assertFalse(missingKeyStoreResult.isValid());
+        assertTrue(missingKeyStoreResult.errors().stream().anyMatch(error -> error.contains("keyStorePath")));
+
+        InputAdapterEntity valid = InputAdapterEntity.builder()
+                .type("TlsTcpInputAdapter")
+                .messagetype("tls-tcp-logs")
+                .port(6514)
+                .configParams("""
+                        {"keyStorePath":"/app/certs/logparser-server.p12","keyStorePasswordEnv":"LOGPARSER_KEYSTORE_PASSWORD","clientAuth":"none"}
+                        """)
+                .enabled(true)
+                .build();
+
+        assertTrue(configValidationService.validateInputAdapter(valid).isValid());
+    }
+
+    @Test
+    void tlsRabbitMqInputAdapterDefaultsToTlsAndRequiresQueue() {
+        InputAdapterEntity missingQueue = InputAdapterEntity.builder()
+                .type("TlsRabbitMqInputAdapter")
+                .messagetype("rabbit-tls-logs")
+                .host("rabbit.local")
+                .port(5671)
+                .configParams("{\"tlsEnabled\":true}")
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult missingQueueResult =
+                configValidationService.validateInputAdapter(missingQueue);
+
+        assertFalse(missingQueueResult.isValid());
+        assertTrue(missingQueueResult.errors().stream().anyMatch(error -> error.contains("queue")));
+
+        InputAdapterEntity tlsDisabled = InputAdapterEntity.builder()
+                .type("TlsRabbitMqInputAdapter")
+                .messagetype("rabbit-tls-logs")
+                .host("rabbit.local")
+                .port(5671)
+                .configParams("{\"queue\":\"logs.input\",\"tlsEnabled\":false}")
+                .enabled(true)
+                .build();
+
+        ConfigValidationService.ValidationResult tlsDisabledResult =
+                configValidationService.validateInputAdapter(tlsDisabled);
+
+        assertFalse(tlsDisabledResult.isValid());
+        assertTrue(tlsDisabledResult.errors().stream().anyMatch(error -> error.contains("tlsEnabled")));
+
+        InputAdapterEntity valid = InputAdapterEntity.builder()
+                .type("TlsRabbitMqInputAdapter")
+                .messagetype("rabbit-tls-logs")
+                .host("rabbit.local")
+                .configParams("{\"queue\":\"logs.input\",\"hostnameVerification\":true}")
+                .enabled(true)
+                .build();
+
+        assertTrue(configValidationService.validateInputAdapter(valid).isValid());
+    }
+
+    @Test
     void tcpMtlsGzipInputAdapterRequiresPortAndTlsConfigParams() {
         InputAdapterEntity missingPort = InputAdapterEntity.builder()
                 .type("TcpMtlsGzipInputAdapter")
@@ -235,6 +320,17 @@ class ConfigValidationServiceTest {
                 .build();
 
         assertTrue(configValidationService.validateOutputAdapter(valid).isValid());
+
+        OutputAdapterEntity defaultTableName = OutputAdapterEntity.builder()
+                .type("mariadb")
+                .messagetype("castrelyx-agent-item")
+                .configParams("""
+                        {"jdbcUrl":"jdbc:mariadb://mariadb:3306/castrelyx","usernameEnv":"CASTRELYX_DB_USER","passwordEnv":"CASTRELYX_DB_PASSWORD"}
+                        """)
+                .enabled(true)
+                .build();
+
+        assertTrue(configValidationService.validateOutputAdapter(defaultTableName).isValid());
     }
 
     @Test

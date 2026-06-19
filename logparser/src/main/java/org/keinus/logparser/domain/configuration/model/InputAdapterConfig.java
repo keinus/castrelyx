@@ -16,13 +16,30 @@ public class InputAdapterConfig {
     @Choice(values = {
         "FileInputAdapter",
         "TcpInputAdapter",
+        "TlsTcpInputAdapter",
         "UdpInputAdapter",
         "HttpInputAdapter",
+        "HttpsInputAdapter",
         "KafkaInputAdapter",
         "SnmpInputAdapter",
         "RabbitMqInputAdapter",
+        "TlsRabbitMqInputAdapter",
         "TcpMtlsGzipInputAdapter",
-        "FakeInputAdapter"
+        "FakeInputAdapter",
+        "file",
+        "tcp",
+        "tls_tcp",
+        "tlstcp",
+        "udp",
+        "http",
+        "https",
+        "kafka",
+        "snmp",
+        "rabbitmq",
+        "tls_rabbitmq",
+        "tlsrabbitmq",
+        "tcp_mtls_gzip",
+        "fake"
     })
     @Description("입력 어댑터의 타입")
     private String type;
@@ -34,12 +51,12 @@ public class InputAdapterConfig {
     // === Network 관련 설정 ===
 
     @Range(min = 1, max = 65535)
-    @AdapterSpecific(adapters = {"TcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "RabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
+    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
     @Description("네트워크 포트 번호")
     private Integer port;
 
     @Default("0.0.0.0")
-    @AdapterSpecific(adapters = {"TcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "RabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
+    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
     @Description("바인딩할 호스트 주소")
     private String host;
 
@@ -73,12 +90,12 @@ public class InputAdapterConfig {
 
     @Choice(values = {"json", "plain", "multipart"})
     @Default("plain")
-    @AdapterSpecific(adapters = {"HttpInputAdapter"})
+    @AdapterSpecific(adapters = {"HttpInputAdapter", "HttpsInputAdapter"})
     @Description("HTTP 요청 본문의 인코딩 방식")
     private String codec;
 
     @Default("/")
-    @AdapterSpecific(adapters = {"HttpInputAdapter"})
+    @AdapterSpecific(adapters = {"HttpInputAdapter", "HttpsInputAdapter"})
     @Description("HTTP 엔드포인트 경로")
     private String path_pattern;
 
@@ -110,7 +127,7 @@ public class InputAdapterConfig {
     @Description("내부 큐 최대 크기")
     private Integer queueSize;
 
-    @AdapterSpecific(adapters = {"SnmpInputAdapter", "RabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
+    @AdapterSpecific(adapters = {"SnmpInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter", "HttpsInputAdapter", "TlsTcpInputAdapter"})
     @Description("Adapter-specific JSON configuration")
     private String configParams;
 
@@ -120,41 +137,65 @@ public class InputAdapterConfig {
     public void validate() {
         switch (type) {
             case "FileInputAdapter":
+            case "file":
                 if (path == null || path.trim().isEmpty()) {
-                    throw new IllegalArgumentException("FileInputAdapter requires 'path' field");
+                    throw new IllegalArgumentException(type + " requires 'path' field");
                 }
                 break;
             case "TcpInputAdapter":
+            case "tcp":
             case "UdpInputAdapter":
+            case "udp":
             case "HttpInputAdapter":
+            case "http":
                 if (port == null) {
                     throw new IllegalArgumentException(type + " requires 'port' field");
                 }
                 break;
             case "KafkaInputAdapter":
+            case "kafka":
                 if (topicid == null || bootstrapservers == null) {
-                    throw new IllegalArgumentException("KafkaInputAdapter requires 'topicid' and 'bootstrapservers' fields");
+                    throw new IllegalArgumentException(type + " requires 'topicid' and 'bootstrapservers' fields");
                 }
                 break;
             case "SnmpInputAdapter":
+            case "snmp":
                 if (configParams == null || configParams.trim().isEmpty()) {
-                    throw new IllegalArgumentException("SnmpInputAdapter requires 'configParams' field");
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }
                 break;
             case "RabbitMqInputAdapter":
+            case "TlsRabbitMqInputAdapter":
+            case "rabbitmq":
+            case "tls_rabbitmq":
+            case "tlsrabbitmq":
                 if (configParams == null || configParams.trim().isEmpty()) {
-                    throw new IllegalArgumentException("RabbitMqInputAdapter requires 'configParams' field");
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
+                }
+                break;
+            case "TlsTcpInputAdapter":
+            case "HttpsInputAdapter":
+            case "tls_tcp":
+            case "tlstcp":
+            case "https":
+                if (port == null) {
+                    throw new IllegalArgumentException(type + " requires 'port' field");
+                }
+                if (configParams == null || configParams.trim().isEmpty()) {
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }
                 break;
             case "TcpMtlsGzipInputAdapter":
+            case "tcp_mtls_gzip":
                 if (port == null) {
-                    throw new IllegalArgumentException("TcpMtlsGzipInputAdapter requires 'port' field");
+                    throw new IllegalArgumentException(type + " requires 'port' field");
                 }
                 if (configParams == null || configParams.trim().isEmpty()) {
-                    throw new IllegalArgumentException("TcpMtlsGzipInputAdapter requires 'configParams' field");
+                    throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }
                 break;
             case "FakeInputAdapter":
+            case "fake":
                 break;
         }
     }

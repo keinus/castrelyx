@@ -8,6 +8,8 @@ import java.nio.charset.UnsupportedCharsetException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import javax.net.ssl.SSLContext;
+
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.model.LogEvent;
 
@@ -40,8 +42,8 @@ public class RabbitMqInputAdapter extends InputAdapter {
         super(config);
         this.rabbitMqConfig = RabbitMqConfig.from(config);
         this.client = client != null ? client : new RabbitMqJavaClient(rabbitMqConfig);
-        log.info("RabbitMQ Input Adapter initialized for queue {} at {}:{}",
-                rabbitMqConfig.queue(), rabbitMqConfig.host(), rabbitMqConfig.port());
+        log.info("RabbitMQ Input Adapter initialized for queue {} at {}:{} tls={}",
+                rabbitMqConfig.queue(), rabbitMqConfig.host(), rabbitMqConfig.port(), rabbitMqConfig.tlsEnabled());
     }
 
     @Override
@@ -104,15 +106,22 @@ public class RabbitMqInputAdapter extends InputAdapter {
             boolean bindQueue,
             int prefetchCount,
             int timeoutMs,
-            Charset charset
+            Charset charset,
+            boolean tlsEnabled,
+            boolean hostnameVerification,
+            JsonNode tlsConfig
     ) {
         static RabbitMqConfig from(InputAdapterConfig config) throws IOException {
             JsonNode root = readRoot(config.getConfigParams());
+            boolean tlsAdapter = "TlsRabbitMqInputAdapter".equals(config.getType())
+                    || "tls_rabbitmq".equalsIgnoreCase(config.getType())
+                    || "tlsrabbitmq".equalsIgnoreCase(config.getType());
+            boolean tlsEnabled = tlsAdapter || bool(root, "tlsEnabled", bool(root, "ssl", false));
 
             String host = firstNonBlank(config.getHost(), text(root, "host", DEFAULT_HOST));
             int port = config.getPort() != null
                     ? config.getPort()
-                    : (int) number(root, "port", number(root, "rmqPort", DEFAULT_PORT));
+                    : (int) number(root, "port", number(root, "rmqPort", tlsEnabled ? 5671 : DEFAULT_PORT));
             String queue = text(root, "queue", text(root, "queueName", null));
             if (queue == null || queue.isBlank()) {
                 throw new IllegalArgumentException("RabbitMqInputAdapter configParams.queue is required");
@@ -143,7 +152,10 @@ public class RabbitMqInputAdapter extends InputAdapter {
                     bindQueue,
                     Math.max(1, (int) number(root, "prefetchCount", DEFAULT_PREFETCH_COUNT)),
                     Math.max(100, timeoutMs),
-                    readCharset(text(root, "charset", StandardCharsets.UTF_8.name()))
+                    readCharset(text(root, "charset", StandardCharsets.UTF_8.name())),
+                    tlsEnabled,
+                    bool(root, "hostnameVerification", true),
+                    root
             );
         }
 
@@ -209,6 +221,13 @@ public class RabbitMqInputAdapter extends InputAdapter {
             factory.setConnectionTimeout(config.timeoutMs());
             factory.setHandshakeTimeout(config.timeoutMs());
             factory.setAutomaticRecoveryEnabled(true);
+            if (config.tlsEnabled()) {
+                SSLContext sslContext = TlsConfigSupport.createClientSslContext(config.tlsConfig(), "RabbitMQ input adapter");
+                factory.useSslProtocol(sslContext);
+                if (config.hostnameVerification()) {
+                    factory.enableHostnameVerification();
+                }
+            }
 
             try {
                 this.connection = factory.newConnection();
