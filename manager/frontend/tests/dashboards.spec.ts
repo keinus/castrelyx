@@ -16,11 +16,14 @@ test('renders overview, traffic, agent, and snmp dashboards', async ({ page }) =
   await expect(page.getByText('CPU threshold exceeded')).toBeVisible();
 
   await page.getByRole('button', { name: 'Traffic' }).click();
-  await expect(page.getByRole('heading', { name: '인터페이스 트래픽' })).toBeVisible();
-  await expect(page.getByText('nas')).toBeVisible();
-  await expect(page.getByText('enp2s0')).toBeVisible();
-  await expect(page.getByRole('cell', { name: '11.66 Kbps' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: '1.20 Mbps' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Traffic', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Interface flows' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Traffic exceed' })).toBeVisible();
+  const flowTable = page.locator('.traffic-flow-table');
+  await expect(flowTable).toContainText('nas');
+  await expect(flowTable).toContainText('enp2s0');
+  await expect(flowTable).toContainText('11.66 Kbps');
+  await expect(flowTable).toContainText('1.20 Mbps');
 
   await page.getByRole('button', { name: 'Agent' }).click();
   await expect(page.getByText('보안 관제')).toBeVisible();
