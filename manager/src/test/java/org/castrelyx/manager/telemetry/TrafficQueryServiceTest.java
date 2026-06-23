@@ -43,6 +43,7 @@ class TrafficQueryServiceTest {
         AssetType.ROUTER,
         "192.168.10.1",
         null,
+        null,
         "active",
         Instant.now(),
         Instant.now()));
@@ -70,15 +71,52 @@ class TrafficQueryServiceTest {
     public List<TrafficQueryService.InterfaceTraffic> queryInterfaceTraffic(String range, String assetUid) {
       this.range = range;
       this.assetUid = assetUid;
-      return List.of(new TrafficQueryService.InterfaceTraffic(
-          "edge-router",
-          "eth0",
-          1_200_000.0,
-          900_000.0,
-          12.4,
-          0,
-          0,
-          "up"));
+      return List.of(
+          new TrafficQueryService.InterfaceTraffic(
+              "edge-router",
+              "eth0",
+              1_200_000.0,
+              900_000.0,
+              12.4,
+              0,
+              0,
+              "up"),
+          new TrafficQueryService.InterfaceTraffic(
+              "edge-router",
+              "lo",
+              10_000_000.0,
+              10_000_000.0,
+              0,
+              0,
+              0,
+              "up"),
+          new TrafficQueryService.InterfaceTraffic(
+              "edge-router",
+              "veth9a7c",
+              10_000_000.0,
+              10_000_000.0,
+              0,
+              0,
+              0,
+              "up"),
+          new TrafficQueryService.InterfaceTraffic(
+              "edge-router",
+              "docker0",
+              10_000_000.0,
+              10_000_000.0,
+              0,
+              0,
+              0,
+              "up"),
+          new TrafficQueryService.InterfaceTraffic(
+              "edge-router",
+              "br-2fde3c3c1f2d",
+              10_000_000.0,
+              10_000_000.0,
+              0,
+              0,
+              0,
+              "up"));
     }
   }
 }

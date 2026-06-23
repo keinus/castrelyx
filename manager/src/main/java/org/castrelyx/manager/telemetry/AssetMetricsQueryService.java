@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.castrelyx.manager.asset.Asset;
 import org.castrelyx.manager.asset.AssetService;
+import org.castrelyx.manager.telemetry.ClickHouseClient.DiskIo;
 import org.castrelyx.manager.telemetry.ClickHouseClient.MetricSample;
 import org.castrelyx.manager.telemetry.TrafficQueryService.InterfaceTraffic;
 import org.springframework.stereotype.Service;
@@ -32,8 +33,11 @@ public class AssetMetricsQueryService {
     for (MetricSample sample : clickHouseClient.queryLatestMetricSamples(range, null)) {
       builder(builders, sample.assetUid()).addSample(sample);
     }
-    for (InterfaceTraffic row : clickHouseClient.queryInterfaceTraffic(range, null)) {
+    for (InterfaceTraffic row : TrafficInterfaceFilter.visibleTrafficRows(clickHouseClient.queryInterfaceTraffic(range, null))) {
       builder(builders, row.assetUid()).interfaces.add(row);
+    }
+    for (DiskIo row : clickHouseClient.queryDiskIo(range, null)) {
+      builder(builders, row.assetUid()).diskIos.add(row);
     }
     applyAgentContext(builders, clickHouseClient.queryAgentDashboard(null));
     List<Map<String, Object>> rows = builders.values().stream()
@@ -54,8 +58,11 @@ public class AssetMetricsQueryService {
     for (MetricSample sample : clickHouseClient.queryLatestMetricSamples(range, assetUid)) {
       selected.addSample(sample);
     }
-    for (InterfaceTraffic row : clickHouseClient.queryInterfaceTraffic(range, assetUid)) {
+    for (InterfaceTraffic row : TrafficInterfaceFilter.visibleTrafficRows(clickHouseClient.queryInterfaceTraffic(range, assetUid))) {
       selected.interfaces.add(row);
+    }
+    for (DiskIo row : clickHouseClient.queryDiskIo(range, assetUid)) {
+      selected.diskIos.add(row);
     }
     applyAgentContext(builders, clickHouseClient.queryAgentDashboard(assetUid));
 
@@ -66,6 +73,7 @@ public class AssetMetricsQueryService {
     response.put("asset", selected.toOverviewRow());
     response.put("series", series(seriesSamples));
     response.put("disks", selected.diskRows());
+    response.put("diskIo", selected.diskIoRows());
     response.put("interfaces", selected.interfaces.stream()
         .sorted(Comparator.comparingDouble((InterfaceTraffic row) -> row.inBps() + row.outBps()).reversed())
         .toList());
@@ -150,6 +158,11 @@ public class AssetMetricsQueryService {
       if (metric.get("diskUsagePct") instanceof Number diskUsage) {
         metrics.put("maxDiskUsagePct", Math.max(number(metrics.get("maxDiskUsagePct")), diskUsage.doubleValue()));
       }
+      if (metric.get("diskIoUtilizationPct") instanceof Number diskIo) {
+        metrics.put("maxDiskIoUtilizationPct", Math.max(number(metrics.get("maxDiskIoUtilizationPct")), diskIo.doubleValue()));
+      }
+      addNumeric(metrics, "networkInBps", metric.get("networkInBps"));
+      addNumeric(metrics, "networkOutBps", metric.get("networkOutBps"));
     }
     Map<String, Object> summary = new LinkedHashMap<>();
     summary.put("totalAssets", rows.size());
@@ -160,6 +173,9 @@ public class AssetMetricsQueryService {
     summary.put("avgCpuUsagePct", average(metrics.get("cpuTotal"), metrics.get("cpuCount")));
     summary.put("avgMemoryUsagePct", average(metrics.get("memoryTotal"), metrics.get("memoryCount")));
     summary.put("maxDiskUsagePct", metrics.getOrDefault("maxDiskUsagePct", null));
+    summary.put("maxDiskIoUtilizationPct", metrics.getOrDefault("maxDiskIoUtilizationPct", null));
+    summary.put("totalNetworkInBps", number(metrics.get("networkInBps")));
+    summary.put("totalNetworkOutBps", number(metrics.get("networkOutBps")));
     return summary;
   }
 
@@ -181,6 +197,7 @@ public class AssetMetricsQueryService {
     rows.put("disk", diskSeries(samples));
     rows.put("load", loadSeries(samples));
     rows.put("network", networkSeries(samples));
+    rows.put("diskIo", diskIoSeries(samples));
     return rows;
   }
 
@@ -250,6 +267,7 @@ public class AssetMetricsQueryService {
     Map<Instant, Map<String, Object>> points = new LinkedHashMap<>();
     for (MetricSample sample : samples.stream()
         .filter(AssetMetricsQueryService::isNetworkCounter)
+        .filter(TrafficInterfaceFilter::isVisibleNetworkSample)
         .sorted(Comparator.comparing(MetricSample::observedAt))
         .toList()) {
       String key = sample.metricName() + "::" + Optional.ofNullable(sample.interfaceName()).orElse("");
@@ -278,9 +296,99 @@ public class AssetMetricsQueryService {
     return new ArrayList<>(points.values());
   }
 
+  private static List<Map<String, Object>> diskIoSeries(List<MetricSample> samples) {
+    Map<Instant, Map<String, Object>> points = new LinkedHashMap<>();
+    boolean hasDirect = samples.stream().anyMatch(AssetMetricsQueryService::isDirectDiskIoMetric);
+    if (hasDirect) {
+      for (MetricSample sample : samples.stream()
+          .filter(AssetMetricsQueryService::isDirectDiskIoMetric)
+          .sorted(Comparator.comparing(MetricSample::observedAt))
+          .toList()) {
+        Map<String, Object> point = diskIoPoint(points, sample.observedAt());
+        switch (sample.metricName()) {
+          case "host.disk.read_bps" -> mergeNumber(point, "readBps", sample.value());
+          case "host.disk.write_bps" -> mergeNumber(point, "writeBps", sample.value());
+          case "host.disk.read_iops" -> mergeNumber(point, "readIops", sample.value());
+          case "host.disk.write_iops" -> mergeNumber(point, "writeIops", sample.value());
+          case "host.disk.io_utilization_pct" -> maxNumber(point, "utilizationPct", sample.value());
+          default -> {
+          }
+        }
+      }
+      return new ArrayList<>(points.values());
+    }
+
+    Map<String, MetricSample> previousByKey = new HashMap<>();
+    for (MetricSample sample : samples.stream()
+        .filter(AssetMetricsQueryService::isDiskIoCounter)
+        .sorted(Comparator.comparing(MetricSample::observedAt))
+        .toList()) {
+      String key = sample.metricName() + "::" + Optional.ofNullable(sample.deviceName()).orElse("");
+      MetricSample previous = previousByKey.put(key, sample);
+      if (previous == null) {
+        continue;
+      }
+      long elapsed = Duration.between(previous.observedAt(), sample.observedAt()).toSeconds();
+      if (elapsed <= 0 || sample.value() < previous.value()) {
+        continue;
+      }
+      double delta = sample.value() - previous.value();
+      Map<String, Object> point = diskIoPoint(points, sample.observedAt());
+      switch (sample.metricName()) {
+        case "host.disk.read_bytes" -> mergeNumber(point, "readBps", delta / elapsed);
+        case "host.disk.write_bytes" -> mergeNumber(point, "writeBps", delta / elapsed);
+        case "host.disk.read_ops" -> mergeNumber(point, "readIops", delta / elapsed);
+        case "host.disk.write_ops" -> mergeNumber(point, "writeIops", delta / elapsed);
+        case "host.disk.io_time_ms" -> maxNumber(point, "utilizationPct", Math.min(100, Math.max(0, delta / elapsed / 10)));
+        default -> {
+        }
+      }
+    }
+    return new ArrayList<>(points.values());
+  }
+
+  private static Map<String, Object> diskIoPoint(Map<Instant, Map<String, Object>> points, Instant observedAt) {
+    return points.computeIfAbsent(observedAt, at -> {
+      Map<String, Object> created = new LinkedHashMap<>();
+      created.put("timestamp", at.toString());
+      created.put("readBps", 0.0);
+      created.put("writeBps", 0.0);
+      created.put("readIops", 0.0);
+      created.put("writeIops", 0.0);
+      created.put("utilizationPct", 0.0);
+      return created;
+    });
+  }
+
+  private static void mergeNumber(Map<String, Object> point, String key, double value) {
+    point.put(key, number(point.get(key)) + value);
+  }
+
+  private static void maxNumber(Map<String, Object> point, String key, double value) {
+    point.put(key, Math.max(number(point.get(key)), value));
+  }
+
   private static boolean isNetworkCounter(MetricSample sample) {
     return List.of("host.network.rx_bytes", "host.network.tx_bytes", "interface.in.bytes", "interface.out.bytes")
         .contains(sample.metricName());
+  }
+
+  private static boolean isDirectDiskIoMetric(MetricSample sample) {
+    return List.of(
+        "host.disk.read_bps",
+        "host.disk.write_bps",
+        "host.disk.read_iops",
+        "host.disk.write_iops",
+        "host.disk.io_utilization_pct").contains(sample.metricName());
+  }
+
+  private static boolean isDiskIoCounter(MetricSample sample) {
+    return List.of(
+        "host.disk.read_bytes",
+        "host.disk.write_bytes",
+        "host.disk.read_ops",
+        "host.disk.write_ops",
+        "host.disk.io_time_ms").contains(sample.metricName());
   }
 
   private static boolean isIngress(String metricName) {
@@ -371,6 +479,7 @@ public class AssetMetricsQueryService {
     private final Asset asset;
     private final List<MetricSample> samples = new ArrayList<>();
     private final List<InterfaceTraffic> interfaces = new ArrayList<>();
+    private final List<DiskIo> diskIos = new ArrayList<>();
     private final List<Map<String, Object>> sockets = new ArrayList<>();
     private final List<Map<String, Object>> services = new ArrayList<>();
     private final List<Map<String, Object>> firewalls = new ArrayList<>();
@@ -401,10 +510,13 @@ public class AssetMetricsQueryService {
       Map<String, Object> row = new LinkedHashMap<>();
       Map<String, Object> metrics = metricsRow();
       String health = health(metrics);
+      row.put("id", asset == null ? null : asset.id());
       row.put("assetUid", assetUid);
       row.put("name", asset == null ? assetUid : asset.name());
       row.put("assetType", asset == null ? "OBSERVED" : asset.assetType().name());
       row.put("managementIp", asset == null ? null : asset.managementIp());
+      row.put("location", asset == null ? null : asset.location());
+      row.put("description", asset == null ? null : asset.description());
       row.put("status", asset == null ? "observed" : asset.status());
       row.put("lastSeenAt", lastSeenAt == null ? null : lastSeenAt.toString());
       row.put("stale", isStale());
@@ -446,6 +558,14 @@ public class AssetMetricsQueryService {
       double inBps = interfaces.stream().mapToDouble(InterfaceTraffic::inBps).sum();
       double outBps = interfaces.stream().mapToDouble(InterfaceTraffic::outBps).sum();
       long interfaceErrors = interfaces.stream().mapToLong(row -> row.errors() + row.discards()).sum();
+      double diskReadBps = diskIos.stream().mapToDouble(DiskIo::readBps).sum();
+      double diskWriteBps = diskIos.stream().mapToDouble(DiskIo::writeBps).sum();
+      double diskReadIops = diskIos.stream().mapToDouble(DiskIo::readIops).sum();
+      double diskWriteIops = diskIos.stream().mapToDouble(DiskIo::writeIops).sum();
+      Double diskIoUtilization = diskIos.stream()
+          .map(DiskIo::utilizationPct)
+          .max(Double::compareTo)
+          .orElse(null);
 
       metrics.put("cpuUsagePct", cpuUsage);
       metrics.put("memoryUsagePct", memoryUsage);
@@ -460,18 +580,24 @@ public class AssetMetricsQueryService {
       metrics.put("networkInBps", inBps);
       metrics.put("networkOutBps", outBps);
       metrics.put("interfaceErrorCount", interfaceErrors);
+      metrics.put("diskReadBps", diskReadBps);
+      metrics.put("diskWriteBps", diskWriteBps);
+      metrics.put("diskReadIops", diskReadIops);
+      metrics.put("diskWriteIops", diskWriteIops);
+      metrics.put("diskIoUtilizationPct", diskIoUtilization);
       return metrics;
     }
 
     private Map<String, Object> sourcesRow() {
       Map<String, Object> sources = new LinkedHashMap<>();
       sources.put("registered", asset != null);
-      sources.put("agent", agentSeen || samples.stream().anyMatch(sample -> "AGENT".equalsIgnoreCase(readLabel(sample, "source_type"))));
-      sources.put("snmp", interfaces.stream().anyMatch(row -> row.assetUid().equals(assetUid)));
+      sources.put("agent", agentSeen || samples.stream().anyMatch(sample -> "AGENT".equalsIgnoreCase(sample.sourceType())));
+      sources.put("snmp", samples.stream().anyMatch(sample -> "SNMP".equalsIgnoreCase(sample.sourceType())));
       sources.put("traffic", !interfaces.isEmpty());
+      sources.put("diskIo", !diskIos.isEmpty());
       sources.put("security", !sockets.isEmpty() || !services.isEmpty() || !firewalls.isEmpty() || !events.isEmpty());
       sources.put("observed", Boolean.TRUE.equals(sources.get("agent")) || Boolean.TRUE.equals(sources.get("traffic"))
-          || Boolean.TRUE.equals(sources.get("security")) || !samples.isEmpty());
+          || Boolean.TRUE.equals(sources.get("diskIo")) || Boolean.TRUE.equals(sources.get("security")) || !samples.isEmpty());
       return sources;
     }
 
@@ -487,6 +613,7 @@ public class AssetMetricsQueryService {
 
     private List<Map<String, Object>> diskRows() {
       Map<String, Map<String, Object>> rows = new LinkedHashMap<>();
+      Map<String, String> rowKeyByDevice = new HashMap<>();
       for (MetricSample sample : samples) {
         if (!sample.metricName().startsWith("host.disk.")) {
           continue;
@@ -498,6 +625,10 @@ public class AssetMetricsQueryService {
           created.put("filesystem", readLabel(sample, "filesystem"));
           return created;
         });
+        if (sample.deviceName() != null && !sample.deviceName().isBlank()) {
+          row.put("device", sample.deviceName());
+          rowKeyByDevice.put(sample.deviceName(), mount);
+        }
         switch (sample.metricName()) {
           case "host.disk.total_bytes" -> row.put("totalBytes", sample.value());
           case "host.disk.used_bytes" -> row.put("usedBytes", sample.value());
@@ -507,7 +638,41 @@ public class AssetMetricsQueryService {
           }
         }
       }
+      for (DiskIo diskIo : diskIos) {
+        String key = diskIo.deviceName() == null || diskIo.deviceName().isBlank()
+            ? "unknown"
+            : rowKeyByDevice.getOrDefault(diskIo.deviceName(), "device:" + diskIo.deviceName());
+        Map<String, Object> row = rows.computeIfAbsent(key, rowKey -> {
+          Map<String, Object> created = new LinkedHashMap<>();
+          created.put("mountPoint", null);
+          created.put("filesystem", null);
+          created.put("device", diskIo.deviceName());
+          return created;
+        });
+        row.put("device", diskIo.deviceName());
+        row.put("readBps", diskIo.readBps());
+        row.put("writeBps", diskIo.writeBps());
+        row.put("readIops", diskIo.readIops());
+        row.put("writeIops", diskIo.writeIops());
+        row.put("ioUtilizationPct", diskIo.utilizationPct());
+      }
       return new ArrayList<>(rows.values());
+    }
+
+    private List<Map<String, Object>> diskIoRows() {
+      return diskIos.stream()
+          .map(row -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("assetUid", row.assetUid());
+            item.put("device", row.deviceName());
+            item.put("readBps", row.readBps());
+            item.put("writeBps", row.writeBps());
+            item.put("readIops", row.readIops());
+            item.put("writeIops", row.writeIops());
+            item.put("ioUtilizationPct", row.utilizationPct());
+            return item;
+          })
+          .toList();
     }
 
     private List<Map<String, Object>> topProcesses() {
@@ -521,15 +686,16 @@ public class AssetMetricsQueryService {
       double cpu = number(metrics.get("cpuUsagePct"));
       double memory = number(metrics.get("memoryUsagePct"));
       double disk = number(metrics.get("diskUsagePct"));
+      double diskIo = number(metrics.get("diskIoUtilizationPct"));
       double normalizedLoad = number(metrics.get("normalizedLoadPct"));
       double interfaceErrors = number(metrics.get("interfaceErrorCount"));
-      if (cpu >= 90 || memory >= 90 || disk >= 90 || normalizedLoad >= 150 || hasCriticalEvent()) {
+      if (cpu >= 90 || memory >= 90 || disk >= 90 || diskIo >= 90 || normalizedLoad >= 150 || hasCriticalEvent()) {
         return "critical";
       }
-      if (cpu >= 80 || memory >= 80 || disk >= 80 || normalizedLoad >= 100 || interfaceErrors > 0 || isStale()) {
+      if (cpu >= 80 || memory >= 80 || disk >= 80 || diskIo >= 80 || normalizedLoad >= 100 || interfaceErrors > 0 || isStale()) {
         return "warning";
       }
-      if (!samples.isEmpty() || agentSeen || !interfaces.isEmpty()) {
+      if (!samples.isEmpty() || agentSeen || !interfaces.isEmpty() || !diskIos.isEmpty()) {
         return "healthy";
       }
       return "unknown";

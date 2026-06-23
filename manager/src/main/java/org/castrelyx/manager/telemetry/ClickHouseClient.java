@@ -101,8 +101,22 @@ public class ClickHouseClient {
     for (TrafficQueryService.InterfaceTraffic row : queryCanonicalInterfaceTraffic(rangeInterval, assetUid)) {
       rows.putIfAbsent(interfaceKey(row), row);
     }
-    return rows.values().stream()
+    return TrafficInterfaceFilter.visibleTrafficRows(rows.values()).stream()
         .sorted(Comparator.comparingDouble((TrafficQueryService.InterfaceTraffic row) -> row.inBps() + row.outBps()).reversed())
+        .toList();
+  }
+
+  public List<DiskIo> queryDiskIo(String range, String assetUid) {
+    String rangeInterval = rangeInterval(range);
+    Map<String, DiskIo> rows = new LinkedHashMap<>();
+    for (DiskIo row : queryRawAgentDiskIo(rangeInterval, assetUid)) {
+      rows.put(diskIoKey(row), row);
+    }
+    for (DiskIo row : queryCanonicalDiskIo(rangeInterval, assetUid)) {
+      rows.putIfAbsent(diskIoKey(row), row);
+    }
+    return rows.values().stream()
+        .sorted(Comparator.comparingDouble((DiskIo row) -> row.readBps() + row.writeBps()).reversed())
         .toList();
   }
 
@@ -141,19 +155,23 @@ public class ClickHouseClient {
     String sql = """
         SELECT
           asset_uid,
+          source_type,
           metric_name,
           value,
           unit,
           interface_name,
           mount_point,
+          device_name,
           labels_payload_json AS labels_json,
           latest_observed_at AS observed_at
         FROM (
           SELECT
             asset_uid,
+            source_type,
             metric_name,
             JSONExtractString(labels_json, 'interface') AS interface_name,
             JSONExtractString(labels_json, 'mount_point') AS mount_point,
+            JSONExtractString(labels_json, 'device') AS device_name,
             argMax(metric_value, observed_at) AS value,
             argMax(unit, observed_at) AS unit,
             argMax(labels_json, observed_at) AS labels_payload_json,
@@ -163,7 +181,7 @@ public class ClickHouseClient {
             AND asset_uid != ''
             %s
             %s
-          GROUP BY asset_uid, metric_name, interface_name, mount_point
+          GROUP BY asset_uid, source_type, metric_name, interface_name, mount_point, device_name
         )
         ORDER BY latest_observed_at DESC
         LIMIT 4000
@@ -178,11 +196,13 @@ public class ClickHouseClient {
     String sql = """
         SELECT
           source_id AS asset_uid,
+          'AGENT' AS source_type,
           if(metric_name_payload = '', item_key, metric_name_payload) AS metric_name,
           value,
           unit,
           interface_name,
           mount_point,
+          device_name,
           labels_json,
           observed_at
         FROM (
@@ -194,6 +214,7 @@ public class ClickHouseClient {
             argMax(JSONExtractString(payload_json, 'unit'), received_at) AS unit,
             argMax(JSONExtractString(payload_json, 'interface'), received_at) AS interface_name,
             argMax(JSONExtractString(payload_json, 'mount_point'), received_at) AS mount_point,
+            argMax(JSONExtractString(payload_json, 'device'), received_at) AS device_name,
             argMax(payload_json, received_at) AS labels_json,
             max(received_at) AS observed_at
           FROM (
@@ -225,21 +246,25 @@ public class ClickHouseClient {
     String sql = """
         SELECT
           asset_uid,
+          source_type,
           metric_name,
           value,
           unit,
           interface_name,
           mount_point,
+          device_name,
           labels_payload_json AS labels_json,
           bucket_at AS observed_at
         FROM (
           SELECT
             asset_uid,
+            source_type,
             metric_name,
             avg(metric_value) AS value,
             any(unit) AS unit,
             JSONExtractString(labels_json, 'interface') AS interface_name,
             JSONExtractString(labels_json, 'mount_point') AS mount_point,
+            JSONExtractString(labels_json, 'device') AS device_name,
             any(labels_json) AS labels_payload_json,
             toStartOfInterval(observed_at, %s) AS bucket_at
           FROM %s
@@ -247,7 +272,7 @@ public class ClickHouseClient {
             AND asset_uid != ''
             %s
             %s
-          GROUP BY bucket_at, asset_uid, metric_name, interface_name, mount_point
+          GROUP BY bucket_at, asset_uid, source_type, metric_name, interface_name, mount_point, device_name
         )
         ORDER BY observed_at ASC
         LIMIT 8000
@@ -262,11 +287,13 @@ public class ClickHouseClient {
     String sql = """
         SELECT
           source_id AS asset_uid,
+          'AGENT' AS source_type,
           if(metric_name_payload = '', item_key, metric_name_payload) AS metric_name,
           avg(value) AS value,
           any(unit) AS unit,
           interface_name,
           mount_point,
+          device_name,
           any(labels_json) AS labels_json,
           bucket AS observed_at
         FROM (
@@ -279,6 +306,7 @@ public class ClickHouseClient {
             JSONExtractString(payload_json, 'unit') AS unit,
             JSONExtractString(payload_json, 'interface') AS interface_name,
             JSONExtractString(payload_json, 'mount_point') AS mount_point,
+            JSONExtractString(payload_json, 'device') AS device_name,
             payload_json AS labels_json
           FROM (
             SELECT
@@ -295,7 +323,7 @@ public class ClickHouseClient {
           )
         )
         WHERE metric_name_payload != '' OR item_key != ''
-        GROUP BY bucket, source_id, item_key, metric_name_payload, interface_name, mount_point
+        GROUP BY bucket, source_id, item_key, metric_name_payload, interface_name, mount_point, device_name
         ORDER BY observed_at ASC
         LIMIT 8000
         FORMAT JSONEachRow
@@ -342,13 +370,14 @@ public class ClickHouseClient {
           WHERE observed_at >= now() - %s
             AND JSONExtractString(labels_json, 'interface') != ''
             %s
+            %s
           GROUP BY asset_uid, interface_name
         )
         WHERE in_bps > 0 OR out_bps > 0 OR errors > 0 OR discards > 0
         ORDER BY in_bps + out_bps DESC
         LIMIT 200
         FORMAT JSONEachRow
-        """.formatted(table, rangeInterval, assetFilter);
+        """.formatted(table, rangeInterval, assetFilter, TrafficInterfaceFilter.sqlVisibleInterfacePredicate("JSONExtractString(labels_json, 'interface')"));
     return queryInterfaceTrafficRows(sql);
   }
 
@@ -419,6 +448,7 @@ public class ClickHouseClient {
             )
             WHERE interface_name != ''
               AND direction != ''
+              %s
             GROUP BY source_id, interface_name, direction
           )
         )
@@ -427,8 +457,171 @@ public class ClickHouseClient {
         ORDER BY in_bps + out_bps DESC
         LIMIT 200
         FORMAT JSONEachRow
-        """.formatted(table, rangeInterval, assetFilter);
+        """.formatted(table, rangeInterval, assetFilter, TrafficInterfaceFilter.sqlVisibleInterfacePredicate("interface_name"));
     return queryInterfaceTrafficRows(sql);
+  }
+
+  private List<DiskIo> queryCanonicalDiskIo(String rangeInterval, String assetUid) {
+    String table = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
+    String sql = """
+        SELECT
+          asset_uid,
+          device_name,
+          if(read_latest_bps > 0, read_latest_bps, read_counter_bps) AS read_bps,
+          if(write_latest_bps > 0, write_latest_bps, write_counter_bps) AS write_bps,
+          if(read_latest_iops > 0, read_latest_iops, read_counter_iops) AS read_iops,
+          if(write_latest_iops > 0, write_latest_iops, write_counter_iops) AS write_iops,
+          least(100, if(io_latest_pct > 0, io_latest_pct, io_counter_pct)) AS utilization_pct
+        FROM (
+          SELECT
+            asset_uid,
+            JSONExtractString(labels_json, 'device') AS device_name,
+            argMaxIf(metric_value, observed_at, metric_name = 'host.disk.read_bps') AS read_latest_bps,
+            argMaxIf(metric_value, observed_at, metric_name = 'host.disk.write_bps') AS write_latest_bps,
+            argMaxIf(metric_value, observed_at, metric_name = 'host.disk.read_iops') AS read_latest_iops,
+            argMaxIf(metric_value, observed_at, metric_name = 'host.disk.write_iops') AS write_latest_iops,
+            argMaxIf(metric_value, observed_at, metric_name = 'host.disk.io_utilization_pct') AS io_latest_pct,
+            if(
+              dateDiff('second', minIf(observed_at, metric_name = 'host.disk.read_bytes'), maxIf(observed_at, metric_name = 'host.disk.read_bytes')) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'host.disk.read_bytes') - argMinIf(metric_value, observed_at, metric_name = 'host.disk.read_bytes'))
+                / dateDiff('second', minIf(observed_at, metric_name = 'host.disk.read_bytes'), maxIf(observed_at, metric_name = 'host.disk.read_bytes'))),
+              0
+            ) AS read_counter_bps,
+            if(
+              dateDiff('second', minIf(observed_at, metric_name = 'host.disk.write_bytes'), maxIf(observed_at, metric_name = 'host.disk.write_bytes')) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'host.disk.write_bytes') - argMinIf(metric_value, observed_at, metric_name = 'host.disk.write_bytes'))
+                / dateDiff('second', minIf(observed_at, metric_name = 'host.disk.write_bytes'), maxIf(observed_at, metric_name = 'host.disk.write_bytes'))),
+              0
+            ) AS write_counter_bps,
+            if(
+              dateDiff('second', minIf(observed_at, metric_name = 'host.disk.read_ops'), maxIf(observed_at, metric_name = 'host.disk.read_ops')) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'host.disk.read_ops') - argMinIf(metric_value, observed_at, metric_name = 'host.disk.read_ops'))
+                / dateDiff('second', minIf(observed_at, metric_name = 'host.disk.read_ops'), maxIf(observed_at, metric_name = 'host.disk.read_ops'))),
+              0
+            ) AS read_counter_iops,
+            if(
+              dateDiff('second', minIf(observed_at, metric_name = 'host.disk.write_ops'), maxIf(observed_at, metric_name = 'host.disk.write_ops')) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'host.disk.write_ops') - argMinIf(metric_value, observed_at, metric_name = 'host.disk.write_ops'))
+                / dateDiff('second', minIf(observed_at, metric_name = 'host.disk.write_ops'), maxIf(observed_at, metric_name = 'host.disk.write_ops'))),
+              0
+            ) AS write_counter_iops,
+            if(
+              dateDiff('second', minIf(observed_at, metric_name = 'host.disk.io_time_ms'), maxIf(observed_at, metric_name = 'host.disk.io_time_ms')) > 0,
+              least(100, greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'host.disk.io_time_ms') - argMinIf(metric_value, observed_at, metric_name = 'host.disk.io_time_ms'))
+                / dateDiff('second', minIf(observed_at, metric_name = 'host.disk.io_time_ms'), maxIf(observed_at, metric_name = 'host.disk.io_time_ms')) / 10)),
+              0
+            ) AS io_counter_pct
+          FROM %s
+          WHERE observed_at >= now() - %s
+            AND JSONExtractString(labels_json, 'device') != ''
+            %s
+          GROUP BY asset_uid, device_name
+        )
+        WHERE read_bps > 0 OR write_bps > 0 OR read_iops > 0 OR write_iops > 0 OR utilization_pct > 0
+        ORDER BY read_bps + write_bps DESC
+        LIMIT 500
+        FORMAT JSONEachRow
+        """.formatted(table, rangeInterval, assetFilter);
+    return queryDiskIoRows(sql);
+  }
+
+  private List<DiskIo> queryRawAgentDiskIo(String rangeInterval, String assetUid) {
+    String table = tableReference(properties.clickhouse().database(), properties.clickhouse().rawTable());
+    String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND source_id = " + sqlString(assetUid);
+    String sql = """
+        SELECT
+          asset_uid,
+          device_name,
+          if(read_latest_bps > 0, read_latest_bps, read_counter_bps) AS read_bps,
+          if(write_latest_bps > 0, write_latest_bps, write_counter_bps) AS write_bps,
+          if(read_latest_iops > 0, read_latest_iops, read_counter_iops) AS read_iops,
+          if(write_latest_iops > 0, write_latest_iops, write_counter_iops) AS write_iops,
+          least(100, if(io_latest_pct > 0, io_latest_pct, io_counter_pct)) AS utilization_pct
+        FROM (
+          SELECT
+            asset_uid,
+            device_name,
+            argMaxIf(value, received_at, metric_name = 'host.disk.read_bps') AS read_latest_bps,
+            argMaxIf(value, received_at, metric_name = 'host.disk.write_bps') AS write_latest_bps,
+            argMaxIf(value, received_at, metric_name = 'host.disk.read_iops') AS read_latest_iops,
+            argMaxIf(value, received_at, metric_name = 'host.disk.write_iops') AS write_latest_iops,
+            argMaxIf(value, received_at, metric_name = 'host.disk.io_utilization_pct') AS io_latest_pct,
+            if(
+              dateDiff('second', minIf(received_at, metric_name = 'host.disk.read_bytes'), maxIf(received_at, metric_name = 'host.disk.read_bytes')) > 0,
+              greatest(0, (argMaxIf(value, received_at, metric_name = 'host.disk.read_bytes') - argMinIf(value, received_at, metric_name = 'host.disk.read_bytes'))
+                / dateDiff('second', minIf(received_at, metric_name = 'host.disk.read_bytes'), maxIf(received_at, metric_name = 'host.disk.read_bytes'))),
+              0
+            ) AS read_counter_bps,
+            if(
+              dateDiff('second', minIf(received_at, metric_name = 'host.disk.write_bytes'), maxIf(received_at, metric_name = 'host.disk.write_bytes')) > 0,
+              greatest(0, (argMaxIf(value, received_at, metric_name = 'host.disk.write_bytes') - argMinIf(value, received_at, metric_name = 'host.disk.write_bytes'))
+                / dateDiff('second', minIf(received_at, metric_name = 'host.disk.write_bytes'), maxIf(received_at, metric_name = 'host.disk.write_bytes'))),
+              0
+            ) AS write_counter_bps,
+            if(
+              dateDiff('second', minIf(received_at, metric_name = 'host.disk.read_ops'), maxIf(received_at, metric_name = 'host.disk.read_ops')) > 0,
+              greatest(0, (argMaxIf(value, received_at, metric_name = 'host.disk.read_ops') - argMinIf(value, received_at, metric_name = 'host.disk.read_ops'))
+                / dateDiff('second', minIf(received_at, metric_name = 'host.disk.read_ops'), maxIf(received_at, metric_name = 'host.disk.read_ops'))),
+              0
+            ) AS read_counter_iops,
+            if(
+              dateDiff('second', minIf(received_at, metric_name = 'host.disk.write_ops'), maxIf(received_at, metric_name = 'host.disk.write_ops')) > 0,
+              greatest(0, (argMaxIf(value, received_at, metric_name = 'host.disk.write_ops') - argMinIf(value, received_at, metric_name = 'host.disk.write_ops'))
+                / dateDiff('second', minIf(received_at, metric_name = 'host.disk.write_ops'), maxIf(received_at, metric_name = 'host.disk.write_ops'))),
+              0
+            ) AS write_counter_iops,
+            if(
+              dateDiff('second', minIf(received_at, metric_name = 'host.disk.io_time_ms'), maxIf(received_at, metric_name = 'host.disk.io_time_ms')) > 0,
+              least(100, greatest(0, (argMaxIf(value, received_at, metric_name = 'host.disk.io_time_ms') - argMinIf(value, received_at, metric_name = 'host.disk.io_time_ms'))
+                / dateDiff('second', minIf(received_at, metric_name = 'host.disk.io_time_ms'), maxIf(received_at, metric_name = 'host.disk.io_time_ms')) / 10)),
+              0
+            ) AS io_counter_pct
+          FROM (
+            SELECT
+              received_at,
+              source_id AS asset_uid,
+              if(JSONExtractString(payload_json, 'metric_name') = '', item_key, JSONExtractString(payload_json, 'metric_name')) AS metric_name,
+              JSONExtractString(payload_json, 'device') AS device_name,
+              JSONExtractFloat(payload_json, 'value') AS value
+            FROM (
+              SELECT
+                received_at,
+                source_id,
+                item_key,
+                %s AS payload_json
+              FROM %s
+              WHERE received_at >= now() - %s
+                AND item_kind = 'metric'
+                AND source_id != ''
+                AND startsWith(item_key, 'host.disk.')
+                %s
+            )
+          )
+          WHERE device_name != ''
+          GROUP BY asset_uid, device_name
+        )
+        WHERE read_bps > 0 OR write_bps > 0 OR read_iops > 0 OR write_iops > 0 OR utilization_pct > 0
+        ORDER BY read_bps + write_bps DESC
+        LIMIT 500
+        FORMAT JSONEachRow
+        """.formatted(rawPayloadSql(), table, rangeInterval, assetFilter);
+    return queryDiskIoRows(sql);
+  }
+
+  private List<DiskIo> queryDiskIoRows(String sql) {
+    return queryJsonRows(sql).stream()
+        .map(row -> new DiskIo(
+            stringValue(row.get("asset_uid")),
+            stringValue(row.get("device_name")),
+            doubleValue(row.get("read_bps")),
+            doubleValue(row.get("write_bps")),
+            doubleValue(row.get("read_iops")),
+            doubleValue(row.get("write_iops")),
+            doubleValue(row.get("utilization_pct"))))
+        .filter(row -> row.assetUid() != null && !row.assetUid().isBlank())
+        .filter(row -> row.deviceName() != null && !row.deviceName().isBlank())
+        .toList();
   }
 
   private List<TrafficQueryService.InterfaceTraffic> queryInterfaceTrafficRows(String sql) {
@@ -444,6 +637,7 @@ public class ClickHouseClient {
             "up"))
         .filter(row -> row.assetUid() != null && !row.assetUid().isBlank())
         .filter(row -> row.interfaceName() != null && !row.interfaceName().isBlank())
+        .filter(row -> TrafficInterfaceFilter.isVisibleTrafficInterface(row.interfaceName()))
         .toList();
   }
 
@@ -451,12 +645,14 @@ public class ClickHouseClient {
     return queryJsonRows(sql).stream()
         .map(row -> new MetricSample(
             stringValue(row.get("asset_uid")),
+            stringValue(row.get("source_type")),
             stringValue(row.get("metric_name")),
             doubleValue(row.get("value")),
             stringValue(row.get("unit")),
             parseInstant(stringValue(row.get("observed_at"))),
             stringValue(row.get("interface_name")),
             stringValue(row.get("mount_point")),
+            stringValue(row.get("device_name")),
             stringValue(row.get("labels_json"))))
         .filter(row -> row.assetUid() != null && !row.assetUid().isBlank())
         .filter(row -> row.metricName() != null && !row.metricName().isBlank())
@@ -860,10 +1056,15 @@ public class ClickHouseClient {
     return row.assetUid() + "::" + row.interfaceName();
   }
 
+  private static String diskIoKey(DiskIo row) {
+    return row.assetUid() + "::" + row.deviceName();
+  }
+
   private static String metricSampleKey(MetricSample sample) {
-    return sample.assetUid() + "::" + sample.metricName() + "::"
+    return sample.assetUid() + "::" + sample.sourceType() + "::" + sample.metricName() + "::"
         + (sample.interfaceName() == null ? "" : sample.interfaceName()) + "::"
-        + (sample.mountPoint() == null ? "" : sample.mountPoint());
+        + (sample.mountPoint() == null ? "" : sample.mountPoint()) + "::"
+        + (sample.deviceName() == null ? "" : sample.deviceName());
   }
 
   private static String metricSeriesKey(MetricSample sample) {
@@ -1120,14 +1321,26 @@ public class ClickHouseClient {
       String identityJson) {
   }
 
+  public record DiskIo(
+      String assetUid,
+      String deviceName,
+      double readBps,
+      double writeBps,
+      double readIops,
+      double writeIops,
+      double utilizationPct) {
+  }
+
   public record MetricSample(
       String assetUid,
+      String sourceType,
       String metricName,
       double value,
       String unit,
       Instant observedAt,
       String interfaceName,
       String mountPoint,
+      String deviceName,
       String labelsJson) {
   }
 }

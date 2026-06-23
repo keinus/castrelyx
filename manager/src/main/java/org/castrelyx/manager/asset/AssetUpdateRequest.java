@@ -2,10 +2,8 @@ package org.castrelyx.manager.asset;
 
 import jakarta.validation.constraints.NotBlank;
 
-public record AssetCreateRequest(
+public record AssetUpdateRequest(
     @NotBlank String name,
-    AssetType assetType,
-    String managementIp,
     String location,
     String description) {
 }

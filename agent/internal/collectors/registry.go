@@ -61,12 +61,97 @@ func (identityCollector) Collect(context.Context) ([]envelope.Item, error) {
 		"collector":     "identity",
 		"schema_target": "assets",
 	}
+	if managementIP := detectManagementIP(); managementIP != "" {
+		payload["management_ip"] = managementIP
+		payload["ip_address"] = managementIP
+	}
 	return []envelope.Item{{
 		Kind:    "asset",
 		Type:    "identity",
 		Key:     hostname,
 		Payload: payload,
 	}}, nil
+}
+
+type managementIPCandidate struct {
+	InterfaceName string
+	Flags         net.Flags
+	Address       string
+}
+
+func detectManagementIP() string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	candidates := make([]managementIPCandidate, 0, len(interfaces))
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			candidates = append(candidates, managementIPCandidate{
+				InterfaceName: iface.Name,
+				Flags:         iface.Flags,
+				Address:       addr.String(),
+			})
+		}
+	}
+	return preferredManagementIP(candidates)
+}
+
+func preferredManagementIP(candidates []managementIPCandidate) string {
+	bestScore := -1
+	bestIP := ""
+	for _, candidate := range candidates {
+		if candidate.Flags&net.FlagUp == 0 {
+			continue
+		}
+		ip := parseCandidateIP(candidate.Address)
+		if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
+		name := strings.ToLower(candidate.InterfaceName)
+		if isInternalManagementInterface(name) {
+			continue
+		}
+		score := 10
+		if strings.Contains(name, "external") || strings.Contains(name, "wan") {
+			score += 100
+		}
+		if strings.HasPrefix(name, "eth") || strings.HasPrefix(name, "enp") || strings.HasPrefix(name, "ens") || strings.HasPrefix(name, "eno") {
+			score += 20
+		}
+		if !ip.IsPrivate() {
+			score += 5
+		}
+		if score > bestScore {
+			bestScore = score
+			bestIP = ip.String()
+		}
+	}
+	return bestIP
+}
+
+func parseCandidateIP(address string) net.IP {
+	ip, _, err := net.ParseCIDR(address)
+	if err == nil {
+		return ip
+	}
+	return net.ParseIP(address)
+}
+
+func isInternalManagementInterface(name string) bool {
+	if strings.Contains(name, "external") || strings.Contains(name, "wan") {
+		return false
+	}
+	return name == "lo" ||
+		strings.Contains(name, "loopback") ||
+		strings.HasPrefix(name, "veth") ||
+		strings.HasPrefix(name, "docker") ||
+		strings.HasPrefix(name, "br-") ||
+		strings.HasPrefix(name, "virbr")
 }
 
 type metricCollector struct{}
@@ -134,6 +219,7 @@ func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 
 	items = append(items, collectNetworkTrafficMetricItems()...)
 	items = append(items, collectDiskUsageMetricItems()...)
+	items = append(items, collectDiskIOMetricItems()...)
 
 	return items, nil
 }

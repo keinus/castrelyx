@@ -8,6 +8,7 @@ public record Asset(
     String name,
     AssetType assetType,
     String managementIp,
+    String location,
     String description,
     String status,
     Instant firstSeenAt,

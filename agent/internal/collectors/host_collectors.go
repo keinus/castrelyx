@@ -22,6 +22,10 @@ import (
 
 const commandTimeout = 5 * time.Second
 
+var AgentVersion = "unknown"
+
+var UpdateStatusProvider func() (channel string, status string, lastError string)
+
 type networkInterfaceTraffic struct {
 	Name    string
 	RxBytes uint64
@@ -35,6 +39,20 @@ type mountUsage struct {
 	UsedBytes      uint64
 	AvailableBytes uint64
 	UsedPercent    float64
+}
+
+type diskIOStats struct {
+	Device       string
+	ReadOps      uint64
+	WriteOps     uint64
+	ReadBytes    uint64
+	WriteBytes   uint64
+	IOTimeMillis uint64
+	ReadBps      *float64
+	WriteBps     *float64
+	ReadIops     *float64
+	WriteIops    *float64
+	IOUtilPct    *float64
 }
 
 type cpuTimes struct {
@@ -167,18 +185,28 @@ type agentHealthCollector struct{}
 func (agentHealthCollector) Name() string { return "agent_health" }
 
 func (agentHealthCollector) Collect(context.Context) ([]envelope.Item, error) {
+	updateChannel := ""
+	updateStatus := "unknown"
+	updateLastError := ""
+	if UpdateStatusProvider != nil {
+		updateChannel, updateStatus, updateLastError = UpdateStatusProvider()
+	}
 	return []envelope.Item{{
 		Kind: "event",
 		Type: "health",
 		Key:  "heartbeat",
 		Payload: map[string]any{
-			"status":       "ok",
-			"collector":    "agent_health",
-			"go_version":   runtime.Version(),
-			"os":           runtime.GOOS,
-			"architecture": runtime.GOARCH,
-			"process_id":   os.Getpid(),
-			"observed_at":  time.Now().UTC().Format(time.RFC3339Nano),
+			"status":            "ok",
+			"collector":         "agent_health",
+			"agent_version":     AgentVersion,
+			"go_version":        runtime.Version(),
+			"os":                runtime.GOOS,
+			"architecture":      runtime.GOARCH,
+			"process_id":        os.Getpid(),
+			"update_channel":    updateChannel,
+			"update_status":     updateStatus,
+			"update_last_error": nullIfEmpty(updateLastError),
+			"observed_at":       time.Now().UTC().Format(time.RFC3339Nano),
 		},
 	}}, nil
 }
@@ -222,6 +250,40 @@ func collectDiskUsageMetricItems() []envelope.Item {
 	}
 	if len(mounts) > 0 {
 		items = append(items, metricItem("disk.usage", maxUsedPercent, "percent"))
+	}
+	return items
+}
+
+func collectDiskIOMetricItems() []envelope.Item {
+	stats := collectDiskIOStats()
+	items := make([]envelope.Item, 0, len(stats)*5)
+	for _, stat := range stats {
+		labels := map[string]any{"device": stat.Device}
+		if stat.ReadBps != nil || stat.WriteBps != nil || stat.ReadIops != nil || stat.WriteIops != nil || stat.IOUtilPct != nil {
+			if stat.ReadBps != nil {
+				items = append(items, metricItemWithLabels("host.disk.read_bps", *stat.ReadBps, "Bps", labels))
+			}
+			if stat.WriteBps != nil {
+				items = append(items, metricItemWithLabels("host.disk.write_bps", *stat.WriteBps, "Bps", labels))
+			}
+			if stat.ReadIops != nil {
+				items = append(items, metricItemWithLabels("host.disk.read_iops", *stat.ReadIops, "iops", labels))
+			}
+			if stat.WriteIops != nil {
+				items = append(items, metricItemWithLabels("host.disk.write_iops", *stat.WriteIops, "iops", labels))
+			}
+			if stat.IOUtilPct != nil {
+				items = append(items, metricItemWithLabels("host.disk.io_utilization_pct", *stat.IOUtilPct, "percent", labels))
+			}
+			continue
+		}
+		items = append(items,
+			metricItemWithLabels("host.disk.read_bytes", stat.ReadBytes, "bytes", labels),
+			metricItemWithLabels("host.disk.write_bytes", stat.WriteBytes, "bytes", labels),
+			metricItemWithLabels("host.disk.read_ops", stat.ReadOps, "count", labels),
+			metricItemWithLabels("host.disk.write_ops", stat.WriteOps, "count", labels),
+			metricItemWithLabels("host.disk.io_time_ms", stat.IOTimeMillis, "milliseconds", labels),
+		)
 	}
 	return items
 }
@@ -388,6 +450,9 @@ func metricItemWithLabels(name string, value any, unit string, labels map[string
 	if mountPoint, ok := labels["mount_point"].(string); ok && mountPoint != "" {
 		keyParts = append(keyParts, mountPoint)
 	}
+	if device, ok := labels["device"].(string); ok && device != "" {
+		keyParts = append(keyParts, device)
+	}
 	if direction, ok := labels["direction"].(string); ok && direction != "" {
 		keyParts = append(keyParts, direction)
 	}
@@ -500,6 +565,140 @@ func collectDiskUsage() []mountUsage {
 		}
 		return parseDfOutput(strings.NewReader(out))
 	}
+}
+
+func collectDiskIOStats() []diskIOStats {
+	switch runtime.GOOS {
+	case "linux":
+		f, err := os.Open("/proc/diskstats")
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		return parseProcDiskstats(f)
+	case "windows":
+		return collectWindowsDiskIOStats()
+	default:
+		return nil
+	}
+}
+
+func parseProcDiskstats(r io.Reader) []diskIOStats {
+	scanner := bufio.NewScanner(r)
+	stats := []diskIOStats{}
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 14 {
+			continue
+		}
+		device := fields[2]
+		if !isDiskIODevice(device) {
+			continue
+		}
+		readOps, okReadOps := parseUintField(fields[3])
+		readSectors, okReadSectors := parseUintField(fields[5])
+		writeOps, okWriteOps := parseUintField(fields[7])
+		writeSectors, okWriteSectors := parseUintField(fields[9])
+		ioTimeMillis, okIOTime := parseUintField(fields[12])
+		if !okReadOps || !okReadSectors || !okWriteOps || !okWriteSectors || !okIOTime {
+			continue
+		}
+		stats = append(stats, diskIOStats{
+			Device:       device,
+			ReadOps:      readOps,
+			WriteOps:     writeOps,
+			ReadBytes:    readSectors * 512,
+			WriteBytes:   writeSectors * 512,
+			IOTimeMillis: ioTimeMillis,
+		})
+	}
+	return stats
+}
+
+func collectWindowsDiskIOStats() []diskIOStats {
+	command := `Get-Counter -Counter '\PhysicalDisk(*)\Disk Read Bytes/sec','\PhysicalDisk(*)\Disk Write Bytes/sec','\PhysicalDisk(*)\Disk Reads/sec','\PhysicalDisk(*)\Disk Writes/sec','\PhysicalDisk(*)\% Disk Time' -SampleInterval 1 -MaxSamples 1 | Select-Object -ExpandProperty CounterSamples | Select-Object Path,CookedValue | ConvertTo-Json -Compress`
+	out, err := runPowerShell(command)
+	if err != nil {
+		return nil
+	}
+	rows := decodeJSONObjects(out)
+	byDevice := map[string]*diskIOStats{}
+	for _, row := range rows {
+		path := strings.ToLower(jsonString(row, "Path"))
+		value := jsonFloat(row, "CookedValue")
+		device, counter, ok := parseWindowsPhysicalDiskCounterPath(path)
+		if !ok || device == "_total" {
+			continue
+		}
+		stat := byDevice[device]
+		if stat == nil {
+			stat = &diskIOStats{Device: device}
+			byDevice[device] = stat
+		}
+		switch counter {
+		case "disk read bytes/sec":
+			stat.ReadBps = floatPtr(value)
+		case "disk write bytes/sec":
+			stat.WriteBps = floatPtr(value)
+		case "disk reads/sec":
+			stat.ReadIops = floatPtr(value)
+		case "disk writes/sec":
+			stat.WriteIops = floatPtr(value)
+		case "% disk time":
+			stat.IOUtilPct = floatPtr(value)
+		}
+	}
+	stats := make([]diskIOStats, 0, len(byDevice))
+	for _, stat := range byDevice {
+		stats = append(stats, *stat)
+	}
+	sort.Slice(stats, func(i, j int) bool { return stats[i].Device < stats[j].Device })
+	return stats
+}
+
+func parseWindowsPhysicalDiskCounterPath(path string) (string, string, bool) {
+	start := strings.Index(path, "physicaldisk(")
+	if start < 0 {
+		return "", "", false
+	}
+	start += len("physicaldisk(")
+	end := strings.Index(path[start:], ")")
+	if end < 0 {
+		return "", "", false
+	}
+	device := strings.TrimSpace(path[start : start+end])
+	counter := strings.TrimPrefix(path[start+end+1:], "\\")
+	if device == "" || counter == "" {
+		return "", "", false
+	}
+	return device, counter, true
+}
+
+func isDiskIODevice(device string) bool {
+	if device == "" {
+		return false
+	}
+	excludedPrefixes := []string{"loop", "ram", "sr"}
+	for _, prefix := range excludedPrefixes {
+		if strings.HasPrefix(device, prefix) {
+			return false
+		}
+	}
+	return strings.HasPrefix(device, "sd") ||
+		strings.HasPrefix(device, "vd") ||
+		strings.HasPrefix(device, "xvd") ||
+		strings.HasPrefix(device, "nvme") ||
+		strings.HasPrefix(device, "dm-") ||
+		strings.HasPrefix(device, "hd")
+}
+
+func parseUintField(value string) (uint64, bool) {
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	return parsed, err == nil
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
 }
 
 func parseDfOutput(r io.Reader) []mountUsage {

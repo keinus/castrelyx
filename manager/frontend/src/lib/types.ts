@@ -19,6 +19,7 @@ export type Asset = {
   name: string;
   assetType: string;
   managementIp?: string;
+  location?: string;
   description?: string;
   status: string;
   firstSeenAt?: string;
@@ -57,13 +58,21 @@ export type MetricPoint = {
   value?: number | null;
   inBps?: number | null;
   outBps?: number | null;
+  readBps?: number | null;
+  writeBps?: number | null;
+  readIops?: number | null;
+  writeIops?: number | null;
+  utilizationPct?: number | null;
 };
 
 export type AssetMetricSummary = {
+  id?: number | null;
   assetUid: string;
   name: string;
   assetType: string;
   managementIp?: string | null;
+  location?: string | null;
+  description?: string | null;
   status?: string | null;
   lastSeenAt?: string | null;
   stale?: boolean;
@@ -73,6 +82,7 @@ export type AssetMetricSummary = {
     agent?: boolean;
     snmp?: boolean;
     traffic?: boolean;
+    diskIo?: boolean;
     security?: boolean;
     observed?: boolean;
   };
@@ -90,6 +100,11 @@ export type AssetMetricSummary = {
     networkInBps?: number | null;
     networkOutBps?: number | null;
     interfaceErrorCount?: number | null;
+    diskReadBps?: number | null;
+    diskWriteBps?: number | null;
+    diskReadIops?: number | null;
+    diskWriteIops?: number | null;
+    diskIoUtilizationPct?: number | null;
   };
   security?: {
     openPorts?: number;
@@ -111,6 +126,9 @@ export type AssetMetricsOverview = {
     avgCpuUsagePct?: number | null;
     avgMemoryUsagePct?: number | null;
     maxDiskUsagePct?: number | null;
+    maxDiskIoUtilizationPct?: number | null;
+    totalNetworkInBps?: number | null;
+    totalNetworkOutBps?: number | null;
   };
   assets: AssetMetricSummary[];
 };
@@ -123,6 +141,7 @@ export type AssetMetricDetail = {
     cpu?: MetricPoint[];
     memory?: MetricPoint[];
     disk?: MetricPoint[];
+    diskIo?: MetricPoint[];
     load?: MetricPoint[];
     network?: MetricPoint[];
   };
@@ -133,6 +152,21 @@ export type AssetMetricDetail = {
     usedBytes?: number;
     availableBytes?: number;
     usedPct?: number;
+    device?: string;
+    readBps?: number;
+    writeBps?: number;
+    readIops?: number;
+    writeIops?: number;
+    ioUtilizationPct?: number;
+  }>;
+  diskIo?: Array<{
+    assetUid?: string;
+    device?: string;
+    readBps?: number;
+    writeBps?: number;
+    readIops?: number;
+    writeIops?: number;
+    ioUtilizationPct?: number;
   }>;
   interfaces?: InterfaceTraffic[];
   processes?: AgentProcessState[];
@@ -309,6 +343,41 @@ export type CastrelSignAuditEvent = {
   agentId?: string;
   message?: string;
   createdAt?: string;
+};
+
+export type AgentRelease = {
+  id: number;
+  version: string;
+  os: string;
+  arch: string;
+  channel: string;
+  status: string;
+  sha256: string;
+  sizeBytes: number;
+  createdAt?: string;
+  activatedAt?: string;
+  revokedAt?: string;
+};
+
+export type AgentUpdatePolicy = {
+  policyKey?: string;
+  agentId?: string;
+  enabled: boolean;
+  channel: string;
+  targetVersion?: string;
+  updatedAt?: string;
+};
+
+export type AgentUpdateAttempt = {
+  id?: number;
+  deploymentId: string;
+  agentId: string;
+  releaseId: number;
+  fromVersion?: string;
+  status: string;
+  message?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type LogparserStatus = Record<string, unknown>;

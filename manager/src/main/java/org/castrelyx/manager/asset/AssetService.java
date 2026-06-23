@@ -21,7 +21,7 @@ public class AssetService {
 
   public List<Asset> listAssets() {
     return jdbcTemplate.query("""
-        select id, asset_uid, name, asset_type, management_ip, description, status, first_seen_at, last_seen_at
+        select id, asset_uid, name, asset_type, management_ip, location, description, status, first_seen_at, last_seen_at
         from assets
         order by id desc
         """, AssetService::asset);
@@ -34,18 +34,19 @@ public class AssetService {
     KeyHolder keyHolder = new GeneratedKeyHolder();
     jdbcTemplate.update(connection -> {
       var ps = connection.prepareStatement("""
-          insert into assets(asset_uid, name, asset_type, management_ip, description, status, first_seen_at, last_seen_at, created_at, updated_at)
-          values (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+          insert into assets(asset_uid, name, asset_type, management_ip, location, description, status, first_seen_at, last_seen_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
           """, new String[] {"id"});
       ps.setString(1, assetUid);
-      ps.setString(2, request.name());
+      ps.setString(2, normalizeRequired(request.name()));
       ps.setString(3, type.name());
-      ps.setString(4, request.managementIp());
-      ps.setString(5, request.description());
-      ps.setTimestamp(6, Timestamp.from(now));
+      ps.setString(4, normalizeOptional(request.managementIp()));
+      ps.setString(5, normalizeOptional(request.location()));
+      ps.setString(6, normalizeOptional(request.description()));
       ps.setTimestamp(7, Timestamp.from(now));
       ps.setTimestamp(8, Timestamp.from(now));
       ps.setTimestamp(9, Timestamp.from(now));
+      ps.setTimestamp(10, Timestamp.from(now));
       return ps;
     }, keyHolder);
     return getAsset(keyHolder.getKey().longValue());
@@ -53,10 +54,32 @@ public class AssetService {
 
   public Asset getAsset(long id) {
     return jdbcTemplate.queryForObject("""
-        select id, asset_uid, name, asset_type, management_ip, description, status, first_seen_at, last_seen_at
+        select id, asset_uid, name, asset_type, management_ip, location, description, status, first_seen_at, last_seen_at
         from assets
         where id = ?
         """, AssetService::asset, id);
+  }
+
+  public Asset updateEditableFields(long id, AssetUpdateRequest request) {
+    Instant now = Instant.now();
+    jdbcTemplate.update("""
+        update assets
+        set name = ?, location = ?, description = ?, updated_at = ?
+        where id = ?
+        """,
+        normalizeRequired(request.name()),
+        normalizeOptional(request.location()),
+        normalizeOptional(request.description()),
+        Timestamp.from(now),
+        id);
+    return getAsset(id);
+  }
+
+  public void deleteAsset(long id) {
+    jdbcTemplate.update("update alert_instances set asset_id = null where asset_id = ?", id);
+    jdbcTemplate.update("delete from asset_merge_candidates where primary_asset_id = ? or candidate_asset_id = ?", id, id);
+    jdbcTemplate.update("delete from asset_source_bindings where asset_id = ?", id);
+    jdbcTemplate.update("delete from assets where id = ?", id);
   }
 
   public Asset upsertObservedAsset(String assetUid, String name, AssetType type, String managementIp) {
@@ -182,6 +205,7 @@ public class AssetService {
         rs.getString("name"),
         AssetType.valueOf(rs.getString("asset_type")),
         rs.getString("management_ip"),
+        rs.getString("location"),
         rs.getString("description"),
         rs.getString("status"),
         instant(rs.getTimestamp("first_seen_at")),
@@ -211,5 +235,16 @@ public class AssetService {
 
   private static Instant instant(Timestamp timestamp) {
     return timestamp == null ? null : timestamp.toInstant();
+  }
+
+  private static String normalizeRequired(String value) {
+    return value == null ? null : value.trim();
+  }
+
+  private static String normalizeOptional(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    return value.trim();
   }
 }

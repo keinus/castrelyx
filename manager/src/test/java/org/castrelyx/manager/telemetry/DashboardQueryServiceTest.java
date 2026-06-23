@@ -20,8 +20,8 @@ class DashboardQueryServiceTest {
   void overviewCombinesAssetsTrafficAgentAndSnmpHealth() {
     AssetService assetService = mock(AssetService.class);
     when(assetService.listAssets()).thenReturn(List.of(
-        new Asset(1, "agent-01", "app-01", AssetType.LINUX_SERVER, "10.1.0.10", null, "active", Instant.now(), Instant.now()),
-        new Asset(2, "edge-router", "edge-router", AssetType.ROUTER, "192.168.10.1", null, "active", Instant.now(), Instant.now())));
+        new Asset(1, "agent-01", "app-01", AssetType.LINUX_SERVER, "10.1.0.10", null, null, "active", Instant.now(), Instant.now()),
+        new Asset(2, "edge-router", "edge-router", AssetType.ROUTER, "192.168.10.1", null, null, "active", Instant.now(), Instant.now())));
     DashboardQueryService service = new DashboardQueryService(assetService, new FakeClickHouseClient());
 
     Map<String, Object> overview = service.overview();
@@ -41,6 +41,7 @@ class DashboardQueryServiceTest {
         "app-01",
         AssetType.LINUX_SERVER,
         "10.1.0.10",
+        null,
         null,
         "active",
         Instant.now(),
@@ -69,8 +70,11 @@ class DashboardQueryServiceTest {
 
     @Override
     public List<TrafficQueryService.InterfaceTraffic> queryInterfaceTraffic(String range, String assetUid) {
-      return List.of(new TrafficQueryService.InterfaceTraffic(
-          "edge-router", "eth0", 1_200_000, 900_000, 12.4, 0, 0, "up"));
+      return List.of(
+          new TrafficQueryService.InterfaceTraffic("edge-router", "eth0", 1_200_000, 900_000, 12.4, 0, 0, "up"),
+          new TrafficQueryService.InterfaceTraffic("edge-router", "lo", 4_000_000, 4_000_000, 0, 0, 0, "up"),
+          new TrafficQueryService.InterfaceTraffic("edge-router", "veth9a7c", 4_000_000, 4_000_000, 0, 0, 0, "up"),
+          new TrafficQueryService.InterfaceTraffic("edge-router", "docker0", 4_000_000, 4_000_000, 0, 0, 0, "up"));
     }
 
     @Override

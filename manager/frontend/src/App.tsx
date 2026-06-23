@@ -92,9 +92,21 @@ export default function App({ bootstrap }: AppProps) {
     setBoot({ setupRequired: false, authenticated: false });
   }
 
-  async function createAsset(payload: { name: string; assetType: string; managementIp?: string; description?: string }) {
+  async function createAsset(payload: { name: string; assetType: string; managementIp?: string; location?: string; description?: string }) {
     const created = await api.createAsset(payload);
     setAssets((current) => [created, ...current]);
+    return created;
+  }
+
+  async function updateAsset(id: number, payload: { name: string; location?: string; description?: string }) {
+    const updated = await api.updateAsset(id, payload);
+    setAssets((current) => current.map((asset) => (asset.id === id ? updated : asset)));
+    return updated;
+  }
+
+  async function deleteAsset(id: number) {
+    await api.deleteAsset(id);
+    setAssets((current) => current.filter((asset) => asset.id !== id));
   }
 
   async function updateAlert(id: number, action: 'acknowledge' | 'resolve') {
@@ -190,6 +202,8 @@ export default function App({ bootstrap }: AppProps) {
           assets={assets}
           alerts={alerts}
           onCreateAsset={createAsset}
+          onUpdateAsset={updateAsset}
+          onDeleteAsset={deleteAsset}
           onAcknowledgeAlert={(id) => updateAlert(id, 'acknowledge')}
           onResolveAlert={(id) => updateAlert(id, 'resolve')}
         />
@@ -216,6 +230,8 @@ function ViewSwitch({
   assets,
   alerts,
   onCreateAsset,
+  onUpdateAsset,
+  onDeleteAsset,
   onAcknowledgeAlert,
   onResolveAlert
 }: {
@@ -224,14 +240,16 @@ function ViewSwitch({
   summary: DashboardSummary;
   assets: Asset[];
   alerts: AlertRow[];
-  onCreateAsset: (payload: { name: string; assetType: string; managementIp?: string; description?: string }) => Promise<void>;
+  onCreateAsset: (payload: { name: string; assetType: string; managementIp?: string; location?: string; description?: string }) => Promise<Asset | void>;
+  onUpdateAsset: (id: number, payload: { name: string; location?: string; description?: string }) => Promise<Asset | void>;
+  onDeleteAsset: (id: number) => Promise<void>;
   onAcknowledgeAlert: (id: number) => Promise<void>;
   onResolveAlert: (id: number) => Promise<void>;
 }) {
   const props = useMemo(() => ({ role }), [role]);
   switch (active) {
     case 'assets':
-      return <AssetsView role={props.role} assets={assets} onCreate={onCreateAsset} />;
+      return <AssetsView role={props.role} assets={assets} onCreate={onCreateAsset} onUpdate={onUpdateAsset} onDelete={onDeleteAsset} />;
     case 'traffic':
       return <TrafficView />;
     case 'agent':

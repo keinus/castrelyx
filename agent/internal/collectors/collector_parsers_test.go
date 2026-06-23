@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,52 @@ func TestParseDfOutputExtractsMountUsage(t *testing.T) {
 	}
 	if mounts[1].MountPoint != "/data" || mounts[1].TotalBytes != 2000 || mounts[1].UsedBytes != 1500 || mounts[1].AvailableBytes != 500 {
 		t.Fatalf("unexpected mount usage: %#v", mounts[1])
+	}
+}
+
+func TestPreferredManagementIPPrefersExternalInterface(t *testing.T) {
+	got := preferredManagementIP([]managementIPCandidate{
+		{InterfaceName: "docker0", Flags: net.FlagUp, Address: "172.17.0.1/16"},
+		{InterfaceName: "internal", Flags: net.FlagUp, Address: "10.0.0.5/24"},
+		{InterfaceName: "external", Flags: net.FlagUp, Address: "192.168.50.21/24"},
+		{InterfaceName: "lo", Flags: net.FlagUp | net.FlagLoopback, Address: "127.0.0.1/8"},
+	})
+
+	if got != "192.168.50.21" {
+		t.Fatalf("preferredManagementIP = %q", got)
+	}
+}
+
+func TestParseProcDiskstatsExtractsDiskIOCounters(t *testing.T) {
+	input := `   8       0 sda 100 0 2000 10 50 0 3000 20 0 500 30 0 0 0 0 0 0
+   7       0 loop0 1 0 2 0 3 0 4 0 0 1 0 0 0 0 0 0 0
+ 259       0 nvme0n1 1000 0 4000 12 2000 0 8000 24 0 900 36 0 0 0 0 0 0
+`
+
+	stats := parseProcDiskstats(strings.NewReader(input))
+
+	if len(stats) != 2 {
+		t.Fatalf("stats length = %d", len(stats))
+	}
+	if stats[0].Device != "sda" || stats[0].ReadOps != 100 || stats[0].WriteOps != 50 {
+		t.Fatalf("unexpected sda stats: %#v", stats[0])
+	}
+	if stats[0].ReadBytes != 2000*512 || stats[0].WriteBytes != 3000*512 || stats[0].IOTimeMillis != 500 {
+		t.Fatalf("unexpected sda byte counters: %#v", stats[0])
+	}
+	if stats[1].Device != "nvme0n1" {
+		t.Fatalf("unexpected second device: %#v", stats[1])
+	}
+}
+
+func TestParseWindowsPhysicalDiskCounterPath(t *testing.T) {
+	device, counter, ok := parseWindowsPhysicalDiskCounterPath(`\\host\physicaldisk(0 c:)\disk read bytes/sec`)
+
+	if !ok {
+		t.Fatal("parseWindowsPhysicalDiskCounterPath returned ok=false")
+	}
+	if device != "0 c:" || counter != "disk read bytes/sec" {
+		t.Fatalf("device=%q counter=%q", device, counter)
 	}
 }
 

@@ -29,6 +29,18 @@ class ClickHouseClientTest {
   }
 
   @Test
+  void hidesInternalTrafficInterfaces() {
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("eth0")).isTrue();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("wan0")).isTrue();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("lo")).isFalse();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("veth8f6d")).isFalse();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("docker0")).isFalse();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("DockerBridge")).isFalse();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("br-2fde3c3c1f2d")).isFalse();
+    assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("br-uplink")).isTrue();
+  }
+
+  @Test
   void extractsTopLevelAgentPayloadForDashboardStateRows() {
     Map<String, Object> row = ClickHouseClient.rawStateRow(Map.of(
         "source_id", "nas",

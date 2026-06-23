@@ -1,5 +1,8 @@
 import type {
   AlertRow,
+  AgentRelease,
+  AgentUpdateAttempt,
+  AgentUpdatePolicy,
   AgentDashboard,
   AssetMetricDetail,
   AssetMetricsOverview,
@@ -44,6 +47,18 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   return response.blob();
 }
 
+async function requestForm<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    body
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return (await response.json()) as T;
+}
+
 export async function bootstrap(): Promise<BootstrapState> {
   const setup = await request<{ required: boolean }>('/api/setup/status');
   if (setup.required) {
@@ -76,8 +91,11 @@ export const api = {
       `/api/metrics/assets/${encodeURIComponent(assetUid)}?range=${encodeURIComponent(range)}&bucket=${encodeURIComponent(bucket)}`
     ),
   assets: () => request<Asset[]>('/api/assets'),
-  createAsset: (payload: { name: string; assetType: string; managementIp?: string; description?: string }) =>
+  createAsset: (payload: { name: string; assetType: string; managementIp?: string; location?: string; description?: string }) =>
     request<Asset>('/api/assets', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAsset: (id: number, payload: { name: string; location?: string; description?: string }) =>
+    request<Asset>(`/api/assets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteAsset: (id: number) => request<void>(`/api/assets/${id}`, { method: 'DELETE' }),
   alerts: () => request<AlertRow[]>('/api/alerts'),
   acknowledgeAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/acknowledge`, { method: 'POST' }),
   resolveAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/resolve`, { method: 'POST' }),
@@ -86,6 +104,27 @@ export const api = {
   castrelSignAgents: () => request<CastrelSignAgent[]>('/api/integrations/castrelsign/agents'),
   castrelSignCertificates: () => request<CastrelSignCertificate[]>('/api/integrations/castrelsign/certificates'),
   castrelSignAuditEvents: () => request<CastrelSignAuditEvent[]>('/api/integrations/castrelsign/audit-events'),
+  agentReleases: () => request<AgentRelease[]>('/api/integrations/castrelsign/agent-releases'),
+  agentUpdatePolicies: () => request<AgentUpdatePolicy[]>('/api/integrations/castrelsign/agent-update-policies'),
+  agentUpdateAttempts: () => request<AgentUpdateAttempt[]>('/api/integrations/castrelsign/agent-update-attempts'),
+  createAgentRelease: (payload: { version: string; os: string; arch: string; channel: string; artifact: File }) => {
+    const body = new FormData();
+    body.set('version', payload.version);
+    body.set('os', payload.os);
+    body.set('arch', payload.arch);
+    body.set('channel', payload.channel);
+    body.set('artifact', payload.artifact);
+    return requestForm<AgentRelease>('/api/integrations/castrelsign/agent-releases', body);
+  },
+  activateAgentRelease: (id: number) =>
+    request<AgentRelease>(`/api/integrations/castrelsign/agent-releases/${id}/activate`, { method: 'POST' }),
+  revokeAgentRelease: (id: number) =>
+    request<AgentRelease>(`/api/integrations/castrelsign/agent-releases/${id}/revoke`, { method: 'POST' }),
+  updateAgentPolicy: (payload: { agentId?: string; enabled: boolean; channel: string; targetVersion?: string }) =>
+    request<AgentUpdatePolicy>('/api/integrations/castrelsign/agent-update-policy', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   createCastrelSignToken: (payload: { name?: string; agentId?: string; ttlSeconds?: number; maxUses?: number } = {}) =>
     request<CastrelSignToken>('/api/integrations/castrelsign/tokens', {
       method: 'POST',

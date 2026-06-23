@@ -15,11 +15,11 @@ public class TrafficQueryService {
   }
 
   public List<InterfaceTraffic> interfaces(String range) {
-    return clickHouseClient.queryInterfaceTraffic(range, null);
+    return TrafficInterfaceFilter.visibleTrafficRows(clickHouseClient.queryInterfaceTraffic(range, null));
   }
 
   public List<InterfaceTraffic> interfacesForAsset(long assetId, String range) {
-    return clickHouseClient.queryInterfaceTraffic(range, assetService.getAsset(assetId).assetUid());
+    return TrafficInterfaceFilter.visibleTrafficRows(clickHouseClient.queryInterfaceTraffic(range, assetService.getAsset(assetId).assetUid()));
   }
 
   public record InterfaceTraffic(

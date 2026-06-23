@@ -68,6 +68,13 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
     '/api/dashboards/agent': { body: { heartbeat: { healthy: 0, stale: 0 }, collectors: [], events: [] } },
     '/api/dashboards/snmp': { body: { polls: { success: 0, failure: 0 }, targets: [], interfaces: [] } },
     '/api/traffic/interfaces?range=1h': { body: [] },
+    '/api/metrics/assets?range=1h': {
+      body: {
+        range: '1h',
+        summary: { totalAssets: 0, observedAssets: 0, staleAssets: 0, criticalAssets: 0, warningAssets: 0 },
+        assets: []
+      }
+    },
     '/api/assets': { body: [] },
     '/api/alerts': { body: [] },
     ...overrides

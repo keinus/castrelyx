@@ -21,7 +21,7 @@ public class DashboardQueryService {
     return Map.of(
         "activeAssets", assetService.listAssets().size(),
         "criticalAlerts", 0,
-        "trafficTopInterfaces", clickHouseClient.queryInterfaceTraffic("1h", null),
+        "trafficTopInterfaces", TrafficInterfaceFilter.visibleTrafficRows(clickHouseClient.queryInterfaceTraffic("1h", null)),
         "agentHealth", agent.getOrDefault("heartbeat", Map.of("healthy", 0, "stale", 0)),
         "snmpPollHealth", snmp.getOrDefault("polls", Map.of("success", 0, "failure", 0)));
   }

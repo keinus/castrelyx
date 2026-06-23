@@ -6,9 +6,11 @@ import org.castrelyx.manager.asset.Asset;
 import org.castrelyx.manager.asset.AssetCreateRequest;
 import org.castrelyx.manager.asset.AssetService;
 import org.castrelyx.manager.asset.AssetSourceBinding;
+import org.castrelyx.manager.asset.AssetUpdateRequest;
 import org.castrelyx.manager.asset.MergeCandidate;
 import org.castrelyx.manager.telemetry.TelemetrySyncWorker;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,9 +49,14 @@ public class AssetController {
   }
 
   @PutMapping("/{id}")
-  public Asset update(@PathVariable long id, @Valid @RequestBody AssetCreateRequest request) {
-    Asset current = assetService.getAsset(id);
-    return assetService.upsertObservedAsset(current.assetUid(), request.name(), request.assetType(), request.managementIp());
+  public Asset update(@PathVariable long id, @Valid @RequestBody AssetUpdateRequest request) {
+    return assetService.updateEditableFields(id, request);
+  }
+
+  @DeleteMapping("/{id}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void delete(@PathVariable long id) {
+    assetService.deleteAsset(id);
   }
 
   @GetMapping("/{id}/sources")

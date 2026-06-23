@@ -159,6 +159,9 @@ public class TelemetryNormalizer {
     copyLabel(metric, labels, "collector");
     copyLabel(metric, labels, "interface");
     copyLabel(metric, labels, "direction");
+    copyLabel(metric, labels, "mount_point");
+    copyLabel(metric, labels, "filesystem");
+    copyLabel(metric, labels, "device");
     return labels;
   }
 
