@@ -243,6 +243,7 @@ collectors:
   - identity
   - metric
   - network
+  - process
   - service
   - port
 ```

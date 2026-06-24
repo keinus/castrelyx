@@ -77,6 +77,73 @@ func TestParseProcDiskstatsExtractsDiskIOCounters(t *testing.T) {
 	}
 }
 
+func TestCollectLinuxTemperatureSensorsReadsThermalAndHwmon(t *testing.T) {
+	root := t.TempDir()
+	thermalZone := filepath.Join(root, "thermal", "thermal_zone0")
+	hwmon := filepath.Join(root, "hwmon", "hwmon0")
+	if err := os.MkdirAll(thermalZone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hwmon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(thermalZone, "type"), "x86_pkg_temp\n")
+	writeTestFile(t, filepath.Join(thermalZone, "temp"), "43000\n")
+	writeTestFile(t, filepath.Join(hwmon, "name"), "coretemp\n")
+	writeTestFile(t, filepath.Join(hwmon, "temp1_label"), "Package id 0\n")
+	writeTestFile(t, filepath.Join(hwmon, "temp1_input"), "42500\n")
+	writeTestFile(t, filepath.Join(hwmon, "temp2_input"), "39000\n")
+
+	sensors := collectLinuxTemperatureSensors(filepath.Join(root, "thermal"), filepath.Join(root, "hwmon"))
+
+	if len(sensors) != 3 {
+		t.Fatalf("sensors length = %d: %#v", len(sensors), sensors)
+	}
+	bySensor := map[string]temperatureSensor{}
+	for _, sensor := range sensors {
+		bySensor[sensor.Sensor] = sensor
+	}
+	if got := bySensor["x86_pkg_temp"]; got.Source != "thermal" || got.Celsius != 43 {
+		t.Fatalf("unexpected thermal sensor: %#v", got)
+	}
+	if got := bySensor["coretemp:Package id 0"]; got.Source != "hwmon" || got.Chip != "coretemp" || got.Celsius != 42.5 {
+		t.Fatalf("unexpected hwmon labeled sensor: %#v", got)
+	}
+	if got := bySensor["coretemp:temp2"]; got.Source != "hwmon" || got.Celsius != 39 {
+		t.Fatalf("unexpected hwmon fallback sensor: %#v", got)
+	}
+}
+
+func TestReadTemperatureCelsiusRejectsInvalidInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "temp")
+	writeTestFile(t, path, "not-a-number\n")
+
+	if _, ok := readTemperatureCelsius(path); ok {
+		t.Fatal("readTemperatureCelsius returned ok=true for invalid input")
+	}
+}
+
+func TestTemperatureMetricItemIncludesLabels(t *testing.T) {
+	item := metricItemWithLabels("host.temperature.celsius", 42.5, "celsius", map[string]any{
+		"source": "hwmon",
+		"sensor": "coretemp:Package id 0",
+		"chip":   "coretemp",
+		"path":   "/sys/class/hwmon/hwmon0/temp1_input",
+	})
+
+	if item.Kind != "metric" || item.Type != "temperature" {
+		t.Fatalf("unexpected item metadata: %#v", item)
+	}
+	if item.Key != "host.temperature.celsius:hwmon:coretemp:Package id 0" {
+		t.Fatalf("unexpected temperature key: %q", item.Key)
+	}
+	payload := item.Payload.(map[string]any)
+	labels := payload["labels"].(map[string]any)
+	if labels["sensor"] != "coretemp:Package id 0" || labels["source"] != "hwmon" {
+		t.Fatalf("unexpected labels: %#v", labels)
+	}
+}
+
 func TestParseWindowsPhysicalDiskCounterPath(t *testing.T) {
 	device, counter, ok := parseWindowsPhysicalDiskCounterPath(`\\host\physicaldisk(0 c:)\disk read bytes/sec`)
 
@@ -186,6 +253,13 @@ func TestBuildLogEventItemCreatesPlatformLogEvent(t *testing.T) {
 	payload := item.Payload.(map[string]any)
 	if payload["platform"] != "linux" || payload["source_name"] != "/var/log/auth.log" || payload["message"] != "SSH login failed for alice" {
 		t.Fatalf("unexpected log payload: %#v", payload)
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

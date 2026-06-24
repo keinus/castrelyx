@@ -222,6 +222,7 @@ func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 		}
 		items = append(items, collectLinuxCPUMetricItems(cpuCount)...)
 		items = append(items, collectLinuxLoadMetricItems(cpuCount)...)
+		items = append(items, collectLinuxTemperatureMetricItems()...)
 	} else if runtime.GOOS == "windows" {
 		items = append(items, collectWindowsHostMetricItems(cpuCount)...)
 	}

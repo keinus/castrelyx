@@ -55,6 +55,14 @@ type diskIOStats struct {
 	IOUtilPct    *float64
 }
 
+type temperatureSensor struct {
+	Source  string
+	Sensor  string
+	Chip    string
+	Path    string
+	Celsius float64
+}
+
 type cpuTimes struct {
 	User    uint64
 	Nice    uint64
@@ -280,6 +288,23 @@ func collectDiskIOMetricItems() []envelope.Item {
 	return items
 }
 
+func collectLinuxTemperatureMetricItems() []envelope.Item {
+	sensors := collectLinuxTemperatureSensors("/sys/class/thermal", "/sys/class/hwmon")
+	items := make([]envelope.Item, 0, len(sensors))
+	for _, sensor := range sensors {
+		labels := map[string]any{
+			"source": sensor.Source,
+			"sensor": sensor.Sensor,
+			"path":   sensor.Path,
+		}
+		if sensor.Chip != "" {
+			labels["chip"] = sensor.Chip
+		}
+		items = append(items, metricItemWithLabels("host.temperature.celsius", sensor.Celsius, "celsius", labels))
+	}
+	return items
+}
+
 func collectLinuxCPUMetricItems(cpuCount int) []envelope.Item {
 	first, ok := readProcStatCPU()
 	if !ok {
@@ -431,6 +456,7 @@ func metricItemWithLabels(name string, value any, unit string, labels map[string
 		"metric_name": name,
 		"value":       value,
 		"unit":        unit,
+		"labels":      labels,
 	}
 	for key, labelValue := range labels {
 		payload[key] = labelValue
@@ -448,12 +474,117 @@ func metricItemWithLabels(name string, value any, unit string, labels map[string
 	if direction, ok := labels["direction"].(string); ok && direction != "" {
 		keyParts = append(keyParts, direction)
 	}
+	if source, ok := labels["source"].(string); ok && source != "" {
+		keyParts = append(keyParts, source)
+	}
+	if sensor, ok := labels["sensor"].(string); ok && sensor != "" {
+		keyParts = append(keyParts, sensor)
+	}
 	return envelope.Item{
 		Kind:    "metric",
 		Type:    strings.TrimPrefix(strings.Split(name, ".")[1], "host"),
 		Key:     strings.Join(keyParts, ":"),
 		Payload: payload,
 	}
+}
+
+func collectLinuxTemperatureSensors(thermalRoot, hwmonRoot string) []temperatureSensor {
+	sensors := append([]temperatureSensor{}, collectThermalZoneTemperatures(thermalRoot)...)
+	sensors = append(sensors, collectHwmonTemperatures(hwmonRoot)...)
+	sort.Slice(sensors, func(i, j int) bool {
+		if sensors[i].Source != sensors[j].Source {
+			return sensors[i].Source < sensors[j].Source
+		}
+		if sensors[i].Sensor != sensors[j].Sensor {
+			return sensors[i].Sensor < sensors[j].Sensor
+		}
+		return sensors[i].Path < sensors[j].Path
+	})
+	return sensors
+}
+
+func collectThermalZoneTemperatures(root string) []temperatureSensor {
+	entries, err := filepath.Glob(filepath.Join(root, "thermal_zone*"))
+	if err != nil {
+		return nil
+	}
+	sensors := []temperatureSensor{}
+	for _, entry := range entries {
+		tempPath := filepath.Join(entry, "temp")
+		celsius, ok := readTemperatureCelsius(tempPath)
+		if !ok {
+			continue
+		}
+		sensor := strings.TrimSpace(readTextFile(filepath.Join(entry, "type")))
+		if sensor == "" {
+			sensor = filepath.Base(entry)
+		}
+		sensors = append(sensors, temperatureSensor{
+			Source:  "thermal",
+			Sensor:  sensor,
+			Path:    tempPath,
+			Celsius: celsius,
+		})
+	}
+	return sensors
+}
+
+func collectHwmonTemperatures(root string) []temperatureSensor {
+	entries, err := filepath.Glob(filepath.Join(root, "hwmon*"))
+	if err != nil {
+		return nil
+	}
+	sensors := []temperatureSensor{}
+	for _, entry := range entries {
+		chip := strings.TrimSpace(readTextFile(filepath.Join(entry, "name")))
+		if chip == "" {
+			chip = filepath.Base(entry)
+		}
+		tempFiles, err := filepath.Glob(filepath.Join(entry, "temp*_input"))
+		if err != nil {
+			continue
+		}
+		for _, tempPath := range tempFiles {
+			celsius, ok := readTemperatureCelsius(tempPath)
+			if !ok {
+				continue
+			}
+			sensorID := strings.TrimSuffix(filepath.Base(tempPath), "_input")
+			label := strings.TrimSpace(readTextFile(filepath.Join(entry, sensorID+"_label")))
+			sensor := chip + ":" + sensorID
+			if label != "" {
+				sensor = chip + ":" + label
+			}
+			sensors = append(sensors, temperatureSensor{
+				Source:  "hwmon",
+				Sensor:  sensor,
+				Chip:    chip,
+				Path:    tempPath,
+				Celsius: celsius,
+			})
+		}
+	}
+	return sensors
+}
+
+func readTemperatureCelsius(path string) (float64, bool) {
+	raw := strings.TrimSpace(readTextFile(path))
+	if raw == "" {
+		return 0, false
+	}
+	milliCelsius, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return milliCelsius / 1000, true
+}
+
+func readTextFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func collectNetworkTraffic() []networkInterfaceTraffic {

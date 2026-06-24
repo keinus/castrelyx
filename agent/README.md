@@ -190,6 +190,9 @@ Linux 수집:
   - `host.load.5`
   - `host.load.15`
   - CPU 수로 나눈 `host.load.normalized_1`
+- `/sys/class/thermal`, `/sys/class/hwmon`
+  - sensor별 `host.temperature.celsius`
+  - `source`, `sensor`, `chip`, `path` label로 thermal zone/hwmon 원천 구분
 - `/proc/net/dev`
   - interface별 `host.network.rx_bytes`
   - interface별 `host.network.tx_bytes`
@@ -222,6 +225,10 @@ Metric payload 공통 필드:
 | `direction` | `ingress` 또는 `egress` |
 | `filesystem` | disk metric일 때 filesystem 또는 provider |
 | `mount_point` | Linux mount point 또는 Windows drive letter |
+| `source` | 온도 metric일 때 `thermal` 또는 `hwmon` |
+| `sensor` | 온도 sensor 이름 |
+| `chip` | hwmon chip 이름 |
+| `path` | 온도 값을 읽은 sysfs path |
 
 ### Network collector
 

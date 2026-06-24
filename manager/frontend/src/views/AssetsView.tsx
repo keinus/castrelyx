@@ -33,7 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
-import type { Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
+import type { AgentEventSummary, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
 import { canMutate, formatBps } from '../lib/uiModel';
 import { cn } from '../lib/utils';
 
@@ -74,6 +74,15 @@ type AssetLocationGroup = {
 };
 
 type AssetDiskRow = NonNullable<AssetMetricDetail['disks']>[number];
+type ProcessSocketGroup = {
+  key: string;
+  process?: AgentProcessState;
+  processName: string;
+  pid?: number;
+  user?: string;
+  executablePath?: string;
+  sockets: AgentSocketState[];
+};
 type DetailModalKind = 'disk' | 'signals';
 
 const ASSET_METRICS_REFRESH_MS = 30_000;
@@ -557,6 +566,8 @@ function AssetDetailPanel({
   const disks = detail?.disks ?? [];
   const diskIoRows = detail?.diskIo ?? disks.filter((disk) => disk.device);
   const processes = detail?.processes ?? [];
+  const sockets = detail?.sockets ?? [];
+  const securityEvents = security?.events ?? [];
   const primaryMounts = ['/', '/tmp'].map((mountPoint) => ({
     mountPoint,
     disk: findDiskByMount(disks, mountPoint)
@@ -568,7 +579,7 @@ function AssetDetailPanel({
   const totalDiskIops = hasDiskIops ? finiteNumber(metrics.diskReadIops) + finiteNumber(metrics.diskWriteIops) : null;
   const maxDiskIoUtilization = metrics.diskIoUtilizationPct
     ?? diskIoRows.map((disk) => disk.ioUtilizationPct).filter(isFiniteNumber).sort((left, right) => right - left)[0];
-  const processSocketCount = processes.reduce(
+  const processSocketCount = sockets.length > 0 ? sockets.length : processes.reduce(
     (total, process) => total + (process.listeningSocketCount ?? 0) + (process.connectedSocketCount ?? 0),
     0
   );
@@ -736,6 +747,27 @@ function AssetDetailPanel({
         {detailModal === 'signals' && (
           <DetailModal title="Signal 상세" onClose={() => setDetailModal(null)}>
             <div className="asset-modal-grid">
+              <DetailList
+                title="Security events"
+                meta={formatEventCount(security?.securityEvents, securityEvents.length)}
+                empty="수집된 보안 이벤트가 없습니다."
+                className="asset-security-event-panel"
+              >
+                {securityEvents.map((event, index) => {
+                  const actionMeta = eventActionMeta(event);
+                  return (
+                    <li key={`${event.assetUid ?? asset.assetUid}-${event.eventType ?? 'event'}-${event.observedAt ?? event.eventTime ?? index}-${event.dedupKey ?? event.message ?? index}`}>
+                      <div>
+                        <strong>{eventTitle(event)}</strong>
+                        <span>{eventMeta(event)}</span>
+                        {actionMeta && <span>{actionMeta}</span>}
+                      </div>
+                      <em className={severityClass(event.severity)}>{event.severity ?? 'INFO'}</em>
+                    </li>
+                  );
+                })}
+              </DetailList>
+              <ProcessNetstatPanel processes={processes} sockets={sockets} />
               <DetailList title="Interfaces" meta={`${interfaces.length} interfaces`} empty="수집된 인터페이스 정보가 없습니다.">
                 {interfaces.map((row) => (
                   <li key={`${row.assetUid}-${row.interfaceName}`}>
@@ -853,6 +885,63 @@ function SignalPosturePanel({
   );
 }
 
+function ProcessNetstatPanel({ processes, sockets }: { processes: AgentProcessState[]; sockets: AgentSocketState[] }) {
+  const groups = buildProcessSocketGroups(processes, sockets);
+  return (
+    <section className="asset-detail-list-panel asset-netstat-panel">
+      <div className="panel-heading">
+        <h4>Process netstat</h4>
+        <span>{sockets.length} sockets · {groups.length} processes</span>
+      </div>
+      {groups.length === 0 ? (
+        <p className="asset-empty-detail">수집된 process/socket 연결 정보가 없습니다.</p>
+      ) : (
+        <div className="asset-netstat-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Socket</th>
+                <th>Local</th>
+                <th>Remote</th>
+                <th>State</th>
+                <th>Direction</th>
+              </tr>
+            </thead>
+            {groups.map((group) => (
+              <tbody key={group.key}>
+                <tr className="asset-netstat-group-row">
+                  <td colSpan={5}>
+                    <div>
+                      <strong>{group.processName}</strong>
+                      <span>{processGroupMeta(group)}</span>
+                    </div>
+                    {group.executablePath && <em>{group.executablePath}</em>}
+                  </td>
+                </tr>
+                {group.sockets.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="asset-netstat-empty-row">
+                      socket 상세 row 없음 · process count {processSocketTotal(group.process)} sockets
+                    </td>
+                  </tr>
+                ) : group.sockets.map((socket, index) => (
+                  <tr key={`${socket.stateKey ?? socket.processId ?? group.key}-${socket.protocol ?? 'socket'}-${socket.localAddress ?? ''}-${socket.localPort ?? ''}-${socket.remoteAddress ?? ''}-${socket.remotePort ?? ''}-${index}`}>
+                    <td>{socket.protocol ?? '-'}</td>
+                    <td className={cn('asset-netstat-endpoint', isPublicListeningSocket(socket) && 'public')}>{socketEndpoint(socket.localAddress, socket.localPort)}</td>
+                    <td className="asset-netstat-endpoint">{remoteSocketEndpoint(socket)}</td>
+                    <td><span className={cn('asset-netstat-state', socketStateClass(socket))}>{socket.state ?? '-'}</span></td>
+                    <td>{socket.direction ?? socketDirection(socket)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            ))}
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DetailModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -936,10 +1025,22 @@ function DiskIoLineChart({ data }: { data: MetricPoint[] }) {
   );
 }
 
-function DetailList({ title, meta, empty, children }: { title: string; meta: string; empty: string; children: ReactNode }) {
+function DetailList({
+  title,
+  meta,
+  empty,
+  className,
+  children
+}: {
+  title: string;
+  meta: string;
+  empty: string;
+  className?: string;
+  children: ReactNode;
+}) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
   return (
-    <section className="asset-detail-list-panel">
+    <section className={cn('asset-detail-list-panel', className)}>
       <div className="panel-heading">
         <h4>{title}</h4>
         <span>{meta}</span>
@@ -1080,6 +1181,204 @@ function healthLabel(health: AssetMetricSummary['health']) {
     return 'HEALTHY';
   }
   return '미수집';
+}
+
+function eventTitle(event: AgentEventSummary) {
+  return event.message ?? event.sourceName ?? event.outcome ?? event.eventType ?? 'Security event';
+}
+
+function eventMeta(event: AgentEventSummary) {
+  const timestamp = event.eventTime ?? event.observedAt;
+  return [
+    event.eventType,
+    event.eventCategory,
+    event.sourceName ?? event.channel ?? event.program ?? event.provider ?? event.platform,
+    timestamp ? formatDate(timestamp) : null
+  ].filter(Boolean).join(' · ') || '-';
+}
+
+function eventActionMeta(event: AgentEventSummary) {
+  return [event.actor, event.action, event.outcome].filter(Boolean).join(' / ');
+}
+
+function formatEventCount(total: number | undefined, visible: number) {
+  if (total == null || total === visible) {
+    return `${visible} events`;
+  }
+  return `${visible} of ${total} events`;
+}
+
+function severityClass(severity?: string) {
+  switch ((severity ?? '').toUpperCase()) {
+    case 'CRITICAL':
+    case 'ERROR':
+      return 'critical';
+    case 'WARNING':
+      return 'warning';
+    default:
+      return 'info';
+  }
+}
+
+function buildProcessSocketGroups(processes: AgentProcessState[], sockets: AgentSocketState[]): ProcessSocketGroup[] {
+  const processByPid = new Map<number, AgentProcessState>();
+  const processBySocketKey = new Map<string, AgentProcessState>();
+  const processByName = new Map<string, AgentProcessState[]>();
+  for (const process of processes) {
+    if (process.pid != null) {
+      processByPid.set(process.pid, process);
+    }
+    for (const socketKey of process.socketKeys ?? []) {
+      processBySocketKey.set(socketKey, process);
+    }
+    if (process.name) {
+      processByName.set(process.name, [...(processByName.get(process.name) ?? []), process]);
+    }
+  }
+
+  const groups = new Map<string, ProcessSocketGroup>();
+  const ensureGroup = (socket?: AgentSocketState, process?: AgentProcessState) => {
+    const pid = process?.pid ?? socket?.processId;
+    const processName = process?.name ?? socket?.processName ?? 'unknown process';
+    const key = pid != null ? `pid:${pid}` : `name:${processName}`;
+    const existing = groups.get(key);
+    if (existing) {
+      return existing;
+    }
+    const created: ProcessSocketGroup = {
+      key,
+      process,
+      processName,
+      pid,
+      user: process?.user,
+      executablePath: process?.executablePath,
+      sockets: []
+    };
+    groups.set(key, created);
+    return created;
+  };
+
+  for (const socket of sockets) {
+    const process = processForSocket(socket, processByPid, processBySocketKey, processByName);
+    ensureGroup(socket, process).sockets.push(socket);
+  }
+  for (const process of processes) {
+    if (processSocketTotal(process) > 0) {
+      ensureGroup(undefined, process);
+    }
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      sockets: [...group.sockets].sort(socketComparator)
+    }))
+    .sort((left, right) => {
+      const leftSockets = Math.max(left.sockets.length, processSocketTotal(left.process));
+      const rightSockets = Math.max(right.sockets.length, processSocketTotal(right.process));
+      return rightSockets - leftSockets || left.processName.localeCompare(right.processName, 'ko-KR');
+    });
+}
+
+function processForSocket(
+  socket: AgentSocketState,
+  processByPid: Map<number, AgentProcessState>,
+  processBySocketKey: Map<string, AgentProcessState>,
+  processByName: Map<string, AgentProcessState[]>
+) {
+  if (socket.processId != null) {
+    const process = processByPid.get(socket.processId);
+    if (process) {
+      return process;
+    }
+  }
+  if (socket.stateKey) {
+    const process = processBySocketKey.get(socket.stateKey);
+    if (process) {
+      return process;
+    }
+  }
+  if (socket.processName) {
+    const candidates = processByName.get(socket.processName);
+    if (candidates?.length === 1) {
+      return candidates[0];
+    }
+  }
+  return undefined;
+}
+
+function socketComparator(left: AgentSocketState, right: AgentSocketState) {
+  const leftListening = isListeningSocketRow(left) ? 0 : 1;
+  const rightListening = isListeningSocketRow(right) ? 0 : 1;
+  return leftListening - rightListening
+    || (left.localPort ?? 0) - (right.localPort ?? 0)
+    || socketEndpoint(left.localAddress, left.localPort).localeCompare(socketEndpoint(right.localAddress, right.localPort));
+}
+
+function processGroupMeta(group: ProcessSocketGroup) {
+  const listeningCount = group.sockets.filter(isListeningSocketRow).length || (group.process?.listeningSocketCount ?? 0);
+  const connectedCount = group.sockets.filter(isConnectedSocketRow).length || (group.process?.connectedSocketCount ?? 0);
+  return [
+    group.pid == null ? 'pid unknown' : `pid ${group.pid}`,
+    group.user ?? 'user unknown',
+    formatBytes(group.process?.memoryBytes),
+    `${listeningCount} listening`,
+    `${connectedCount} connected`
+  ].join(' · ');
+}
+
+function processSocketTotal(process?: AgentProcessState) {
+  return (process?.listeningSocketCount ?? 0) + (process?.connectedSocketCount ?? 0);
+}
+
+function socketEndpoint(address?: string, port?: number) {
+  if (!address && port == null) {
+    return '-';
+  }
+  return `${address || '*'}:${port ?? '-'}`;
+}
+
+function remoteSocketEndpoint(socket: AgentSocketState) {
+  if (!socket.remoteAddress || socket.remotePort == null || socket.remotePort <= 0 || isAnyAddress(socket.remoteAddress)) {
+    return '-';
+  }
+  return socketEndpoint(socket.remoteAddress, socket.remotePort);
+}
+
+function socketDirection(socket: AgentSocketState) {
+  if (isListeningSocketRow(socket)) {
+    return 'listening';
+  }
+  if (isConnectedSocketRow(socket)) {
+    return 'connected';
+  }
+  return 'bound';
+}
+
+function socketStateClass(socket: AgentSocketState) {
+  if (isPublicListeningSocket(socket)) {
+    return 'warning';
+  }
+  if (isConnectedSocketRow(socket)) {
+    return 'info';
+  }
+  return 'neutral';
+}
+
+function isListeningSocketRow(socket: AgentSocketState) {
+  return socket.direction === 'listening' || socket.state === 'listen';
+}
+
+function isConnectedSocketRow(socket: AgentSocketState) {
+  return socket.direction === 'connected' || socket.state === 'established';
+}
+
+function isPublicListeningSocket(socket: AgentSocketState) {
+  return isListeningSocketRow(socket) && isAnyAddress(socket.localAddress);
+}
+
+function isAnyAddress(address?: string) {
+  return !address || address === '0.0.0.0' || address === '::' || address === '::0' || address === '[::]';
 }
 
 function formatPercent(value?: number | null) {

@@ -311,6 +311,7 @@ public class CastrelSignIntegrationController {
           - identity
           - metric
           - network
+          - process
           - service
           - port
         """.formatted(managerUrl, token, agentId, tenantId, tlsServerName, tcpIngestAddr, tlsServerName);

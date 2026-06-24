@@ -170,6 +170,7 @@ export type AssetMetricDetail = {
   }>;
   interfaces?: InterfaceTraffic[];
   processes?: AgentProcessState[];
+  sockets?: AgentSocketState[];
   security?: AssetMetricSummary['security'];
   collectors?: AgentCollectorSummary[];
 };
@@ -254,6 +255,8 @@ export type AgentLogEvent = AgentEventSummary;
 
 export type AgentSocketState = {
   assetUid?: string;
+  sourceId?: string;
+  stateKey?: string;
   protocol?: string;
   localAddress?: string;
   localPort?: number;
@@ -263,6 +266,7 @@ export type AgentSocketState = {
   state?: string;
   processName?: string;
   processId?: number;
+  socketInode?: string;
   observedAt?: string;
 };
 
@@ -286,10 +290,18 @@ export type AgentFirewallState = {
 
 export type AgentProcessState = {
   assetUid?: string;
+  sourceId?: string;
+  stateKey?: string;
   pid?: number;
+  parentPid?: number;
   name?: string;
+  executablePath?: string;
+  commandLine?: string;
   user?: string;
+  cpuPercent?: number;
   memoryBytes?: number;
+  startedAt?: string;
+  socketKeys?: string[];
   listeningSocketCount?: number;
   connectedSocketCount?: number;
   observedAt?: string;

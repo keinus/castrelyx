@@ -213,6 +213,7 @@ class CastrelSignIntegrationControllerTest {
         .contains("update_enabled: true")
         .contains("update_channel: stable")
         .contains("update_public_key_path: ./update_public_key.pem")
+        .contains("  - process")
         .doesNotContain("cert_dir: ./certs")
         .doesNotContain("spool_dir: ./spool");
     org.assertj.core.api.Assertions.assertThat(entries.get("certs/update_public_key.pem"))

@@ -748,6 +748,9 @@ public class ClickHouseClient {
     String stateTable = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
     String eventTable = tableReference(properties.clickhouse().database(), "manager_events");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
+    int stateLimit = assetUid == null || assetUid.isBlank() ? 250 : 500;
+    int stateTypeLimit = assetUid == null || assetUid.isBlank() ? 50 : 200;
+    int eventLimit = assetUid == null || assetUid.isBlank() ? 20 : 100;
     List<Map<String, Object>> agents = queryJsonRows("""
         SELECT asset_uid, argMax(source_id, observed_at) AS source_id, max(observed_at) AS last_seen_at
         FROM (
@@ -811,30 +814,30 @@ public class ClickHouseClient {
           GROUP BY asset_uid, source_id, state_type, state_key
         )
         ORDER BY latest_observed_at DESC
-        LIMIT 250
+        LIMIT %d
         FORMAT JSONEachRow
-        """.formatted(stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
+        """.formatted(stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter, stateLimit)).stream()
         .map(ClickHouseClient::canonicalStateRow)
         .toList();
     List<Map<String, Object>> sockets = stateRows.stream()
         .filter(row -> "socket".equals(row.get("stateType")))
-        .limit(50)
+        .limit(stateTypeLimit)
         .toList();
     List<Map<String, Object>> services = stateRows.stream()
         .filter(row -> "service".equals(row.get("stateType")))
-        .limit(50)
+        .limit(stateTypeLimit)
         .toList();
     List<Map<String, Object>> firewalls = stateRows.stream()
         .filter(row -> "firewall".equals(row.get("stateType")))
-        .limit(50)
+        .limit(stateTypeLimit)
         .toList();
     List<Map<String, Object>> processes = stateRows.stream()
         .filter(row -> "process".equals(row.get("stateType")))
-        .limit(50)
+        .limit(stateTypeLimit)
         .toList();
     List<Map<String, Object>> packages = stateRows.stream()
         .filter(row -> "package".equals(row.get("stateType")))
-        .limit(50)
+        .limit(stateTypeLimit)
         .toList();
     List<Map<String, Object>> events = queryJsonRows("""
         SELECT
@@ -859,9 +862,9 @@ public class ClickHouseClient {
           GROUP BY asset_uid, source_id, event_type
         )
         ORDER BY latest_observed_at DESC
-        LIMIT 20
+        LIMIT %d
         FORMAT JSONEachRow
-        """.formatted(eventTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
+        """.formatted(eventTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter, eventLimit)).stream()
         .map(ClickHouseClient::canonicalEventRow)
         .toList();
     return Map.of(

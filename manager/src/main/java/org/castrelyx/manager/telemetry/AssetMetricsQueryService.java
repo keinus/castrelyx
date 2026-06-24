@@ -77,7 +77,8 @@ public class AssetMetricsQueryService {
     response.put("interfaces", selected.interfaces.stream()
         .sorted(Comparator.comparingDouble((InterfaceTraffic row) -> row.inBps() + row.outBps()).reversed())
         .toList());
-    response.put("processes", selected.topProcesses());
+    response.put("processes", selected.processRows());
+    response.put("sockets", selected.socketRows());
     response.put("security", selected.securityRow());
     response.put("collectors", selected.collectors);
     return response;
@@ -458,6 +459,14 @@ public class AssetMetricsQueryService {
     return value instanceof Number number ? number.doubleValue() : 0;
   }
 
+  private static long longNumber(Object value) {
+    return value instanceof Number number ? number.longValue() : 0;
+  }
+
+  private static long processSocketCount(Map<String, Object> row) {
+    return longNumber(row.get("listeningSocketCount")) + longNumber(row.get("connectedSocketCount"));
+  }
+
   private static Double normalizePercent(String metricName, double value) {
     if ((metricName.endsWith(".pct") || metricName.contains("utilization")) && value <= 1.5) {
       return value * 100;
@@ -607,7 +616,7 @@ public class AssetMetricsQueryService {
       security.put("failedServices", services.stream().filter(AssetMetricsQueryService::isProblemService).count());
       security.put("firewallDisabled", firewalls.stream().filter(AssetMetricsQueryService::isFirewallDisabled).count());
       security.put("securityEvents", events.size());
-      security.put("events", events.stream().limit(5).toList());
+      security.put("events", events);
       return security;
     }
 
@@ -675,10 +684,24 @@ public class AssetMetricsQueryService {
           .toList();
     }
 
-    private List<Map<String, Object>> topProcesses() {
+    private List<Map<String, Object>> processRows() {
       return processes.stream()
-          .sorted(Comparator.comparingDouble((Map<String, Object> row) -> number(row.get("memoryBytes"))).reversed())
-          .limit(8)
+          .sorted(Comparator
+              .<Map<String, Object>>comparingLong(AssetMetricsQueryService::processSocketCount).reversed()
+              .thenComparing(Comparator.comparingDouble((Map<String, Object> row) -> number(row.get("memoryBytes"))).reversed())
+              .thenComparing(row -> Optional.ofNullable(firstText(row.get("name"))).orElse("")))
+          .limit(50)
+          .toList();
+    }
+
+    private List<Map<String, Object>> socketRows() {
+      return sockets.stream()
+          .sorted(Comparator
+              .<Map<String, Object>>comparingInt(row -> isListeningSocket(row) ? 0 : 1)
+              .thenComparing(row -> Optional.ofNullable(firstText(row.get("processName"))).orElse(""))
+              .thenComparingLong(row -> longNumber(row.get("processId")))
+              .thenComparingLong(row -> longNumber(row.get("localPort")))
+              .thenComparing(row -> Optional.ofNullable(firstText(row.get("remoteAddress"))).orElse("")))
           .toList();
     }
 

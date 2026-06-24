@@ -52,9 +52,16 @@ describe('AssetsView', () => {
     expect(await screen.findByText('sdb')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Disk I/O / mount 상세 닫기' }));
 
+    expect(screen.queryByText('Failed password for invalid user')).not.toBeInTheDocument();
     expect(screen.queryByText('sshd')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Signal 상세 보기' }));
-    expect(await screen.findByText('sshd')).toBeInTheDocument();
+    expect(await screen.findByText('Failed password for invalid user')).toBeInTheDocument();
+    expect(screen.getByText(/auth\.login\.failure/)).toBeInTheDocument();
+    expect(screen.getByText('WARNING')).toBeInTheDocument();
+    expect(await screen.findByText('Process netstat')).toBeInTheDocument();
+    expect(screen.getAllByText('sshd').length).toBeGreaterThan(0);
+    expect(screen.getByText('0.0.0.0:22')).toBeInTheDocument();
+    expect(screen.getByText('192.168.50.10:443')).toBeInTheDocument();
   });
 
   it('filters assets and falls back to registered inventory when metrics API fails', async () => {
@@ -212,8 +219,65 @@ const detail: AssetMetricDetail = {
     discards: 0,
     status: 'up'
   }],
-  processes: [{ assetUid: 'nas', pid: 22, name: 'sshd', user: 'root', memoryBytes: 2048, listeningSocketCount: 1 }],
-  security: { openPorts: 1, failedServices: 0, firewallDisabled: 0, securityEvents: 1 },
+  processes: [{
+    assetUid: 'nas',
+    pid: 22,
+    name: 'sshd',
+    user: 'root',
+    executablePath: '/usr/sbin/sshd',
+    memoryBytes: 2048,
+    socketKeys: ['tcp:0.0.0.0:22:0.0.0.0:0:listen', 'tcp:192.168.50.21:52344:192.168.50.10:443:established'],
+    listeningSocketCount: 1,
+    connectedSocketCount: 1
+  }],
+  sockets: [
+    {
+      assetUid: 'nas',
+      protocol: 'tcp',
+      localAddress: '0.0.0.0',
+      localPort: 22,
+      remoteAddress: '0.0.0.0',
+      remotePort: 0,
+      state: 'listen',
+      direction: 'listening',
+      processName: 'sshd',
+      processId: 22,
+      stateKey: 'tcp:0.0.0.0:22:0.0.0.0:0:listen',
+      observedAt: '2026-06-11T13:35:00Z'
+    },
+    {
+      assetUid: 'nas',
+      protocol: 'tcp',
+      localAddress: '192.168.50.21',
+      localPort: 52344,
+      remoteAddress: '192.168.50.10',
+      remotePort: 443,
+      state: 'established',
+      direction: 'connected',
+      processName: 'sshd',
+      processId: 22,
+      stateKey: 'tcp:192.168.50.21:52344:192.168.50.10:443:established',
+      observedAt: '2026-06-11T13:35:00Z'
+    }
+  ],
+  security: {
+    openPorts: 1,
+    failedServices: 0,
+    firewallDisabled: 0,
+    securityEvents: 1,
+    events: [{
+      assetUid: 'nas',
+      eventType: 'auth.login.failure',
+      eventCategory: 'auth',
+      severity: 'WARNING',
+      message: 'Failed password for invalid user',
+      sourceName: 'sshd',
+      actor: 'invalid-user',
+      action: 'login',
+      outcome: 'failure',
+      observedAt: '2026-06-11T13:35:00Z'
+    }]
+  },
   collectors: [{ name: 'metric', sampleCount: 10, lastSeenAt: '2026-06-11T13:34:00Z' }]
 };
 

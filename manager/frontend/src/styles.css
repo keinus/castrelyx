@@ -2283,6 +2283,128 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.asset-security-event-panel {
+  grid-column: 1 / -1;
+}
+
+.asset-security-event-panel li {
+  align-items: start;
+}
+
+.asset-security-event-panel em {
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.asset-security-event-panel em.info {
+  color: #246075;
+  background: #e9f5f8;
+}
+
+.asset-security-event-panel em.warning {
+  color: #7b5815;
+  background: #fff6d8;
+}
+
+.asset-security-event-panel em.critical {
+  color: #9f2c2c;
+  background: #fff0f0;
+}
+
+.asset-netstat-panel {
+  grid-column: 1 / -1;
+}
+
+.asset-netstat-table {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.asset-netstat-table table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.asset-netstat-table th,
+.asset-netstat-table td {
+  border-bottom: 1px solid #edf1f3;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.asset-netstat-table th {
+  color: #60717a;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.asset-netstat-group-row td {
+  background: #f8fbfc;
+}
+
+.asset-netstat-group-row div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.asset-netstat-group-row strong {
+  color: #102027;
+}
+
+.asset-netstat-group-row span,
+.asset-netstat-group-row em,
+.asset-netstat-empty-row {
+  color: #60717a;
+  font-size: 12px;
+}
+
+.asset-netstat-group-row em {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-style: normal;
+}
+
+.asset-netstat-endpoint {
+  color: #102027;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.asset-netstat-endpoint.public {
+  color: #9f2c2c;
+  font-weight: 900;
+}
+
+.asset-netstat-state {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.asset-netstat-state.neutral {
+  color: #60717a;
+  background: #eef2f3;
+}
+
+.asset-netstat-state.info {
+  color: #246075;
+  background: #e9f5f8;
+}
+
+.asset-netstat-state.warning {
+  color: #7b5815;
+  background: #fff6d8;
+}
+
 .asset-signal-check-list {
   display: grid;
   gap: 8px;
