@@ -344,15 +344,15 @@ public class ClickHouseClient {
             argMaxIf(metric_value, observed_at, metric_name = 'interface.in.bps') AS in_latest_bps,
             argMaxIf(metric_value, observed_at, metric_name = 'interface.out.bps') AS out_latest_bps,
             if(
-              dateDiff('second', minIf(observed_at, metric_name = 'interface.in.bytes'), maxIf(observed_at, metric_name = 'interface.in.bytes')) > 0,
-              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'interface.in.bytes') - argMinIf(metric_value, observed_at, metric_name = 'interface.in.bytes')) * 8
-                / dateDiff('second', minIf(observed_at, metric_name = 'interface.in.bytes'), maxIf(observed_at, metric_name = 'interface.in.bytes'))),
+              dateDiff('second', minIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')), maxIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes'))) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')) - argMinIf(metric_value, observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes'))) * 8
+                / dateDiff('second', minIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')), maxIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')))),
               0
             ) AS in_counter_bps,
             if(
-              dateDiff('second', minIf(observed_at, metric_name = 'interface.out.bytes'), maxIf(observed_at, metric_name = 'interface.out.bytes')) > 0,
-              greatest(0, (argMaxIf(metric_value, observed_at, metric_name = 'interface.out.bytes') - argMinIf(metric_value, observed_at, metric_name = 'interface.out.bytes')) * 8
-                / dateDiff('second', minIf(observed_at, metric_name = 'interface.out.bytes'), maxIf(observed_at, metric_name = 'interface.out.bytes'))),
+              dateDiff('second', minIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')), maxIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes'))) > 0,
+              greatest(0, (argMaxIf(metric_value, observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')) - argMinIf(metric_value, observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes'))) * 8
+                / dateDiff('second', minIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')), maxIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')))),
               0
             ) AS out_counter_bps,
             argMaxIf(metric_value, observed_at, metric_name = 'interface.utilization.pct') AS utilization_pct,
@@ -794,14 +794,23 @@ public class ClickHouseClient {
           source_id,
           state_type,
           state_key,
-          argMax(state_json, observed_at) AS state_json,
-          max(observed_at) AS observed_at
-        FROM %s
-        WHERE asset_uid != ''
-          %s
-          %s
-        GROUP BY asset_uid, source_id, state_type, state_key
-        ORDER BY observed_at DESC
+          state_json,
+          latest_observed_at AS observed_at
+        FROM (
+          SELECT
+            asset_uid,
+            source_id,
+            state_type,
+            state_key,
+            argMax(state_json, observed_at) AS state_json,
+            max(observed_at) AS latest_observed_at
+          FROM %s
+          WHERE asset_uid != ''
+            %s
+            %s
+          GROUP BY asset_uid, source_id, state_type, state_key
+        )
+        ORDER BY latest_observed_at DESC
         LIMIT 250
         FORMAT JSONEachRow
         """.formatted(stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
@@ -832,15 +841,24 @@ public class ClickHouseClient {
           asset_uid,
           source_id,
           event_type,
-          argMax(severity, observed_at) AS severity,
-          argMax(event_json, observed_at) AS event_json,
-          max(observed_at) AS observed_at
-        FROM %s
-        WHERE asset_uid != ''
-          %s
-          %s
-        GROUP BY asset_uid, source_id, event_type
-        ORDER BY observed_at DESC
+          severity,
+          event_json,
+          latest_observed_at AS observed_at
+        FROM (
+          SELECT
+            asset_uid,
+            source_id,
+            event_type,
+            argMax(severity, observed_at) AS severity,
+            argMax(event_json, observed_at) AS event_json,
+            max(observed_at) AS latest_observed_at
+          FROM %s
+          WHERE asset_uid != ''
+            %s
+            %s
+          GROUP BY asset_uid, source_id, event_type
+        )
+        ORDER BY latest_observed_at DESC
         LIMIT 20
         FORMAT JSONEachRow
         """.formatted(eventTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
