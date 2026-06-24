@@ -2,6 +2,9 @@ package collectors
 
 import (
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -183,5 +186,105 @@ func TestBuildLogEventItemCreatesPlatformLogEvent(t *testing.T) {
 	payload := item.Payload.(map[string]any)
 	if payload["platform"] != "linux" || payload["source_name"] != "/var/log/auth.log" || payload["message"] != "SSH login failed for alice" {
 		t.Fatalf("unexpected log payload: %#v", payload)
+	}
+}
+
+func TestLinuxLogTailerUsesCursorForIncrementalFileReads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.log")
+	var builder strings.Builder
+	for i := 0; i < 60; i++ {
+		builder.WriteString("Jun 24 08:00:00 host sshd[123]: Failed password for invalid user user")
+		builder.WriteString(strconv.Itoa(i))
+		builder.WriteString(" from 10.0.0.1 port 22 ssh2\n")
+	}
+	if err := os.WriteFile(path, []byte(builder.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := newLogCursorState()
+	options := Options{LogMessageMaxBytes: 1024}
+
+	initial := collectLinuxFileLogSource(path, options, state)
+	if len(initial) != initialFileTailLines {
+		t.Fatalf("initial items = %d, want %d", len(initial), initialFileTailLines)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("Jun 24 08:01:00 host sshd[123]: Accepted publickey for alice from 10.0.0.2 port 22 ssh2\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	next := collectLinuxFileLogSource(path, options, state)
+	if len(next) != 1 {
+		t.Fatalf("incremental items = %d, want 1", len(next))
+	}
+	payload := next[0].Payload.(map[string]any)
+	if payload["event_type"] != "auth.login.success" || payload["actor"] != "alice" {
+		t.Fatalf("unexpected incremental payload: %#v", payload)
+	}
+}
+
+func TestLinuxLogClassifierNormalizesPamAuthAndSystemEvents(t *testing.T) {
+	pam := buildLinuxLogEventItem("/var/log/auth.log", "Jun 24 08:02:00 host sshd[123]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)", 1024)
+	pamPayload := pam.Payload.(map[string]any)
+	if pamPayload["event_type"] != "pam.session.open" || pamPayload["action"] != "session.open" || pamPayload["outcome"] != "success" {
+		t.Fatalf("unexpected pam payload: %#v", pamPayload)
+	}
+
+	failure := buildLinuxLogEventItem("/var/log/auth.log", "Jun 24 08:03:00 host sshd[123]: Failed password for invalid user admin from 10.0.0.3 port 22 ssh2", 1024)
+	failurePayload := failure.Payload.(map[string]any)
+	if failurePayload["event_type"] != "auth.login.failure" || failurePayload["actor"] != "admin" || failurePayload["severity"] != "WARNING" {
+		t.Fatalf("unexpected auth failure payload: %#v", failurePayload)
+	}
+
+	system := buildLinuxLogEventItem("/var/log/syslog", "Jun 24 08:04:00 host systemd[1]: Failed to start nginx.service - A high performance web server.", 1024)
+	systemPayload := system.Payload.(map[string]any)
+	if systemPayload["event_type"] != "system.service.failure" || systemPayload["severity"] != "ERROR" {
+		t.Fatalf("unexpected system payload: %#v", systemPayload)
+	}
+}
+
+func TestWindowsLogClassifierNormalizesSecurityAndSystemEvents(t *testing.T) {
+	failure := buildWindowsLogEventItem("Security", map[string]any{
+		"Id":               float64(4625),
+		"RecordId":         float64(101),
+		"ProviderName":     "Microsoft-Windows-Security-Auditing",
+		"LevelDisplayName": "Information",
+		"Message":          "An account failed to log on. Account Name: alice",
+	}, 1024)
+	failurePayload := failure.Payload.(map[string]any)
+	if failurePayload["event_type"] != "auth.login.failure" || failurePayload["record_id"] != uint64(101) || failurePayload["severity"] != "WARNING" {
+		t.Fatalf("unexpected windows auth payload: %#v", failurePayload)
+	}
+
+	system := buildWindowsLogEventItem("System", map[string]any{
+		"Id":               float64(7031),
+		"RecordId":         float64(202),
+		"ProviderName":     "Service Control Manager",
+		"LevelDisplayName": "Error",
+		"Message":          "The Example service terminated unexpectedly.",
+	}, 1024)
+	systemPayload := system.Payload.(map[string]any)
+	if systemPayload["event_type"] != "system.service.failure" || systemPayload["severity"] != "ERROR" {
+		t.Fatalf("unexpected windows system payload: %#v", systemPayload)
+	}
+}
+
+func TestLogMessageScrubsSecretsAndLimitsLength(t *testing.T) {
+	item := buildLinuxLogEventItem("/var/log/auth.log", "Jun 24 08:05:00 host app[55]: token=abc123 Authorization: Bearer abc.def.ghi password=hunter2 this message is too long", 64)
+	payload := item.Payload.(map[string]any)
+	message := payload["message"].(string)
+	if strings.Contains(message, "abc123") || strings.Contains(message, "hunter2") || strings.Contains(message, "abc.def.ghi") {
+		t.Fatalf("secret was not scrubbed from %q", message)
+	}
+	if len(message) > 64 {
+		t.Fatalf("message length = %d, want <= 64: %q", len(message), message)
 	}
 }

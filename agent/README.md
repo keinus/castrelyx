@@ -75,6 +75,8 @@ tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
 spool_dir: /var/lib/castrelyx-agent/spool
 max_spool_record_bytes: 8mb
+log_cursor_path: /var/lib/castrelyx-agent/spool/log-cursors.json
+log_message_max_bytes: 1024
 collectors:
   - identity
   - metric
@@ -99,6 +101,8 @@ collectors:
 | `batch_interval` | 선택 | `30s` | 상시 실행 시 collector 실행 주기입니다. Go duration 형식을 사용합니다. |
 | `spool_dir` | 선택 | OS별 기본값 | 실패 batch를 저장하는 로컬 queue 디렉터리입니다. 상대 경로는 config 파일 위치 기준입니다. |
 | `max_spool_record_bytes` | 선택 | `8mb` | spool record 하나의 최대 크기입니다. `kb`, `mb` suffix를 지원합니다. |
+| `log_cursor_path` | 선택 | `${spool_dir}/log-cursors.json` | log tailer cursor 저장 파일입니다. 상대 경로는 config 파일 위치 기준입니다. |
+| `log_message_max_bytes` | 선택 | `1024` | log tailer가 전송하는 message 최대 byte 길이입니다. |
 | `cert_dir` | 선택 | OS별 기본값 | client key/cert, CA cert, enrollment metadata 저장 디렉터리입니다. |
 | `ca_cert_path` | 선택 | `${cert_dir}/ca.pem` | 서버 인증서 검증에 사용할 CA PEM 경로입니다. |
 | `client_cert_path` | 선택 | `${cert_dir}/client.pem` | agent client certificate PEM 경로입니다. |
@@ -413,21 +417,32 @@ Collector 이름은 `log_tailer`입니다.
 
 Linux 수집:
 
-- `/var/log/auth.log` 마지막 50줄
-- `/var/log/secure` 마지막 50줄
-- `/var/log/syslog` 마지막 50줄
-- `/var/log/messages` 마지막 50줄
-- `journalctl -n 50 --no-pager --output short-iso`
+- `/var/log/auth.log`
+- `/var/log/secure`
+- `/var/log/syslog`
+- `/var/log/messages`
+- `journald`
+
+Linux file log는 cursor 파일에 inode+offset을 저장합니다. 첫 실행이나 rotation/truncation 감지 시에는 최근 tail만 bounded resync하고, 이후 실행부터 새로 추가된 줄만 전송합니다. journald는 journal cursor를 저장하고 `--after-cursor` 기반으로 증분 수집합니다.
 
 Windows 수집:
 
-- `Security` channel 최근 20개
-- `System` channel 최근 20개
-- `Application` channel 최근 20개
-- `Windows PowerShell` channel 최근 20개
-- `Microsoft-Windows-PowerShell/Operational` channel 최근 20개
-- `Microsoft-Windows-TerminalServices-LocalSessionManager/Operational` channel 최근 20개
-- `Microsoft-Windows-Windows Defender/Operational` channel 최근 20개
+- `Security` channel
+- `System` channel
+- `Application` channel
+- `Windows PowerShell` channel
+- `Microsoft-Windows-PowerShell/Operational` channel
+- `Microsoft-Windows-TerminalServices-LocalSessionManager/Operational` channel
+- `Microsoft-Windows-Windows Defender/Operational` channel
+
+Windows Event Log는 channel별 `RecordId`를 cursor 파일에 저장합니다. 첫 실행은 channel별 최근 20개만 수집하고, 이후 실행부터 마지막 `RecordId` 이후 이벤트를 전송합니다.
+
+관련 설정:
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `log_cursor_path` | `<spool_dir>/log-cursors.json` | Linux file offset, journald cursor, Windows RecordId 저장 파일 |
+| `log_message_max_bytes` | `1024` | payload message 최대 byte 길이 |
 
 전송 형태:
 
@@ -436,25 +451,28 @@ Windows 수집:
 | `kind` | `event` |
 | `type` | `log` |
 | `key` | `source_name:dedup_hash_prefix` |
-| `payload.event_type` | 현재 기본값 `system` |
+| `payload.event_type` | `pam.session.open`, `auth.login.failure`, `auth.login.success`, `auth.privilege.sudo`, `system.service.failure`, `system.kernel` 등 |
+| `payload.event_category` | `auth`, `system`, `security` 등 |
 | `payload.platform` | `linux` 또는 `windows` |
 | `payload.source` | `agent` |
 | `payload.source_name` | file path, `journald`, Windows channel |
-| `payload.observed_at` | 수집 시각 |
-| `payload.actor` | 현재 기본값 null |
-| `payload.action` | 현재 기본값 null |
-| `payload.outcome` | 현재 기본값 `unknown` |
-| `payload.message` | 원본 log message 또는 event message |
-| `payload.raw_ref` | 현재 기본값 null |
-| `payload.dedup_key` | platform/source/message의 SHA-256 |
-| `payload.event_id` | Windows Event ID |
+| `payload.channel` | auth/system/journald 또는 Windows channel |
+| `payload.program` | Linux syslog identifier 또는 process name |
 | `payload.provider` | Windows provider |
-| `payload.level` | Windows level |
-| `payload.time_created` | Windows event time |
+| `payload.pid` | Linux PID |
+| `payload.event_id` | Windows Event ID |
+| `payload.record_id` | Windows RecordId |
+| `payload.event_time` | log 원천 timestamp |
+| `payload.observed_at` | 수집 시각 |
+| `payload.actor` | 추출 가능한 user/account |
+| `payload.action` | `login`, `session.open`, `privilege.sudo`, `service.failure` 등 |
+| `payload.outcome` | `success`, `failure`, `unknown` |
+| `payload.severity` | `INFO`, `WARNING`, `ERROR` |
+| `payload.message` | scrub 및 길이 제한이 적용된 짧은 message |
+| `payload.raw_ref` | 현재 기본값 null |
+| `payload.dedup_key` | platform/source/time/record/message 기반 SHA-256 |
 
-현재 log tailer는 cursor 파일을 유지하지 않습니다. 실행 주기마다 최근 줄/최근 이벤트를 다시 읽고, message 기반 `dedup_key`를 생성합니다. 따라서 downstream에서 dedup key를 활용하지 않으면 같은 최근 로그가 여러 번 보일 수 있습니다.
-
-중요한 보안 제한도 있습니다. Agent의 redaction은 구조화 payload의 key 이름을 기준으로 수행됩니다. `payload.message` 같은 자유 텍스트 안에 password나 token이 포함되어 있으면 현재 구현은 문자열 내부를 정규식으로 scrub하지 않습니다. 운영 환경에서는 log source 자체에서 secret이 기록되지 않도록 관리하거나, 서버 측 추가 scrubber를 두는 것이 안전합니다.
+`payload.message`는 정규화 보조용 짧은 문자열입니다. `password`, `token`, `api_key`, `authorization`, `secret`, `credential`, Bearer token 형태의 값은 scrub한 뒤 `log_message_max_bytes`로 제한합니다. 전체 raw log 보존은 기본 동작에 포함하지 않습니다.
 
 ### Agent health collector
 
@@ -585,9 +603,9 @@ redaction 값은 `[REDACTED]`입니다.
 주의 사항:
 
 - redaction은 map key 기반입니다.
-- 문자열 내부의 secret pattern은 현재 scrub하지 않습니다.
+- 일반 payload 문자열 내부의 secret pattern은 redaction하지 않습니다.
 - batch item의 top-level `key` 필드는 redaction 대상이 아니고, `payload` 내부 key만 대상입니다.
-- 자유 텍스트 log message는 현재 그대로 보낼 수 있습니다.
+- log tailer의 `payload.message`는 별도 scrubber와 길이 제한을 적용합니다.
 
 ### 로컬 spool 보안
 
@@ -791,6 +809,8 @@ tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
 spool_dir: /var/lib/castrelyx-agent/spool
 max_spool_record_bytes: 8mb
+log_cursor_path: /var/lib/castrelyx-agent/spool/log-cursors.json
+log_message_max_bytes: 1024
 collectors:
   - identity
   - metric
@@ -872,6 +892,8 @@ tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
 spool_dir: C:\ProgramData\Castrelyx\spool
 max_spool_record_bytes: 8mb
+log_cursor_path: C:\ProgramData\Castrelyx\spool\log-cursors.json
+log_message_max_bytes: 1024
 collectors:
   - identity
   - metric
@@ -966,15 +988,15 @@ Manager 쪽에서는 agent dashboard, traffic view, asset list가 raw/canonical 
 | `/ingest` 403 | batch `source_id`와 client cert CN 불일치 | `agent_id`와 기존 인증서 CN 확인 |
 | TCP NACK `bad_frame` | frame 길이/압축/JSON 오류 또는 source id 불일치 | `ingest_transport`, server name, agent id 확인 |
 | spool 파일 증가 | 서버 연결 실패 또는 ingest 거부 | agent 로그, CastrelSign/Logparser 로그, 네트워크 확인 |
-| 로그 중복 | 현재 log tailer가 cursor 없이 최근 로그를 반복 수집 | downstream dedup 또는 collector 비활성화 검토 |
+| 로그 중복 | cursor 파일 삭제, log rotation 후 bounded resync, journal cursor invalidation | `log_cursor_path` 파일 권한/상태와 `dedup_key` 확인 |
 | package/service/firewall 결과 없음 | OS 명령이 없거나 권한 부족 | `systemctl`, `dpkg-query`, `rpm`, `ufw` 등 설치/권한 확인 |
 
 ## 현재 구현상 제한
 
 - Agent 설정 parser는 완전한 YAML parser가 아니라 단순 key/value와 `collectors` list만 처리합니다.
 - `manager_url` 이름은 Manager처럼 보이지만 실제 agent API 구현은 CastrelSign에 있습니다.
-- Log tailer는 cursor/bookmark를 파일로 저장하지 않습니다.
-- 자유 텍스트 log message 내부 secret은 redaction하지 않습니다.
+- Log tailer cursor는 local JSON 파일 기반이며, Windows는 Event Log bookmark XML이 아니라 channel별 `RecordId`를 저장합니다.
+- 일반 payload 자유 텍스트 문자열은 key 기반 redaction만 적용합니다. 단, log tailer message는 pattern scrub과 길이 제한을 적용합니다.
 - Spool은 암호화하지 않습니다.
 - Process command line과 환경변수는 수집하지 않습니다.
 - Linux service startup type, binary path, user, last state change는 대부분 null입니다.

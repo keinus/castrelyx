@@ -30,6 +30,13 @@ type Config struct {
 	TCPIngestAddr       string
 	TCPIngestServerName string
 	EnabledCollectors   []string
+	LogCursorPath       string
+	LogMessageMaxBytes  int
+	UpdateEnabled       bool
+	UpdateChannel       string
+	UpdateCheckInterval time.Duration
+	UpdateDir           string
+	UpdatePublicKeyPath string
 }
 
 func Load(path string) (Config, error) {
@@ -46,6 +53,11 @@ func Load(path string) (Config, error) {
 		MaxSpoolRecord:    8 * 1024 * 1024,
 		IngestTransport:   "https",
 		EnabledCollectors: defaultCollectors(),
+		LogMessageMaxBytes: 1024,
+		UpdateEnabled:     true,
+		UpdateChannel:     "stable",
+		UpdateCheckInterval: 6 * time.Hour,
+		UpdateDir:         defaultUpdateDir(),
 	}
 
 	var inCollectors bool
@@ -121,6 +133,34 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("invalid max_spool_record_bytes: %w", err)
 			}
 			cfg.MaxSpoolRecord = n
+		case "log_cursor_path":
+			cfg.LogCursorPath = value
+		case "log_message_max_bytes":
+			n, err := parsePositiveInt(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid log_message_max_bytes: %w", err)
+			}
+			cfg.LogMessageMaxBytes = n
+		case "update_enabled":
+			enabled, err := parseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid update_enabled: %w", err)
+			}
+			cfg.UpdateEnabled = enabled
+		case "update_channel":
+			if value != "" {
+				cfg.UpdateChannel = value
+			}
+		case "update_check_interval":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid update_check_interval: %w", err)
+			}
+			cfg.UpdateCheckInterval = d
+		case "update_dir":
+			cfg.UpdateDir = value
+		case "update_public_key_path":
+			cfg.UpdatePublicKeyPath = value
 		default:
 			return Config{}, fmt.Errorf("unknown config key %q", key)
 		}
@@ -183,11 +223,39 @@ func Load(path string) (Config, error) {
 	if cfg.IngestTransport == "tcp_mtls" && cfg.TCPIngestServerName == "" {
 		cfg.TCPIngestServerName = cfg.TLSServerName
 	}
+	if cfg.LogCursorPath == "" {
+		cfg.LogCursorPath = filepath.Join(cfg.SpoolDir, "log-cursors.json")
+	} else {
+		cfg.LogCursorPath = resolvePath(filepath.Dir(path), cfg.LogCursorPath)
+	}
+	if cfg.LogMessageMaxBytes <= 0 {
+		cfg.LogMessageMaxBytes = 1024
+	}
+	if cfg.UpdateCheckInterval <= 0 {
+		cfg.UpdateCheckInterval = 6 * time.Hour
+	}
+	if !filepath.IsAbs(cfg.UpdateDir) {
+		cfg.UpdateDir = filepath.Join(filepath.Dir(path), cfg.UpdateDir)
+	}
+	if cfg.UpdatePublicKeyPath != "" {
+		cfg.UpdatePublicKeyPath = resolvePath(filepath.Dir(path), cfg.UpdatePublicKeyPath)
+	}
 	if cfg.EnrollmentToken == "" && !certificateFilesExist(cfg) {
 		return Config{}, errors.New("enrollment_token is required when client certificate files are missing")
 	}
 
 	return cfg, nil
+}
+
+func defaultUpdateDir() string {
+	if runtime.GOOS == "windows" {
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			base = `C:\ProgramData`
+		}
+		return filepath.Join(base, "Castrelyx", "update")
+	}
+	return "/var/lib/castrelyx-agent/update"
 }
 
 func defaultCollectors() []string {
@@ -268,4 +336,26 @@ func parseBytes(value string) (int64, error) {
 		return 0, err
 	}
 	return n * multiplier, nil
+}
+
+func parsePositiveInt(value string) (int, error) {
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &n); err != nil {
+		return 0, err
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return n, nil
+}
+
+func parseBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1", "on":
+		return true, nil
+	case "false", "no", "0", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q", value)
+	}
 }

@@ -11,6 +11,13 @@ tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
 spool_dir: ./spool
 max_spool_record_bytes: 8mb
+log_cursor_path: ./spool/log-cursors.json
+log_message_max_bytes: 1024
+update_enabled: true
+update_channel: stable
+update_check_interval: 6h
+update_dir: ./update
+update_public_key_path: ./certs/update_public_key.pem
 collectors:
   - identity
   - metric

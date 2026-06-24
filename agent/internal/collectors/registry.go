@@ -16,7 +16,16 @@ import (
 	"castrelyx/agent/internal/envelope"
 )
 
+type Options struct {
+	LogCursorPath      string
+	LogMessageMaxBytes int
+}
+
 func Build(names []string) ([]agent.Collector, error) {
+	return BuildWithOptions(names, Options{})
+}
+
+func BuildWithOptions(names []string, options Options) ([]agent.Collector, error) {
 	collectors := make([]agent.Collector, 0, len(names))
 	for _, name := range names {
 		switch name {
@@ -37,7 +46,7 @@ func Build(names []string) ([]agent.Collector, error) {
 		case "firewall":
 			collectors = append(collectors, firewallCollector{})
 		case "log_tailer":
-			collectors = append(collectors, logTailerCollector{})
+			collectors = append(collectors, newLogTailerCollector(options))
 		case "agent_health":
 			collectors = append(collectors, agentHealthCollector{})
 		default:

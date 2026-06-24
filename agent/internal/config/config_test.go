@@ -19,6 +19,13 @@ batch_interval: 15s
 spool_dir: ./spool
 cert_dir: ./certs
 tls_server_name: manager.castrelyx.local
+update_enabled: true
+update_channel: canary
+update_check_interval: 10m
+update_dir: ./updates
+update_public_key_path: ./update_public_key.pem
+log_cursor_path: ./log-cursors.json
+log_message_max_bytes: 512
 collectors:
   - identity
   - metric
@@ -66,6 +73,27 @@ collectors:
 	}
 	if cfg.TLSServerName != "manager.castrelyx.local" {
 		t.Fatalf("TLSServerName = %q", cfg.TLSServerName)
+	}
+	if !cfg.UpdateEnabled {
+		t.Fatal("UpdateEnabled = false")
+	}
+	if cfg.UpdateChannel != "canary" {
+		t.Fatalf("UpdateChannel = %q", cfg.UpdateChannel)
+	}
+	if cfg.UpdateCheckInterval != 10*time.Minute {
+		t.Fatalf("UpdateCheckInterval = %s", cfg.UpdateCheckInterval)
+	}
+	if cfg.UpdateDir != filepath.Join(dir, "updates") {
+		t.Fatalf("UpdateDir = %q", cfg.UpdateDir)
+	}
+	if cfg.UpdatePublicKeyPath != filepath.Join(dir, "update_public_key.pem") {
+		t.Fatalf("UpdatePublicKeyPath = %q", cfg.UpdatePublicKeyPath)
+	}
+	if cfg.LogCursorPath != filepath.Join(dir, "log-cursors.json") {
+		t.Fatalf("LogCursorPath = %q", cfg.LogCursorPath)
+	}
+	if cfg.LogMessageMaxBytes != 512 {
+		t.Fatalf("LogMessageMaxBytes = %d", cfg.LogMessageMaxBytes)
 	}
 	if got := cfg.EnabledCollectors; len(got) != 3 || got[0] != "identity" || got[2] != "log_tailer" {
 		t.Fatalf("EnabledCollectors = %#v", got)
@@ -139,6 +167,12 @@ func TestLoadDefaultsToFullHostCollectorSet(t *testing.T) {
 			t.Fatalf("EnabledCollectors[%d] = %q, want %q; all = %#v", i, cfg.EnabledCollectors[i], want[i], cfg.EnabledCollectors)
 		}
 	}
+	if cfg.LogCursorPath != filepath.Join(cfg.SpoolDir, "log-cursors.json") {
+		t.Fatalf("LogCursorPath = %q", cfg.LogCursorPath)
+	}
+	if cfg.LogMessageMaxBytes != 1024 {
+		t.Fatalf("LogMessageMaxBytes = %d", cfg.LogMessageMaxBytes)
+	}
 }
 
 func TestLoadFallsBackTcpMTLSServerNameToManagerTLSServerName(t *testing.T) {
@@ -208,6 +242,19 @@ func TestLoadRejectsPlaintextManagerURL(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load returned nil error for plaintext manager_url")
+	}
+}
+
+func TestLoadRejectsInvalidLogMessageMaxBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	input := []byte("manager_url: https://manager.local\nenrollment_token: token\nlog_message_max_bytes: 0\n")
+	if err := os.WriteFile(path, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load returned nil error for invalid log_message_max_bytes")
 	}
 }
 
