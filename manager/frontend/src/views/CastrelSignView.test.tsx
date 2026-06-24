@@ -64,6 +64,30 @@ describe('CastrelSignView', () => {
     });
   });
 
+  it('publishes uploaded agent releases by default', async () => {
+    const fetchMock = mockFetch();
+
+    render(<CastrelSignView role="ADMIN" />);
+
+    await screen.findByRole('heading', { name: 'Agent updates' });
+    fireEvent.change(screen.getByLabelText('Version'), { target: { value: '0.2.0' } });
+    fireEvent.change(screen.getByLabelText('Artifact'), {
+      target: {
+        files: [new File(['binary'], 'castrelyx-agent-linux-amd64', { type: 'application/octet-stream' })]
+      }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish version' }));
+
+    await waitFor(() => {
+      const releaseUpload = fetchMock.mock.calls.find(([input, init]) =>
+        String(input) === '/api/integrations/castrelsign/agent-releases' && init?.method === 'POST');
+      expect(releaseUpload).toBeTruthy();
+      const body = releaseUpload?.[1]?.body as FormData;
+      expect(body.get('version')).toBe('0.2.0');
+      expect(body.get('publish')).toBe('true');
+    });
+  });
+
   it('keeps viewer users read-only', async () => {
     mockFetch();
 
@@ -139,6 +163,45 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
           agentId: 'edge-01',
           message: 'blocked by operator',
           createdAt: '2026-06-09T10:20:00Z'
+        }
+      ]
+    },
+    '/api/integrations/castrelsign/agent-releases': {
+      body: [
+        {
+          id: 10,
+          version: '0.2.0',
+          os: 'linux',
+          arch: 'amd64',
+          channel: 'stable',
+          status: 'ACTIVE',
+          sha256: 'abc123',
+          sizeBytes: 6,
+          activatedAt: '2026-06-09T10:30:00Z'
+        }
+      ]
+    },
+    '/api/integrations/castrelsign/agent-update-policies': {
+      body: [
+        {
+          policyKey: 'global',
+          enabled: true,
+          channel: 'stable',
+          targetVersion: '0.2.0',
+          updatedAt: '2026-06-09T10:30:00Z'
+        }
+      ]
+    },
+    '/api/integrations/castrelsign/agent-update-attempts': {
+      body: [
+        {
+          id: 11,
+          deploymentId: 'deployment-1',
+          agentId: 'edge-02',
+          releaseId: 10,
+          fromVersion: '0.1.0',
+          status: 'APPLIED',
+          updatedAt: '2026-06-09T10:35:00Z'
         }
       ]
     },

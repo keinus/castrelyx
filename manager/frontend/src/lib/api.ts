@@ -115,12 +115,13 @@ export const api = {
   agentReleases: () => request<AgentRelease[]>('/api/integrations/castrelsign/agent-releases'),
   agentUpdatePolicies: () => request<AgentUpdatePolicy[]>('/api/integrations/castrelsign/agent-update-policies'),
   agentUpdateAttempts: () => request<AgentUpdateAttempt[]>('/api/integrations/castrelsign/agent-update-attempts'),
-  createAgentRelease: (payload: { version: string; os: string; arch: string; channel: string; artifact: File }) => {
+  createAgentRelease: (payload: { version: string; os: string; arch: string; channel: string; artifact: File; publish?: boolean }) => {
     const body = new FormData();
     body.set('version', payload.version);
     body.set('os', payload.os);
     body.set('arch', payload.arch);
     body.set('channel', payload.channel);
+    body.set('publish', String(payload.publish ?? false));
     body.set('artifact', payload.artifact);
     return requestForm<AgentRelease>('/api/integrations/castrelsign/agent-releases', body);
   },

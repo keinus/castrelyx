@@ -524,6 +524,35 @@ tr:last-child td {
   margin-top: 16px;
 }
 
+.version-status-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.version-status-strip div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 62px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f8fbfc;
+  padding: 10px 12px;
+}
+
+.version-status-strip span {
+  color: #60717a;
+  font-size: 12px;
+}
+
+.version-status-strip strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
 .update-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(260px, 0.4fr);
@@ -538,7 +567,7 @@ tr:last-child td {
 }
 
 .release-form {
-  grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
+  grid-template-columns: repeat(5, minmax(120px, 1fr)) minmax(88px, auto) auto;
   align-items: end;
 }
 
@@ -554,6 +583,20 @@ tr:last-child td {
 .release-form select,
 .policy-panel input {
   min-height: 36px;
+}
+
+.inline-checkbox {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  color: #172026 !important;
+}
+
+.inline-checkbox input {
+  width: 16px;
+  min-height: 16px;
 }
 
 .policy-panel {
@@ -3164,6 +3207,7 @@ tr:last-child td {
   .castrelsign-summary,
   .workbench-grid,
   .update-grid,
+  .version-status-strip,
   .release-form,
   .command-kpi-strip,
   .command-dashboard-grid,

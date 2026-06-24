@@ -1,11 +1,13 @@
 package org.castrelyx.manager.web;
 
 import static org.hamcrest.Matchers.is;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -28,6 +30,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -284,6 +287,54 @@ class CastrelSignIntegrationControllerTest {
     mockMvc.perform(post("/api/integrations/castrelsign/agents/edge-01/reactivate").cookie(admin))
         .andExpect(status().isNoContent());
     verify(client).reactivateAgent(eq("edge-01"));
+  }
+
+  @Test
+  void adminPublishesAgentReleaseAndPinsGlobalPolicyThroughProxy() throws Exception {
+    Cookie admin = loginCookie("admin");
+    MockMultipartFile artifact = new MockMultipartFile(
+        "artifact",
+        "castrelyx-agent-linux-amd64",
+        MediaType.APPLICATION_OCTET_STREAM_VALUE,
+        "binary".getBytes(StandardCharsets.UTF_8));
+    doReturn(Map.of(
+        "id", 9,
+        "version", "0.2.0",
+        "os", "linux",
+        "arch", "amd64",
+        "channel", "stable",
+        "status", "ACTIVE",
+        "sha256", "abc123",
+        "size_bytes", 6)).when(client).publishAgentRelease(
+            eq("0.2.0"),
+            eq("linux"),
+            eq("amd64"),
+            eq("stable"),
+            any(byte[].class),
+            eq("castrelyx-agent-linux-amd64"));
+
+    mockMvc.perform(multipart("/api/integrations/castrelsign/agent-releases")
+            .file(artifact)
+            .param("version", "0.2.0")
+            .param("os", "linux")
+            .param("arch", "amd64")
+            .param("channel", "stable")
+            .param("publish", "true")
+            .cookie(admin))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.id", is(9)))
+        .andExpect(jsonPath("$.version", is("0.2.0")))
+        .andExpect(jsonPath("$.status", is("ACTIVE")))
+        .andExpect(jsonPath("$.sizeBytes", is(6)))
+        .andExpect(jsonPath("$.size_bytes").doesNotExist());
+
+    verify(client).publishAgentRelease(
+        eq("0.2.0"),
+        eq("linux"),
+        eq("amd64"),
+        eq("stable"),
+        any(byte[].class),
+        eq("castrelyx-agent-linux-amd64"));
   }
 
   @Test

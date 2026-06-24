@@ -110,7 +110,11 @@ public class CastrelSignIntegrationController {
       @RequestParam("os") String os,
       @RequestParam("arch") String arch,
       @RequestParam(name = "channel", defaultValue = "stable") String channel,
+      @RequestParam(name = "publish", defaultValue = "false") boolean publish,
       @RequestParam("artifact") MultipartFile artifact) throws IOException {
+    if (publish) {
+      return normalize(client.publishAgentRelease(version, os, arch, channel, artifact.getBytes(), artifact.getOriginalFilename()));
+    }
     return normalize(client.createAgentRelease(version, os, arch, channel, artifact.getBytes(), artifact.getOriginalFilename()));
   }
 

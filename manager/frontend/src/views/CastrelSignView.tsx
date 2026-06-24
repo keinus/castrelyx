@@ -30,6 +30,7 @@ type ReleaseForm = {
   os: string;
   arch: string;
   channel: string;
+  publish: boolean;
   artifact?: File;
 };
 
@@ -49,7 +50,8 @@ const DEFAULT_RELEASE_FORM: ReleaseForm = {
   version: '',
   os: 'linux',
   arch: 'amd64',
-  channel: 'stable'
+  channel: 'stable',
+  publish: true
 };
 
 export function CastrelSignView({ role }: CastrelSignViewProps) {
@@ -154,6 +156,9 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   const selectedAudit = auditEvents.filter((event) => event.agentId === selectedAgent?.agentId);
   const selectedAttempts = attempts.filter((attempt) => attempt.agentId === selectedAgent?.agentId);
   const globalPolicy = policies.find((policy) => !policy.agentId) ?? { enabled: true, channel: 'stable' };
+  const activeReleases = releases.filter((release) => release.status === 'ACTIVE');
+  const latestActiveRelease = activeReleases[0];
+  const publishedTarget = globalPolicy.targetVersion || latestActiveRelease?.version || '-';
 
   function openPackageModal(agentId = '') {
     setPackageForm({
@@ -232,10 +237,13 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
         os: releaseForm.os,
         arch: releaseForm.arch,
         channel: releaseForm.channel.trim() || 'stable',
+        publish: releaseForm.publish,
         artifact: releaseForm.artifact as File
       });
       setReleaseForm(DEFAULT_RELEASE_FORM);
-      setNotice('Agent release uploaded as draft.');
+      setNotice(releaseForm.publish
+        ? 'Agent release published. Agents will update on their next check.'
+        : 'Agent release uploaded as draft.');
     });
   }
 
@@ -400,6 +408,24 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
           <h3>Agent updates</h3>
           <span>{releases.length} releases</span>
         </div>
+        <div className="version-status-strip">
+          <div>
+            <span>Policy</span>
+            <strong>{globalPolicy.enabled ? 'AUTO' : 'PAUSED'}</strong>
+          </div>
+          <div>
+            <span>Channel</span>
+            <strong>{globalPolicy.channel || 'stable'}</strong>
+          </div>
+          <div>
+            <span>Target version</span>
+            <strong>{publishedTarget}</strong>
+          </div>
+          <div>
+            <span>Active releases</span>
+            <strong>{activeReleases.length}</strong>
+          </div>
+        </div>
         <div className="update-grid">
           <form className="release-form" onSubmit={submitRelease}>
             <label>
@@ -428,10 +454,19 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <span>Artifact</span>
               <input type="file" onChange={(event) => setReleaseForm((current) => ({ ...current, artifact: event.target.files?.[0] }))} disabled={!canAdminister} />
             </label>
+            <label className="inline-checkbox">
+              <input
+                type="checkbox"
+                checked={releaseForm.publish}
+                onChange={(event) => setReleaseForm((current) => ({ ...current, publish: event.target.checked }))}
+                disabled={!canAdminister}
+              />
+              <span>Publish</span>
+            </label>
             {canAdminister && (
               <button type="submit" disabled={working || !releaseForm.version || !releaseForm.artifact}>
                 <UploadCloud size={16} />
-                Upload release
+                {releaseForm.publish ? 'Publish version' : 'Upload draft'}
               </button>
             )}
           </form>

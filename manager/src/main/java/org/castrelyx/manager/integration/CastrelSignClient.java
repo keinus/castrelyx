@@ -121,6 +121,18 @@ public class CastrelSignClient {
         .body(Map.class);
   }
 
+  public Map<?, ?> publishAgentRelease(String version, String os, String arch, String channel, byte[] artifact, String filename) {
+    String normalizedChannel = channel == null || channel.isBlank() ? "stable" : channel.trim();
+    Map<?, ?> created = createAgentRelease(version, os, arch, normalizedChannel, artifact, filename);
+    long releaseId = longValue(created.get("id"));
+    Map<?, ?> activated = activateAgentRelease(releaseId);
+    updateAgentPolicy(Map.of(
+        "enabled", true,
+        "channel", normalizedChannel,
+        "targetVersion", stringValue(created.get("version"), version)));
+    return activated;
+  }
+
   public Map<?, ?> activateAgentRelease(long id) {
     return postMap("/api/admin/agent-releases/" + id + "/activate");
   }
@@ -164,5 +176,22 @@ public class CastrelSignClient {
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
         .retrieve()
         .body(Map.class);
+  }
+
+  private static long longValue(Object value) {
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    if (value instanceof String text && !text.isBlank()) {
+      return Long.parseLong(text);
+    }
+    throw new IllegalStateException("CastrelSign did not return an agent release id");
+  }
+
+  private static String stringValue(Object value, String fallback) {
+    if (value == null || String.valueOf(value).isBlank()) {
+      return fallback;
+    }
+    return String.valueOf(value);
   }
 }
