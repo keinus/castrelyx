@@ -18,6 +18,7 @@ export function menuItemsForRole(role: Role): MenuItem[] {
     ['assets', '자산'],
     ['traffic', 'Traffic'],
     ['agent', 'Agent'],
+    ['agentLogs', 'Agent Logs'],
     ['snmp', 'SNMP'],
     ['alerts', '알림'],
     ['castrelsign', 'CastrelSign'],

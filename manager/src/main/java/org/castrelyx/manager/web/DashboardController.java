@@ -1,11 +1,13 @@
 package org.castrelyx.manager.web;
 
+import java.util.List;
 import java.util.Map;
 import org.castrelyx.manager.telemetry.DashboardQueryService;
 import org.castrelyx.manager.telemetry.TelemetrySyncWorker;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -31,6 +33,15 @@ public class DashboardController {
   @GetMapping("/api/dashboards/agent/assets/{assetId}")
   public Map<String, Object> agentAsset(@PathVariable long assetId) {
     return dashboardQueryService.agentDashboard(assetId);
+  }
+
+  @GetMapping("/api/agent/logs")
+  public List<Map<String, Object>> agentLogs(
+      @RequestParam(defaultValue = "1h") String range,
+      @RequestParam(defaultValue = "ALL") String severity,
+      @RequestParam(required = false) String assetUid,
+      @RequestParam(defaultValue = "200") int limit) {
+    return dashboardQueryService.agentLogs(range, severity, assetUid, limit);
   }
 
   @GetMapping("/api/dashboards/snmp")

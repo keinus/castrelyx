@@ -8,12 +8,17 @@ test('admin can reach asset metric dashboard and see create action', async ({ pa
   await page.getByRole('button', { name: '자산' }).click();
 
   await expect(page.getByRole('heading', { name: '자산 관리' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '자산 메트릭 현황' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '자산 현황 트리' })).toBeVisible();
   await expect(assetRow(page, 'edge-router')).toBeVisible();
   await expect(assetRow(page, 'nas')).toBeVisible();
+  await expect(page.locator('.asset-tree-summary').filter({ hasText: 'Seoul HQ' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'CPU Usage' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Memory Usage' })).toBeVisible();
+  await expect(page.getByText('Disk I/O Top 5')).toHaveCount(0);
+  await expect(page.getByText('Disk by mount')).not.toBeVisible();
+  await page.getByRole('tab', { name: 'I/O' }).click();
   await expect(page.getByText('Disk by mount')).toBeVisible();
+  await expect(page.getByText('Disk I/O devices')).toBeVisible();
   await expect(page.getByLabel('자산 추가')).toBeVisible();
 });
 
@@ -23,8 +28,9 @@ test('admin can create a manual asset from the asset view', async ({ page }) => 
   await page.goto('/');
   await page.getByRole('button', { name: '자산' }).click();
   await page.getByLabel('자산 추가').click();
-  await page.getByLabel('자산 이름').fill('branch-fw');
+  await page.getByLabel('자산명').fill('branch-fw');
   await page.getByLabel('관리 IP').fill('10.0.0.2');
+  await page.getByLabel('위치').fill('Branch Office');
   await page.getByLabel('자산 유형').selectOption('FIREWALL');
   await page.getByRole('button', { name: '저장' }).click();
 
@@ -59,5 +65,5 @@ test('viewer can inspect assets but does not see mutation actions or settings', 
 });
 
 function assetRow(page: import('@playwright/test').Page, name: string) {
-  return page.locator('.asset-metric-table').getByRole('button').filter({ hasText: name });
+  return page.locator('.asset-tree-item').filter({ hasText: name });
 }

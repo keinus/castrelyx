@@ -64,6 +64,9 @@ describe('OverviewView', () => {
           discards: 0,
           status: 'up'
         }]
+      },
+      '/api/metrics/assets?range=1h': {
+        body: assetMetrics
       }
     });
 
@@ -79,6 +82,9 @@ describe('OverviewView', () => {
     expect(screen.getByText('ssh.service')).toBeInTheDocument();
     expect(screen.getAllByText('SSH login failed for alice').length).toBeGreaterThan(0);
     expect(screen.getByText('CPU threshold exceeded')).toBeInTheDocument();
+    expect(screen.getByText('Asset Top 5')).toBeInTheDocument();
+    expect(screen.getByText('CPU Top 5')).toBeInTheDocument();
+    expect(screen.getByText('Disk I/O Top 5')).toBeInTheDocument();
 
     const criticalCard = screen.getByText('Critical').closest('section');
     expect(criticalCard).not.toBeNull();
@@ -107,6 +113,9 @@ describe('OverviewView', () => {
           discards: 0,
           status: 'up'
         }]
+      },
+      '/api/metrics/assets?range=1h': {
+        body: assetMetrics
       }
     });
 
@@ -125,7 +134,8 @@ describe('OverviewView', () => {
     mockFetch({
       '/api/dashboards/agent': { status: 500, body: {} },
       '/api/dashboards/snmp': { status: 500, body: {} },
-      '/api/traffic/interfaces?range=1h': { status: 500, body: {} }
+      '/api/traffic/interfaces?range=1h': { status: 500, body: {} },
+      '/api/metrics/assets?range=1h': { status: 500, body: {} }
     });
 
     render(<OverviewView summary={{ ...summary, trafficTopInterfaces: [] }} alerts={[]} />);
@@ -150,6 +160,55 @@ const alerts: AlertRow[] = [
   { id: 2, severity: 'WARNING', status: 'ACTIVE', title: 'Interface error spike' },
   { id: 3, severity: 'CRITICAL', status: 'RESOLVED', title: 'Resolved critical' }
 ];
+
+const assetMetrics = {
+  range: '1h',
+  summary: {
+    totalAssets: 2,
+    observedAssets: 2,
+    staleAssets: 0,
+    criticalAssets: 1,
+    warningAssets: 0
+  },
+  assets: [
+    {
+      assetUid: 'nas',
+      name: 'nas',
+      assetType: 'LINUX_SERVER',
+      managementIp: '192.168.50.21',
+      location: 'Seoul HQ',
+      status: 'active',
+      health: 'critical',
+      sources: { registered: true, agent: true, traffic: true, diskIo: true, observed: true },
+      metrics: {
+        cpuUsagePct: 91.2,
+        memoryUsagePct: 67.8,
+        diskUsagePct: 72.4,
+        diskIoUtilizationPct: 87.5,
+        networkInBps: 4621.02,
+        networkOutBps: 11663.97
+      }
+    },
+    {
+      assetUid: 'edge-router',
+      name: 'edge-router',
+      assetType: 'ROUTER',
+      managementIp: '10.0.0.1',
+      location: 'Seoul HQ',
+      status: 'active',
+      health: 'warning',
+      sources: { registered: true, traffic: true, observed: true },
+      metrics: {
+        cpuUsagePct: 42.1,
+        memoryUsagePct: 55.4,
+        diskUsagePct: 68.2,
+        diskIoUtilizationPct: 42.5,
+        networkInBps: 1200000,
+        networkOutBps: 900000
+      }
+    }
+  ]
+};
 
 type MockResponse = {
   body?: unknown;

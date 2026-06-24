@@ -16,8 +16,37 @@ describe('App shell', () => {
     expect(await screen.findByRole('heading', { name: 'Castrelyx Manager' })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'NMS 보안 통합 관제' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Traffic/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Agent Logs' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'LogParser' })).toBeInTheDocument();
+  });
+
+  it('opens collected agent logs from the sidebar menu', async () => {
+    const fetchMock = mockFetch({
+      '/api/agent/logs?range=1h&severity=ALL&limit=300': {
+        body: [{
+          assetUid: 'agent-01',
+          eventType: 'auth.login.failure',
+          eventCategory: 'auth',
+          severity: 'WARNING',
+          sourceName: '/var/log/auth.log',
+          program: 'sshd',
+          message: 'Failed password for invalid user admin',
+          observedAt: '2026-06-24T08:15:30Z'
+        }]
+      }
+    });
+
+    render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Agent Logs' }));
+
+    expect(await screen.findByRole('heading', { name: 'Agent Logs' })).toBeInTheDocument();
+    expect(await screen.findByText('Failed password for invalid user admin')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agent/logs?range=1h&severity=ALL&limit=300',
+      expect.objectContaining({ credentials: 'include' })
+    );
   });
 
   it('opens the LogParser UI in a new tab from the sidebar menu', async () => {
@@ -66,6 +95,7 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
       }
     },
     '/api/dashboards/agent': { body: { heartbeat: { healthy: 0, stale: 0 }, collectors: [], events: [] } },
+    '/api/agent/logs?range=1h&severity=ALL&limit=300': { body: [] },
     '/api/dashboards/snmp': { body: { polls: { success: 0, failure: 0 }, targets: [], interfaces: [] } },
     '/api/traffic/interfaces?range=1h': { body: [] },
     '/api/metrics/assets?range=1h': {

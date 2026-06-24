@@ -1,4 +1,4 @@
-import { Ban, Download, KeyRound, PackagePlus, RefreshCw, RotateCcw, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Ban, Download, KeyRound, PackagePlus, RefreshCw, RotateCcw, ShieldCheck, ShieldAlert, UploadCloud } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
@@ -7,6 +7,9 @@ import type {
   CastrelSignAuditEvent,
   CastrelSignCertificate,
   CastrelSignToken,
+  AgentRelease,
+  AgentUpdateAttempt,
+  AgentUpdatePolicy,
   IntegrationConfig,
   Role
 } from '../lib/types';
@@ -22,6 +25,14 @@ type PackageForm = {
   ttlSeconds: number;
 };
 
+type ReleaseForm = {
+  version: string;
+  os: string;
+  arch: string;
+  channel: string;
+  artifact?: File;
+};
+
 type AgentRow = CastrelSignAgent & {
   lifecycleStatus: string;
   activeCertificate?: CastrelSignCertificate;
@@ -34,17 +45,28 @@ const DEFAULT_PACKAGE_FORM: PackageForm = {
   ttlSeconds: 3600
 };
 
+const DEFAULT_RELEASE_FORM: ReleaseForm = {
+  version: '',
+  os: 'linux',
+  arch: 'amd64',
+  channel: 'stable'
+};
+
 export function CastrelSignView({ role }: CastrelSignViewProps) {
   const [config, setConfig] = useState<IntegrationConfig | null>(null);
   const [tokens, setTokens] = useState<CastrelSignToken[]>([]);
   const [agents, setAgents] = useState<CastrelSignAgent[]>([]);
   const [certificates, setCertificates] = useState<CastrelSignCertificate[]>([]);
   const [auditEvents, setAuditEvents] = useState<CastrelSignAuditEvent[]>([]);
+  const [releases, setReleases] = useState<AgentRelease[]>([]);
+  const [policies, setPolicies] = useState<AgentUpdatePolicy[]>([]);
+  const [attempts, setAttempts] = useState<AgentUpdateAttempt[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [packageOpen, setPackageOpen] = useState(false);
   const [packageForm, setPackageForm] = useState<PackageForm>(DEFAULT_PACKAGE_FORM);
+  const [releaseForm, setReleaseForm] = useState<ReleaseForm>(DEFAULT_RELEASE_FORM);
   const [confirmAgentId, setConfirmAgentId] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,12 +76,15 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   async function load() {
     setLoading(true);
     setError(null);
-    const [configResult, tokensResult, agentsResult, certificatesResult, auditResult] = await Promise.allSettled([
+    const [configResult, tokensResult, agentsResult, certificatesResult, auditResult, releasesResult, policiesResult, attemptsResult] = await Promise.allSettled([
       api.castrelSign(),
       api.castrelSignTokens(),
       api.castrelSignAgents(),
       api.castrelSignCertificates(),
-      api.castrelSignAuditEvents()
+      api.castrelSignAuditEvents(),
+      api.agentReleases(),
+      api.agentUpdatePolicies(),
+      api.agentUpdateAttempts()
     ]);
 
     if (configResult.status === 'fulfilled') {
@@ -74,6 +99,9 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
     setAgents(nextAgents);
     setCertificates(nextCertificates);
     setAuditEvents(auditResult.status === 'fulfilled' ? auditResult.value : []);
+    setReleases(releasesResult.status === 'fulfilled' ? releasesResult.value : []);
+    setPolicies(policiesResult.status === 'fulfilled' ? policiesResult.value : []);
+    setAttempts(attemptsResult.status === 'fulfilled' ? attemptsResult.value : []);
     setSelectedAgentId((current) => {
       if (current && nextAgents.some((agent) => agent.agentId === current)) {
         return current;
@@ -124,6 +152,8 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   const selectedTokens = tokens.filter((token) => token.agentId === selectedAgent?.agentId);
   const selectedCertificates = certificates.filter((certificate) => certificate.agentId === selectedAgent?.agentId);
   const selectedAudit = auditEvents.filter((event) => event.agentId === selectedAgent?.agentId);
+  const selectedAttempts = attempts.filter((attempt) => attempt.agentId === selectedAgent?.agentId);
+  const globalPolicy = policies.find((policy) => !policy.agentId) ?? { enabled: true, channel: 'stable' };
 
   function openPackageModal(agentId = '') {
     setPackageForm({
@@ -187,6 +217,50 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
     await runAgentAction(async () => {
       await api.revokeCastrelSignToken(token.id);
       setNotice(`Token ${token.id}을 폐기했습니다.`);
+    });
+  }
+
+  async function submitRelease(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!releaseForm.artifact) {
+      setError('Agent release artifact is required.');
+      return;
+    }
+    await runAgentAction(async () => {
+      await api.createAgentRelease({
+        version: releaseForm.version.trim(),
+        os: releaseForm.os,
+        arch: releaseForm.arch,
+        channel: releaseForm.channel.trim() || 'stable',
+        artifact: releaseForm.artifact as File
+      });
+      setReleaseForm(DEFAULT_RELEASE_FORM);
+      setNotice('Agent release uploaded as draft.');
+    });
+  }
+
+  async function updateGlobalPolicy() {
+    await runAgentAction(async () => {
+      await api.updateAgentPolicy({
+        enabled: globalPolicy.enabled,
+        channel: globalPolicy.channel || 'stable',
+        targetVersion: globalPolicy.targetVersion || undefined
+      });
+      setNotice('Agent update policy saved.');
+    });
+  }
+
+  async function activateRelease(release: AgentRelease) {
+    await runAgentAction(async () => {
+      await api.activateAgentRelease(release.id);
+      setNotice(`${release.version} release activated.`);
+    });
+  }
+
+  async function revokeRelease(release: AgentRelease) {
+    await runAgentAction(async () => {
+      await api.revokeAgentRelease(release.id);
+      setNotice(`${release.version} release revoked.`);
     });
   }
 
@@ -321,6 +395,112 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
         </section>
       </div>
 
+      <section className="data-panel update-panel">
+        <div className="panel-heading">
+          <h3>Agent updates</h3>
+          <span>{releases.length} releases</span>
+        </div>
+        <div className="update-grid">
+          <form className="release-form" onSubmit={submitRelease}>
+            <label>
+              <span>Version</span>
+              <input value={releaseForm.version} onChange={(event) => setReleaseForm((current) => ({ ...current, version: event.target.value }))} disabled={!canAdminister} />
+            </label>
+            <label>
+              <span>OS</span>
+              <select value={releaseForm.os} onChange={(event) => setReleaseForm((current) => ({ ...current, os: event.target.value }))} disabled={!canAdminister}>
+                <option value="linux">linux</option>
+                <option value="windows">windows</option>
+              </select>
+            </label>
+            <label>
+              <span>Arch</span>
+              <select value={releaseForm.arch} onChange={(event) => setReleaseForm((current) => ({ ...current, arch: event.target.value }))} disabled={!canAdminister}>
+                <option value="amd64">amd64</option>
+                <option value="arm64">arm64</option>
+              </select>
+            </label>
+            <label>
+              <span>Channel</span>
+              <input value={releaseForm.channel} onChange={(event) => setReleaseForm((current) => ({ ...current, channel: event.target.value }))} disabled={!canAdminister} />
+            </label>
+            <label className="file-input">
+              <span>Artifact</span>
+              <input type="file" onChange={(event) => setReleaseForm((current) => ({ ...current, artifact: event.target.files?.[0] }))} disabled={!canAdminister} />
+            </label>
+            {canAdminister && (
+              <button type="submit" disabled={working || !releaseForm.version || !releaseForm.artifact}>
+                <UploadCloud size={16} />
+                Upload release
+              </button>
+            )}
+          </form>
+          <div className="policy-panel">
+            <h4>Global policy</h4>
+            <label>
+              <span>Enabled</span>
+              <input
+                type="checkbox"
+                checked={globalPolicy.enabled}
+                disabled={!canAdminister}
+                onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, enabled: event.target.checked }))}
+              />
+            </label>
+            <label>
+              <span>Channel</span>
+              <input
+                value={globalPolicy.channel}
+                disabled={!canAdminister}
+                onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, channel: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Target version</span>
+              <input
+                value={globalPolicy.targetVersion ?? ''}
+                disabled={!canAdminister}
+                onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, targetVersion: event.target.value }))}
+              />
+            </label>
+            {canAdminister && <button type="button" onClick={() => void updateGlobalPolicy()} disabled={working}>Save policy</button>}
+          </div>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Version</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>SHA-256</th>
+                <th>Size</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {releases.map((release) => (
+                <tr key={release.id}>
+                  <td><strong>{release.version}</strong></td>
+                  <td>{release.os}/{release.arch} / {release.channel}</td>
+                  <td><StatusPill value={release.status} /></td>
+                  <td><code>{shortHash(release.sha256)}</code></td>
+                  <td>{formatBytes(release.sizeBytes)}</td>
+                  <td>
+                    {canAdminister && release.status !== 'ACTIVE' && (
+                      <button type="button" onClick={() => void activateRelease(release)} disabled={working}>Activate</button>
+                    )}
+                    {canAdminister && release.status !== 'REVOKED' && (
+                      <button type="button" onClick={() => void revokeRelease(release)} disabled={working}>Revoke</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {releases.length === 0 && <tr><td colSpan={6}>No agent releases uploaded.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <div className="timeline-grid">
         <TimelinePanel title="Enrollment tokens" empty="agent-bound token 없음">
           {selectedTokens.map((token) => (
@@ -356,6 +536,17 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <div>
                 <strong>{event.eventType ?? '-'}</strong>
                 <span>{formatDate(event.createdAt)} · {event.message ?? '-'}</span>
+              </div>
+            </li>
+          ))}
+        </TimelinePanel>
+        <TimelinePanel title="Update attempts" empty="No update attempts">
+          {selectedAttempts.map((attempt) => (
+            <li key={attempt.id ?? attempt.deploymentId}>
+              <UploadCloud size={15} />
+              <div>
+                <strong>{attempt.status}</strong>
+                <span>{attempt.fromVersion ?? '-'} - release {attempt.releaseId} - {formatDate(attempt.updatedAt)} - {attempt.message ?? '-'}</span>
               </div>
             </li>
           ))}
@@ -472,6 +663,36 @@ function downloadBlob(blob: Blob, filename: string) {
   anchor.click();
   anchor.remove();
   urlApi.revokeObjectURL?.(url);
+}
+
+function upsertGlobalPolicy(policies: AgentUpdatePolicy[], policy: AgentUpdatePolicy): AgentUpdatePolicy[] {
+  const nextPolicy = { ...policy, agentId: undefined, policyKey: policy.policyKey ?? 'global' };
+  const index = policies.findIndex((item) => !item.agentId);
+  if (index < 0) {
+    return [nextPolicy, ...policies];
+  }
+  return policies.map((item, itemIndex) => (itemIndex === index ? nextPolicy : item));
+}
+
+function shortHash(value?: string): string {
+  if (!value) {
+    return '-';
+  }
+  return value.length <= 16 ? value : `${value.slice(0, 12)}...`;
+}
+
+function formatBytes(value?: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  const bytes = value ?? 0;
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  return `${bytes} B`;
 }
 
 function safeFileName(value: string): string {

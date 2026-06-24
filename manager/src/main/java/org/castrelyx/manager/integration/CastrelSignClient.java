@@ -3,8 +3,12 @@ package org.castrelyx.manager.integration;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.util.MultiValueMap;
+import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.client.RestClient;
 
 @Component
@@ -47,6 +51,15 @@ public class CastrelSignClient {
         .body(String.class);
   }
 
+  public String agentUpdatePublicKeyPem() {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.get()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agent-update-public-key.pem"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .body(String.class);
+  }
+
   public Map<?, ?> createEnrollmentToken(Map<String, Object> request) {
     IntegrationConfig config = integrationService.get("castrelsign");
     return restClient.post()
@@ -74,6 +87,58 @@ public class CastrelSignClient {
     postNoBody("/api/admin/agents/" + agentId + "/reactivate");
   }
 
+  public List<?> listAgentReleases() {
+    return getList("/api/admin/agent-releases");
+  }
+
+  public List<?> listAgentUpdatePolicies() {
+    return getList("/api/admin/agent-update-policies");
+  }
+
+  public List<?> listAgentUpdateAttempts() {
+    return getList("/api/admin/agent-update-attempts");
+  }
+
+  public Map<?, ?> createAgentRelease(String version, String os, String arch, String channel, byte[] artifact, String filename) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+    body.add("version", version);
+    body.add("os", os);
+    body.add("arch", arch);
+    body.add("channel", channel == null || channel.isBlank() ? "stable" : channel);
+    body.add("artifact", new ByteArrayResource(artifact) {
+      @Override
+      public String getFilename() {
+        return filename == null || filename.isBlank() ? "castrelyx-agent" : filename;
+      }
+    });
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agent-releases"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(body)
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> activateAgentRelease(long id) {
+    return postMap("/api/admin/agent-releases/" + id + "/activate");
+  }
+
+  public Map<?, ?> revokeAgentRelease(long id) {
+    return postMap("/api/admin/agent-releases/" + id + "/revoke");
+  }
+
+  public Map<?, ?> updateAgentPolicy(Map<String, Object> request) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agent-update-policy"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .body(request)
+        .retrieve()
+        .body(Map.class);
+  }
+
   private List<?> getList(String path) {
     IntegrationConfig config = integrationService.get("castrelsign");
     return restClient.get()
@@ -90,5 +155,14 @@ public class CastrelSignClient {
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
         .retrieve()
         .toBodilessEntity();
+  }
+
+  private Map<?, ?> postMap(String path) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + path))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .body(Map.class);
   }
 }

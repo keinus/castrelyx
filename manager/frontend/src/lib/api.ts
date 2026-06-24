@@ -1,4 +1,5 @@
 import type {
+  AgentLogEvent,
   AlertRow,
   AgentRelease,
   AgentUpdateAttempt,
@@ -79,6 +80,13 @@ export const api = {
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   overview: () => request<DashboardSummary>('/api/dashboards/overview'),
   agentDashboard: () => request<AgentDashboard>('/api/dashboards/agent'),
+  agentLogs: (range = '1h', severity = 'ALL', limit = 300, assetUid?: string) => {
+    const params = new URLSearchParams({ range, severity, limit: String(limit) });
+    if (assetUid && assetUid !== 'ALL') {
+      params.set('assetUid', assetUid);
+    }
+    return request<AgentLogEvent[]>(`/api/agent/logs?${params.toString()}`);
+  },
   snmpDashboard: () => request<SnmpDashboard>('/api/dashboards/snmp'),
   trafficInterfaces: (range = '1h') =>
     request<InterfaceTraffic[]>(`/api/traffic/interfaces?range=${encodeURIComponent(range)}`),

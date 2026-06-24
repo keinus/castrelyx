@@ -186,6 +186,7 @@ class CastrelSignIntegrationControllerTest {
         "max_uses", 1, "used_count", 0);
     doReturn(token).when(client).createEnrollmentToken(anyMap());
     doReturn("-----BEGIN CERTIFICATE-----\nfixture-ca\n-----END CERTIFICATE-----\n").when(client).rootCaPem();
+    doReturn("-----BEGIN PUBLIC KEY-----\nfixture-update-key\n-----END PUBLIC KEY-----\n").when(client).agentUpdatePublicKeyPem();
 
     MvcResult result = mockMvc.perform(post("/api/integrations/castrelsign/enrollment-packages")
             .cookie(admin)
@@ -198,7 +199,7 @@ class CastrelSignIntegrationControllerTest {
 
     Map<String, String> entries = unzip(result.getResponse().getContentAsByteArray());
     org.assertj.core.api.Assertions.assertThat(entries.keySet()).containsExactlyInAnyOrder(
-        "agent.yaml", "certs/ca.pem", "bin/castrelyx-agent-linux-amd64",
+        "agent.yaml", "certs/ca.pem", "certs/update_public_key.pem", "bin/castrelyx-agent-linux-amd64",
         "bin/castrelyx-agent-windows-amd64.exe", "install.bat", "install.ps1", "install.sh", "install.md");
     org.assertj.core.api.Assertions.assertThat(entries.keySet()).doesNotContain("certs/client.key", "certs/client.pem");
     org.assertj.core.api.Assertions.assertThat(entries.get("agent.yaml"))
@@ -209,8 +210,13 @@ class CastrelSignIntegrationControllerTest {
         .contains("ingest_transport: tcp_mtls")
         .contains("tcp_ingest_addr: castrelsign:9443")
         .contains("tcp_ingest_server_name: castrelsign")
+        .contains("update_enabled: true")
+        .contains("update_channel: stable")
+        .contains("update_public_key_path: ./update_public_key.pem")
         .doesNotContain("cert_dir: ./certs")
         .doesNotContain("spool_dir: ./spool");
+    org.assertj.core.api.Assertions.assertThat(entries.get("certs/update_public_key.pem"))
+        .contains("fixture-update-key");
     org.assertj.core.api.Assertions.assertThat(entries.get("install.bat"))
         .contains("powershell.exe")
         .contains("install.ps1");
@@ -221,14 +227,16 @@ class CastrelSignIntegrationControllerTest {
         .contains("CastrelyxAgent")
         .contains("New-Service")
         .contains("Start-Service")
-        .contains("castrelyx-agent-windows-amd64.exe");
+        .contains("castrelyx-agent-windows-amd64.exe")
+        .contains("update_public_key.pem");
     org.assertj.core.api.Assertions.assertThat(entries.get("install.sh"))
         .contains("hostname")
         .contains("__HOSTNAME__")
         .contains("/etc/castrelyx/agent.yaml")
         .contains("/etc/systemd/system/castrelyx-agent.service")
         .contains("systemctl enable --now castrelyx-agent")
-        .contains("castrelyx-agent-linux-amd64");
+        .contains("castrelyx-agent-linux-amd64")
+        .contains("update_public_key.pem");
     org.assertj.core.api.Assertions.assertThat(entries.get("install.md"))
         .contains("Windows")
         .contains("install.bat")
@@ -242,6 +250,7 @@ class CastrelSignIntegrationControllerTest {
         .containsEntry("max_uses", 1)
         .doesNotContainKey("agent_id");
     verify(client).rootCaPem();
+    verify(client).agentUpdatePublicKeyPem();
   }
 
   @Test

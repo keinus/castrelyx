@@ -229,13 +229,28 @@ export type AgentMetricSummary = {
 
 export type AgentEventSummary = {
   assetUid?: string;
+  sourceId?: string;
   eventType?: string;
+  eventCategory?: string;
   severity?: string;
   message?: string;
+  platform?: string;
   sourceName?: string;
+  channel?: string;
+  program?: string;
+  provider?: string;
+  pid?: string;
+  eventId?: number;
+  recordId?: number;
+  eventTime?: string;
+  actor?: string;
+  action?: string;
   outcome?: string;
+  dedupKey?: string;
   observedAt?: string;
 };
+
+export type AgentLogEvent = AgentEventSummary;
 
 export type AgentSocketState = {
   assetUid?: string;

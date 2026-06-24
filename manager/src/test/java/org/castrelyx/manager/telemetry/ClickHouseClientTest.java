@@ -29,6 +29,14 @@ class ClickHouseClientTest {
   }
 
   @Test
+  void limitsAgentLogQueryParametersToKnownValues() {
+    assertThat(ClickHouseClient.agentLogLimit(-1)).isEqualTo(200);
+    assertThat(ClickHouseClient.agentLogLimit(1200)).isEqualTo(1000);
+    assertThat(ClickHouseClient.agentLogSeverityFilter("warning")).contains("WARNING");
+    assertThat(ClickHouseClient.agentLogSeverityFilter("WARNING'; DROP TABLE manager_events; --")).isEmpty();
+  }
+
+  @Test
   void hidesInternalTrafficInterfaces() {
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("eth0")).isTrue();
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("wan0")).isTrue();
@@ -38,6 +46,22 @@ class ClickHouseClientTest {
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("DockerBridge")).isFalse();
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("br-2fde3c3c1f2d")).isFalse();
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("br-uplink")).isTrue();
+  }
+
+  @Test
+  void transformedTelemetrySchemaUsesDailyPartitionsThirtyDayTtlAndIndexes() {
+    assertThat(CanonicalTelemetrySchema.createMetricSamples("castrelyx"))
+        .contains("PARTITION BY toDate(observed_at)")
+        .contains("TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE")
+        .contains("INDEX idx_metric_observed_at");
+    assertThat(CanonicalTelemetrySchema.createStateSnapshots("castrelyx"))
+        .contains("PARTITION BY toDate(observed_at)")
+        .contains("TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE")
+        .contains("INDEX idx_state_type");
+    assertThat(CanonicalTelemetrySchema.createEvents("castrelyx"))
+        .contains("PARTITION BY toDate(observed_at)")
+        .contains("TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE")
+        .contains("INDEX idx_event_type");
   }
 
   @Test

@@ -51,47 +51,24 @@ class TelemetrySyncWorkerTest {
   }
 
   @Test
-  void syncsRawRowsIntoAssetsCanonicalRowsCursorAndAlerts() {
-    clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
-        Instant.parse("2026-06-09T10:00:00Z"),
+  void syncOnceKeepsCanonicalOwnershipInLogparserAndSyncsObservedAgents() {
+    clickHouseClient.observedSources.add(new ClickHouseClient.ObservedAgentSource(
         "agent-01",
-        "asset",
-        "identity",
-        "identity",
+        Instant.parse("2026-06-09T10:00:00Z"),
         """
             {"asset_uid":"agent-01","hostname":"app-01","management_ip":"10.1.0.10","asset_type":"LINUX_SERVER"}
             """));
-    clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
-        Instant.parse("2026-06-09T10:01:00Z"),
-        "agent-01",
-        "metric",
-        "cpu",
-        "cpu.total",
-        """
-            {"asset_uid":"agent-01","metric_name":"cpu.usage","metric_value":95.5,"unit":"percent"}
-            """));
-    clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
-        Instant.parse("2026-06-09T10:02:00Z"),
-        "snmp-edge",
-        "snmp",
-        "poll",
-        "edge-router",
-        """
-            {
-              "target_host":"192.168.10.1",
-              "target_name":"edge-router",
-              "poll_status":"error",
-              "metrics":[{"interface":"eth0","name":"ifInOctets","value":120000,"unit":"bytes"}]
-            }
-            """));
-
     TelemetrySyncWorker worker = new TelemetrySyncWorker(clickHouseClient, normalizer, assetService, jdbcTemplate);
     Map<String, Object> result = worker.syncOnce();
 
-    assertThat(result).containsEntry("rawRows", 3).containsEntry("canonicalRows", 5);
+    assertThat(result)
+        .containsEntry("owner", "logparser")
+        .containsEntry("rawRows", 0)
+        .containsEntry("canonicalRows", 0)
+        .containsEntry("observedAgents", 1);
     assertThat(clickHouseClient.schemaEnsured).isTrue();
-    assertThat(clickHouseClient.insertedRecords).extracting(CanonicalTelemetryRecord::kind)
-        .contains(CanonicalTelemetryRecord.Kind.METRIC, CanonicalTelemetryRecord.Kind.EVENT, CanonicalTelemetryRecord.Kind.STATE);
+    assertThat(clickHouseClient.rawFetchCalls).isZero();
+    assertThat(clickHouseClient.canonicalInsertCalls).isZero();
 
     Asset agentAsset = assetService.listAssets().stream()
         .filter(asset -> asset.assetUid().equals("agent-01"))
@@ -100,66 +77,40 @@ class TelemetrySyncWorkerTest {
     assertThat(agentAsset.name()).isEqualTo("app-01");
     List<AssetSourceBinding> sources = assetService.sources(agentAsset.id());
     assertThat(sources).extracting(AssetSourceBinding::sourceType).contains(SourceType.AGENT);
-
-    Integer alertCount = jdbcTemplate.queryForObject("select count(*) from alert_instances where status = 'ACTIVE'", Integer.class);
-    assertThat(alertCount).isEqualTo(2);
-    String cursor = jdbcTemplate.queryForObject(
-        "select cursor_value from sync_cursors where name = 'clickhouse.raw.castrelyx_agent_events'",
-        String.class);
-    assertThat(cursor).contains("2026-06-09T10:02:00Z", "snmp-edge", "edge-router");
+    assertThat(sources).extracting(AssetSourceBinding::sourceKey).contains("transformed-agent");
+    Integer cursorCount = jdbcTemplate.queryForObject("select count(*) from sync_cursors", Integer.class);
+    assertThat(cursorCount).isZero();
   }
 
   @Test
-  void createsAgentAssetFromFirstNonIdentityTelemetry() {
-    clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
-        Instant.parse("2026-06-11T12:00:00Z"),
+  void syncObservedAgentsAcceptsLegacyNestedIdentityPayload() {
+    clickHouseClient.observedSources.add(new ClickHouseClient.ObservedAgentSource(
         "nas",
-        "metric",
-        "disk",
-        "root",
+        Instant.parse("2026-06-11T12:00:00Z"),
         """
-            {"metric_name":"disk.usage","metric_value":72.4,"unit":"percent"}
+            {"additionalAttributes":{"payload":{"asset_uid":"nas","hostname":"nas-01","management_ip":"10.1.0.20","asset_type":"LINUX_SERVER"}}}
             """));
 
     TelemetrySyncWorker worker = new TelemetrySyncWorker(clickHouseClient, normalizer, assetService, jdbcTemplate);
-    worker.syncOnce();
+    Map<String, Object> result = worker.syncObservedAgents();
+
+    assertThat(result).containsEntry("agents", 1);
 
     Asset agentAsset = assetService.listAssets().stream()
         .filter(asset -> asset.assetUid().equals("nas"))
         .findFirst()
         .orElseThrow();
-    assertThat(agentAsset.name()).isEqualTo("nas");
+    assertThat(agentAsset.name()).isEqualTo("nas-01");
     assertThat(assetService.sources(agentAsset.id()))
         .extracting(AssetSourceBinding::sourceId)
         .contains("nas");
   }
 
-  @Test
-  void drainsMultipleRawTelemetryBatchesInOneSync() {
-    for (int index = 0; index < 1001; index++) {
-      clickHouseClient.rawRows.add(new ClickHouseClient.RawTelemetryRow(
-          Instant.parse("2026-06-11T12:00:00Z").plusSeconds(index),
-          "agent-01",
-          "metric",
-          "runtime",
-          "runtime-" + index,
-          """
-              {"metric_name":"agent.runtime.uptime","metric_value":1,"unit":"seconds"}
-              """));
-    }
-
-    TelemetrySyncWorker worker = new TelemetrySyncWorker(clickHouseClient, normalizer, assetService, jdbcTemplate);
-    Map<String, Object> result = worker.syncOnce();
-
-    assertThat(result).containsEntry("rawRows", 1001).containsEntry("canonicalRows", 1001);
-    assertThat(clickHouseClient.insertedRecords).hasSize(1001);
-  }
-
   private static class FakeClickHouseClient extends ClickHouseClient {
-    final List<RawTelemetryRow> rawRows = new ArrayList<>();
-    final List<CanonicalTelemetryRecord> insertedRecords = new ArrayList<>();
+    final List<ObservedAgentSource> observedSources = new ArrayList<>();
     boolean schemaEnsured;
-    int nextRow;
+    int rawFetchCalls;
+    int canonicalInsertCalls;
 
     FakeClickHouseClient() {
       super(new ManagerProperties(
@@ -176,18 +127,18 @@ class TelemetrySyncWorkerTest {
 
     @Override
     public List<RawTelemetryRow> fetchRawTelemetryRows(String cursorValue, int limit) {
-      if (nextRow >= rawRows.size()) {
-        return List.of();
-      }
-      int end = Math.min(nextRow + limit, rawRows.size());
-      List<RawTelemetryRow> batch = new ArrayList<>(rawRows.subList(nextRow, end));
-      nextRow = end;
-      return batch;
+      rawFetchCalls++;
+      return List.of();
     }
 
     @Override
     public void insertCanonicalRecords(List<CanonicalTelemetryRecord> records) {
-      insertedRecords.addAll(records);
+      canonicalInsertCalls++;
+    }
+
+    @Override
+    public List<ObservedAgentSource> fetchObservedAgentSources() {
+      return observedSources;
     }
   }
 }

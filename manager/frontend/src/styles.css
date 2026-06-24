@@ -755,6 +755,13 @@ tr:last-child td {
   align-items: center;
 }
 
+.agent-log-control-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px);
+  gap: 10px;
+  align-items: center;
+}
+
 .traffic-filter-field {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -940,6 +947,59 @@ tr:last-child td {
   gap: 8px;
   min-height: 44px;
   color: #60717a;
+}
+
+.agent-log-table {
+  min-width: 980px;
+}
+
+.agent-log-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-log-meta strong,
+.agent-log-meta span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-log-meta span {
+  color: #60717a;
+  font-size: 12px;
+}
+
+.agent-log-message {
+  min-width: 340px;
+  max-width: 640px;
+  white-space: normal;
+}
+
+.agent-log-message div {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.agent-log-message svg {
+  margin-top: 2px;
+  color: #60717a;
+}
+
+.agent-log-message span,
+.agent-log-message em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-log-message em {
+  display: block;
+  margin-top: 4px;
+  color: #60717a;
+  font-size: 12px;
+  font-style: normal;
 }
 
 .lifecycle-table tbody tr {
@@ -3036,6 +3096,10 @@ tr:last-child td {
 
   .asset-metric-table {
     min-width: 720px;
+  }
+
+  .agent-log-control-bar {
+    grid-template-columns: 1fr;
   }
 
   .command-header,

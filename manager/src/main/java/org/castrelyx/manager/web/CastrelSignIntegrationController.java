@@ -24,8 +24,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/integrations/castrelsign")
@@ -97,6 +99,46 @@ public class CastrelSignIntegrationController {
     client.reactivateAgent(agentId);
   }
 
+  @GetMapping("/agent-releases")
+  public List<?> agentReleases() {
+    return normalizeList(client.listAgentReleases());
+  }
+
+  @PostMapping(value = "/agent-releases", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  @ResponseStatus(HttpStatus.CREATED)
+  public Object createAgentRelease(@RequestParam("version") String version,
+      @RequestParam("os") String os,
+      @RequestParam("arch") String arch,
+      @RequestParam(name = "channel", defaultValue = "stable") String channel,
+      @RequestParam("artifact") MultipartFile artifact) throws IOException {
+    return normalize(client.createAgentRelease(version, os, arch, channel, artifact.getBytes(), artifact.getOriginalFilename()));
+  }
+
+  @PostMapping("/agent-releases/{id}/activate")
+  public Object activateAgentRelease(@PathVariable long id) {
+    return normalize(client.activateAgentRelease(id));
+  }
+
+  @PostMapping("/agent-releases/{id}/revoke")
+  public Object revokeAgentRelease(@PathVariable long id) {
+    return normalize(client.revokeAgentRelease(id));
+  }
+
+  @GetMapping("/agent-update-policies")
+  public List<?> agentUpdatePolicies() {
+    return normalizeList(client.listAgentUpdatePolicies());
+  }
+
+  @PostMapping("/agent-update-policy")
+  public Object updateAgentPolicy(@RequestBody(required = false) Map<String, Object> request) {
+    return normalize(client.updateAgentPolicy(request == null ? Map.of() : request));
+  }
+
+  @GetMapping("/agent-update-attempts")
+  public List<?> agentUpdateAttempts() {
+    return normalizeList(client.listAgentUpdateAttempts());
+  }
+
   @PostMapping("/enrollment-packages")
   public ResponseEntity<byte[]> createEnrollmentPackage(@RequestBody EnrollmentPackageRequest request) throws IOException {
     IntegrationConfig config = integrationService.get("castrelsign");
@@ -134,7 +176,8 @@ public class CastrelSignIntegrationController {
         enrollmentToken,
         tlsServerName,
         tcpIngestAddr,
-        client.rootCaPem());
+        client.rootCaPem(),
+        client.agentUpdatePublicKeyPem());
     return ResponseEntity.ok()
         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"castrelsign-" + safeFilename(agentId) + "-enrollment.zip\"")
         .contentType(MediaType.parseMediaType("application/zip"))
@@ -214,11 +257,12 @@ public class CastrelSignIntegrationController {
   }
 
   private static byte[] packageZip(String agentId, String tenantId, String managerUrl, String token,
-      String tlsServerName, String tcpIngestAddr, String caPem) throws IOException {
+      String tlsServerName, String tcpIngestAddr, String caPem, String updatePublicKeyPem) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
       addEntry(zip, "agent.yaml", agentYaml(agentId.isBlank() ? "__HOSTNAME__" : agentId, tenantId, managerUrl, token, tlsServerName, tcpIngestAddr));
       addEntry(zip, "certs/ca.pem", caPem == null ? "" : caPem);
+      addEntry(zip, "certs/update_public_key.pem", updatePublicKeyPem == null ? "" : updatePublicKeyPem);
       addEntry(zip, "bin/castrelyx-agent-linux-amd64", requiredResource("agent-binaries/castrelyx-agent-linux-amd64"));
       addEntry(zip, "bin/castrelyx-agent-windows-amd64.exe", requiredResource("agent-binaries/castrelyx-agent-windows-amd64.exe"));
       addEntry(zip, "install.bat", batchInstall());
@@ -258,6 +302,10 @@ public class CastrelSignIntegrationController {
         ingest_transport: tcp_mtls
         tcp_ingest_addr: %s
         tcp_ingest_server_name: %s
+        update_enabled: true
+        update_channel: stable
+        update_check_interval: 6h
+        update_public_key_path: ./update_public_key.pem
         batch_interval: 30s
         collectors:
           - identity
@@ -301,12 +349,13 @@ public class CastrelSignIntegrationController {
         $agentExe = Join-Path $binDir 'castrelyx-agent.exe'
         $sourceExe = Join-Path $packageDir 'bin\\castrelyx-agent-windows-amd64.exe'
         $sourceCa = Join-Path $packageDir 'certs\\ca.pem'
+        $sourceUpdateKey = Join-Path $packageDir 'certs\\update_public_key.pem'
         $sourceConfig = Join-Path $packageDir 'agent.yaml'
 
         foreach ($path in @($installRoot, $binDir, $certDir, $spoolDir)) {
           New-Item -ItemType Directory -Force -Path $path | Out-Null
         }
-        foreach ($required in @($sourceExe, $sourceCa, $sourceConfig)) {
+        foreach ($required in @($sourceExe, $sourceCa, $sourceUpdateKey, $sourceConfig)) {
           if (-not (Test-Path $required)) {
             throw "Missing package file: $required"
           }
@@ -314,6 +363,7 @@ public class CastrelSignIntegrationController {
 
         Copy-Item -Path $sourceExe -Destination $agentExe -Force
         Copy-Item -Path $sourceCa -Destination (Join-Path $certDir 'ca.pem') -Force
+        Copy-Item -Path $sourceUpdateKey -Destination (Join-Path $installRoot 'update_public_key.pem') -Force
         $hostname = [System.Net.Dns]::GetHostName()
         $agentYaml = Get-Content $sourceConfig -Raw
         $agentYaml.Replace('__HOSTNAME__', $hostname) | Set-Content -Path $configPath -Encoding utf8 -NoNewline
@@ -364,6 +414,7 @@ public class CastrelSignIntegrationController {
         esac
         source_config="$package_dir/agent.yaml"
         source_ca="$package_dir/certs/ca.pem"
+        source_update_key="$package_dir/certs/update_public_key.pem"
         config_dir="/etc/castrelyx"
         config_path="$config_dir/agent.yaml"
         cert_dir="/var/lib/castrelyx-agent/certs"
@@ -371,7 +422,7 @@ public class CastrelSignIntegrationController {
         agent_bin="/usr/local/bin/castrelyx-agent"
         service_path="/etc/systemd/system/castrelyx-agent.service"
 
-        for required in "$source_bin" "$source_config" "$source_ca"; do
+        for required in "$source_bin" "$source_config" "$source_ca" "$source_update_key"; do
           if [ ! -f "$required" ]; then
             echo "Missing package file: $required" >&2
             exit 1
@@ -381,6 +432,7 @@ public class CastrelSignIntegrationController {
         mkdir -p "$config_dir" "$cert_dir" "$spool_dir"
         install -m 0755 "$source_bin" "$agent_bin"
         install -m 0644 "$source_ca" "$cert_dir/ca.pem"
+        install -m 0644 "$source_update_key" "$config_dir/update_public_key.pem"
         agent_hostname="$(hostname)"
         escaped_hostname="$(printf '%s' "$agent_hostname" | sed 's/[\\\\/&]/\\\\&/g')"
         sed "s/__HOSTNAME__/$escaped_hostname/g" "$source_config" > "$config_path"
@@ -420,7 +472,7 @@ public class CastrelSignIntegrationController {
 
         Agent ID: %s
 
-        This package contains agent.yaml, certs/ca.pem, agent binaries, and service install scripts.
+        This package contains agent.yaml, certs/ca.pem, certs/update_public_key.pem, agent binaries, and service install scripts.
         It intentionally does not contain client.key or client.pem. The agent creates the private key locally and stores the issued client certificate after first enrollment.
         After enrollment, telemetry is sent to the LogParser TCP/mTLS ingest endpoint configured in agent.yaml.
 

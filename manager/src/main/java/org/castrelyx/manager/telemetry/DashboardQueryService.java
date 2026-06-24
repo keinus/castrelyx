@@ -38,6 +38,10 @@ public class DashboardQueryService {
     return clickHouseClient.queryAgentDashboard(assetUid);
   }
 
+  public List<Map<String, Object>> agentLogs(String range, String severity, String assetUid, int limit) {
+    return clickHouseClient.queryAgentLogEvents(range, severity, assetUid, limit);
+  }
+
   public Map<String, Object> snmpDashboard() {
     return snmpDashboard(null);
   }

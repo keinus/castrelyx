@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Boxes,
+  FileText,
   Gauge,
   LogOut,
   Network,
@@ -16,6 +17,7 @@ import { api, bootstrap as loadBootstrap } from './lib/api';
 import type { AlertRow, Asset, BootstrapState, DashboardSummary, Role } from './lib/types';
 import { menuItemsForRole, nextSurface } from './lib/uiModel';
 import { AgentDashboardView } from './views/AgentDashboardView';
+import { AgentLogsView } from './views/AgentLogsView';
 import { AlertsView } from './views/AlertsView';
 import { AssetsView } from './views/AssetsView';
 import { CastrelSignView } from './views/CastrelSignView';
@@ -47,6 +49,7 @@ const icons = {
   assets: Boxes,
   traffic: Activity,
   agent: Server,
+  agentLogs: FileText,
   snmp: Router,
   alerts: Bell,
   castrelsign: ShieldCheck,
@@ -254,6 +257,8 @@ function ViewSwitch({
       return <TrafficView />;
     case 'agent':
       return <AgentDashboardView />;
+    case 'agentLogs':
+      return <AgentLogsView />;
     case 'snmp':
       return <SnmpDashboardView />;
     case 'alerts':

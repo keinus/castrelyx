@@ -51,37 +51,13 @@ public class TelemetrySyncWorker {
 
   public synchronized Map<String, Object> syncOnce() {
     clickHouseClient.ensureCanonicalTables();
-    String cursor = cursorValue();
-    int rawRowCount = 0;
-    int canonicalRowCount = 0;
-    ClickHouseClient.RawTelemetryRow lastRow = null;
-    List<CanonicalTelemetryRecord> canonicalRows = new ArrayList<>();
-    for (int batch = 0; batch < MAX_BATCHES; batch++) {
-      List<ClickHouseClient.RawTelemetryRow> rawRows = clickHouseClient.fetchRawTelemetryRows(cursor, BATCH_SIZE);
-      if (rawRows.isEmpty()) {
-        break;
-      }
-      rawRowCount += rawRows.size();
-      for (ClickHouseClient.RawTelemetryRow row : rawRows) {
-        List<CanonicalTelemetryRecord> normalized = telemetryNormalizer.normalizeRawLogparserEvent(rawJson(row));
-        for (CanonicalTelemetryRecord record : normalized) {
-          upsertObservedAgent(record);
-          evaluateAndPersistAlert(record);
-        }
-        canonicalRows.addAll(normalized);
-      }
-      lastRow = rawRows.getLast();
-      cursor = cursorValue(lastRow);
-      if (rawRows.size() < BATCH_SIZE) {
-        break;
-      }
-    }
-    canonicalRowCount = canonicalRows.size();
-    clickHouseClient.insertCanonicalRecords(canonicalRows);
-    if (lastRow != null) {
-      updateCursor(lastRow);
-    }
-    return Map.of("synced", true, "rawRows", rawRowCount, "canonicalRows", canonicalRowCount);
+    Map<String, Object> observedAgents = syncObservedAgents();
+    return Map.of(
+        "synced", true,
+        "owner", "logparser",
+        "rawRows", 0,
+        "canonicalRows", 0,
+        "observedAgents", observedAgents.getOrDefault("agents", 0));
   }
 
   public Map<String, Object> syncObservedAgents() {
@@ -93,7 +69,7 @@ public class TelemetrySyncWorker {
           identity.name(),
           identity.assetType(),
           identity.managementIp());
-      bindSourceIfMissing(asset.id(), SourceType.AGENT, source.sourceId(), "raw-agent", 90);
+      bindSourceIfMissing(asset.id(), SourceType.AGENT, source.sourceId(), "transformed-agent", 90);
       count++;
     }
     return Map.of("synced", true, "agents", count);
@@ -245,7 +221,11 @@ public class TelemetrySyncWorker {
     if (source.identityJson() != null && !source.identityJson().isBlank()) {
       try {
         JsonNode root = OBJECT_MAPPER.readTree(source.identityJson());
-        JsonNode payload = root.path("additionalAttributes").path("payload");
+        JsonNode payload = root.isObject() ? root : OBJECT_MAPPER.createObjectNode();
+        JsonNode nestedPayload = root.path("additionalAttributes").path("payload");
+        if (nestedPayload.isObject()) {
+          payload = nestedPayload;
+        }
         if (payload.isMissingNode() || payload.isNull()) {
           JsonNode rawLog = root.path("common").path("rawLog");
           if (rawLog.isTextual()) {
@@ -329,6 +309,9 @@ public class TelemetrySyncWorker {
 
   private static String text(JsonNode node, String field) {
     JsonNode value = node.get(field);
+    if ((value == null || value.isNull()) && !field.startsWith("payload_")) {
+      value = node.get("payload_" + field);
+    }
     return value == null || value.isNull() ? null : value.asText();
   }
 

@@ -8,6 +8,8 @@ import type {
   AgentServiceState,
   AgentSocketState,
   AlertRow,
+  AssetMetricSummary,
+  AssetMetricsOverview,
   DashboardSummary,
   InterfaceTraffic,
   SnmpDashboard
@@ -35,6 +37,11 @@ type KpiItem = {
   tone: KpiTone;
 };
 
+type RankedAsset = {
+  asset: AssetMetricSummary;
+  value: number;
+};
+
 type DashboardLoadResult<T> = {
   ok: boolean;
   value: T;
@@ -42,10 +49,23 @@ type DashboardLoadResult<T> = {
 
 const DETAIL_DASHBOARD_TIMEOUT_MS = 5000;
 
+const emptyAssetMetrics: AssetMetricsOverview = {
+  range: '1h',
+  summary: {
+    totalAssets: 0,
+    observedAssets: 0,
+    staleAssets: 0,
+    criticalAssets: 0,
+    warningAssets: 0
+  },
+  assets: []
+};
+
 export function OverviewView({ summary, alerts }: OverviewViewProps) {
   const [agentDashboard, setAgentDashboard] = useState<AgentDashboard>({});
   const [snmpDashboard, setSnmpDashboard] = useState<SnmpDashboard>({});
   const [trafficDashboardRows, setTrafficDashboardRows] = useState<InterfaceTraffic[]>([]);
+  const [assetMetrics, setAssetMetrics] = useState<AssetMetricsOverview>(emptyAssetMetrics);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -54,17 +74,19 @@ export function OverviewView({ summary, alerts }: OverviewViewProps) {
     setLoading(true);
     setError('');
 
-    const [agentResult, snmpResult, trafficResult] = await Promise.all([
+    const [agentResult, snmpResult, trafficResult, assetResult] = await Promise.all([
       loadWithTimeout(api.agentDashboard(), {}),
       loadWithTimeout(api.snmpDashboard(), {}),
-      loadWithTimeout(api.trafficInterfaces('1h'), [])
+      loadWithTimeout(api.trafficInterfaces('1h'), []),
+      loadWithTimeout(api.assetMetrics('1h'), emptyAssetMetrics)
     ]);
 
     setAgentDashboard(agentResult.value);
     setSnmpDashboard(snmpResult.value);
     setTrafficDashboardRows(trafficResult.value);
+    setAssetMetrics(assetResult.value);
 
-    if ([agentResult, snmpResult, trafficResult].some((result) => !result.ok)) {
+    if ([agentResult, snmpResult, trafficResult, assetResult].some((result) => !result.ok)) {
       setError('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 상황판을 표시합니다.');
     }
     setLastUpdatedAt(new Date().toISOString());
@@ -106,6 +128,7 @@ export function OverviewView({ summary, alerts }: OverviewViewProps) {
     () => trafficRows.filter((row) => row.errors + row.discards > 0).slice(0, 4),
     [trafficRows]
   );
+  const rankedAssets = useMemo(() => rankAssets(assetMetrics.assets), [assetMetrics.assets]);
 
   const collectors = agentDashboard.collectors ?? [];
   const sockets = agentDashboard.states?.sockets ?? [];
@@ -243,6 +266,16 @@ export function OverviewView({ summary, alerts }: OverviewViewProps) {
           <CollectorList collectors={collectors.slice(0, 6)} />
         </DashboardPanel>
 
+        <DashboardPanel title="Asset Top 5" meta={`${assetMetrics.assets.length} assets`} className="command-panel-asset-top">
+          <div className="asset-top5-grid">
+            <AssetTopList title="CPU" rows={rankedAssets.cpu} format={formatPercent} />
+            <AssetTopList title="Memory" rows={rankedAssets.memory} format={formatPercent} />
+            <AssetTopList title="Disk" rows={rankedAssets.disk} format={formatPercent} />
+            <AssetTopList title="Disk I/O" rows={rankedAssets.diskIo} format={formatPercent} />
+            <AssetTopList title="Network" rows={rankedAssets.network} format={(value) => formatBps(value)} />
+          </div>
+        </DashboardPanel>
+
         <DashboardPanel title="Recent Security Events" meta={`${events.length} events`} className="command-panel-events">
           <EventList events={events.slice(0, 6)} />
         </DashboardPanel>
@@ -293,6 +326,33 @@ function SignalTile({ label, value, tone }: { label: string; value: string; tone
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function AssetTopList({ title, rows, format }: { title: string; rows: RankedAsset[]; format: (value: number) => string }) {
+  const max = Math.max(1, ...rows.map((row) => row.value));
+  return (
+    <section className="asset-top5-list">
+      <div>
+        <strong>{title} Top 5</strong>
+        <span>{rows.length} assets</span>
+      </div>
+      {rows.length === 0 ? (
+        <p>표시할 자산 메트릭 없음</p>
+      ) : (
+        <ul>
+          {rows.map((row) => (
+            <li key={`${title}-${row.asset.assetUid}`}>
+              <div>
+                <span>{row.asset.name}</span>
+                <em>{format(row.value)}</em>
+              </div>
+              <i style={{ width: `${Math.max(4, Math.min(100, (row.value / max) * 100))}%` }} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -474,6 +534,24 @@ function mergeTrafficRows(groups: InterfaceTraffic[][]) {
   return [...rows.values()];
 }
 
+function rankAssets(assets: AssetMetricSummary[]) {
+  return {
+    cpu: rankBy(assets, (asset) => asset.metrics.cpuUsagePct),
+    memory: rankBy(assets, (asset) => asset.metrics.memoryUsagePct),
+    disk: rankBy(assets, (asset) => asset.metrics.diskUsagePct),
+    diskIo: rankBy(assets, (asset) => asset.metrics.diskIoUtilizationPct),
+    network: rankBy(assets, (asset) => (asset.metrics.networkInBps ?? 0) + (asset.metrics.networkOutBps ?? 0))
+  };
+}
+
+function rankBy(assets: AssetMetricSummary[], selector: (asset: AssetMetricSummary) => number | null | undefined): RankedAsset[] {
+  return assets
+    .map((asset) => ({ asset, value: selector(asset) ?? 0 }))
+    .filter((item) => item.value > 0)
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 5);
+}
+
 function isListeningSocket(socket: AgentSocketState) {
   return socket.direction?.toLowerCase() === 'listening' || socket.state?.toLowerCase() === 'listen';
 }
@@ -501,6 +579,10 @@ function firewallStatus(firewall: AgentFirewallState) {
 
 function totalTraffic(row: InterfaceTraffic) {
   return row.inBps + row.outBps;
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
 }
 
 function meterWidth(value: number, max: number) {

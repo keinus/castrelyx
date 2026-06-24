@@ -5,6 +5,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Map;
 import org.castrelyx.manager.telemetry.DashboardQueryService;
 import org.castrelyx.manager.telemetry.TelemetrySyncWorker;
@@ -22,5 +23,18 @@ class DashboardControllerTest {
 
     verify(telemetrySyncWorker, never()).syncOnce();
     verify(dashboardQueryService).agentDashboard();
+  }
+
+  @Test
+  void agentLogsQueriesWithoutRunningFullTelemetrySync() {
+    DashboardQueryService dashboardQueryService = mock(DashboardQueryService.class);
+    TelemetrySyncWorker telemetrySyncWorker = mock(TelemetrySyncWorker.class);
+    when(dashboardQueryService.agentLogs("1h", "WARNING", null, 200)).thenReturn(List.of(Map.of("message", "failed login")));
+
+    DashboardController controller = new DashboardController(dashboardQueryService, telemetrySyncWorker);
+    controller.agentLogs("1h", "WARNING", null, 200);
+
+    verify(telemetrySyncWorker, never()).syncOnce();
+    verify(dashboardQueryService).agentLogs("1h", "WARNING", null, 200);
   }
 }

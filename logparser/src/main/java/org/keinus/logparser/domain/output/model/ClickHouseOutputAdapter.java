@@ -2,6 +2,7 @@ package org.keinus.logparser.domain.output.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.keinus.logparser.domain.model.LogEvent;
 
@@ -13,6 +14,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -27,10 +32,16 @@ import java.util.function.Function;
 @Slf4j
 public class ClickHouseOutputAdapter extends OutputAdapter {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_OUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+            .withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_IN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSS][.SS][.S]");
     private static final int DEFAULT_BATCH_SIZE = 100;
     private static final int DEFAULT_FLUSH_INTERVAL_MS = 5000;
     private static final String DEFAULT_DATABASE = "default";
     private static final String DEFAULT_TABLE_NAME = "castrelyx_agent_events";
+    private static final String DEFAULT_METRIC_TABLE_NAME = "manager_metric_samples";
+    private static final String DEFAULT_STATE_TABLE_NAME = "manager_state_snapshots";
+    private static final String DEFAULT_EVENT_TABLE_NAME = "manager_events";
 
     private final ClickHouseConfig config;
     private final HttpClient httpClient;
@@ -76,7 +87,7 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     }
 
     private void createSchema() {
-        String sql = """
+        String rawSql = """
                 CREATE TABLE IF NOT EXISTS %s (
                   received_at DateTime64(3) DEFAULT now64(3),
                   agent_id String,
@@ -88,10 +99,106 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
                   event_json String
                 )
                 ENGINE = MergeTree
-                PARTITION BY toYYYYMM(received_at)
-                ORDER BY (source_id, received_at)
+                PARTITION BY toDate(received_at)
+                ORDER BY (received_at, source_id, ifNull(item_key, ''))
+                TTL toDateTime(received_at) + INTERVAL 7 DAY DELETE
                 """.formatted(config.tableReference());
-        postQuery(sql, "");
+        postQuery(rawSql, "");
+        postQuery("ALTER TABLE " + config.tableReference()
+                + " MODIFY TTL toDateTime(received_at) + INTERVAL 7 DAY DELETE SETTINGS materialize_ttl_after_modify=0", "");
+        if (config.writeTelemetryTables()) {
+            postQuery(createMetricSamplesSql(), "");
+            postQuery(createStateSnapshotsSql(), "");
+            postQuery(createEventsSql(), "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.metricTableName())
+                    + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.stateTableName())
+                    + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.eventTableName())
+                    + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.metricTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_metric_observed_at observed_at TYPE minmax GRANULARITY 1", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.metricTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_metric_name metric_name TYPE set(4096) GRANULARITY 4", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.metricTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_metric_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.stateTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_state_observed_at observed_at TYPE minmax GRANULARITY 1", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.stateTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_state_type state_type TYPE set(1024) GRANULARITY 4", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.stateTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_state_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.eventTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_event_observed_at observed_at TYPE minmax GRANULARITY 1", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.eventTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_event_type event_type TYPE set(1024) GRANULARITY 4", "");
+            postQuery("ALTER TABLE " + config.telemetryTableReference(config.eventTableName())
+                    + " ADD INDEX IF NOT EXISTS idx_event_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4", "");
+        }
+    }
+
+    private String createMetricSamplesSql() {
+        return """
+                CREATE TABLE IF NOT EXISTS %s (
+                  observed_at DateTime64(3),
+                  asset_uid String,
+                  source_type String,
+                  source_id String,
+                  metric_name String,
+                  metric_value Float64,
+                  unit Nullable(String),
+                  labels_json String,
+                  INDEX idx_metric_observed_at observed_at TYPE minmax GRANULARITY 1,
+                  INDEX idx_metric_name metric_name TYPE set(4096) GRANULARITY 4,
+                  INDEX idx_metric_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4
+                )
+                ENGINE = MergeTree
+                PARTITION BY toDate(observed_at)
+                ORDER BY (asset_uid, metric_name, observed_at)
+                TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE
+                """.formatted(config.telemetryTableReference(config.metricTableName()));
+    }
+
+    private String createStateSnapshotsSql() {
+        return """
+                CREATE TABLE IF NOT EXISTS %s (
+                  observed_at DateTime64(3),
+                  asset_uid String,
+                  source_type String,
+                  source_id String,
+                  state_type String,
+                  state_key String,
+                  state_json String,
+                  INDEX idx_state_observed_at observed_at TYPE minmax GRANULARITY 1,
+                  INDEX idx_state_type state_type TYPE set(1024) GRANULARITY 4,
+                  INDEX idx_state_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4
+                )
+                ENGINE = ReplacingMergeTree(observed_at)
+                PARTITION BY toDate(observed_at)
+                ORDER BY (asset_uid, state_type, state_key)
+                TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE
+                """.formatted(config.telemetryTableReference(config.stateTableName()));
+    }
+
+    private String createEventsSql() {
+        return """
+                CREATE TABLE IF NOT EXISTS %s (
+                  observed_at DateTime64(3),
+                  asset_uid String,
+                  source_type String,
+                  source_id String,
+                  event_type String,
+                  severity Nullable(String),
+                  event_json String,
+                  INDEX idx_event_observed_at observed_at TYPE minmax GRANULARITY 1,
+                  INDEX idx_event_type event_type TYPE set(1024) GRANULARITY 4,
+                  INDEX idx_event_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4
+                )
+                ENGINE = MergeTree
+                PARTITION BY toDate(observed_at)
+                ORDER BY (asset_uid, event_type, observed_at)
+                TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE
+                """.formatted(config.telemetryTableReference(config.eventTableName()));
     }
 
     private void flushQuietly() {
@@ -114,6 +221,9 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             body.append(record.toJsonEachRow()).append('\n');
         }
         postQuery(insertSql(), body.toString());
+        if (config.writeTelemetryTables()) {
+            insertTelemetryRows(records);
+        }
         buffer.clear();
     }
 
@@ -121,6 +231,403 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
         return "INSERT INTO " + config.tableReference()
                 + " (agent_id, tenant_id, source_id, item_kind, item_type, item_key, event_json)"
                 + " FORMAT JSONEachRow";
+    }
+
+    private void insertTelemetryRows(List<EventRecord> records) {
+        List<Map<String, Object>> metricRows = new ArrayList<>();
+        List<Map<String, Object>> stateRows = new ArrayList<>();
+        List<Map<String, Object>> eventRows = new ArrayList<>();
+        for (EventRecord record : records) {
+            addTelemetryRows(record, metricRows, stateRows, eventRows);
+        }
+        insertTelemetryTable(
+                config.metricTableName(),
+                "(observed_at, asset_uid, source_type, source_id, metric_name, metric_value, unit, labels_json)",
+                metricRows);
+        insertTelemetryTable(
+                config.stateTableName(),
+                "(observed_at, asset_uid, source_type, source_id, state_type, state_key, state_json)",
+                stateRows);
+        insertTelemetryTable(
+                config.eventTableName(),
+                "(observed_at, asset_uid, source_type, source_id, event_type, severity, event_json)",
+                eventRows);
+    }
+
+    private void addTelemetryRows(
+            EventRecord record,
+            List<Map<String, Object>> metricRows,
+            List<Map<String, Object>> stateRows,
+            List<Map<String, Object>> eventRows
+    ) {
+        JsonNode event = eventJson(record);
+        JsonNode payload = payloadNode(event);
+        String kind = firstNonBlank(
+                record.itemKind(),
+                text(event, "item_kind"),
+                text(event.path("common"), "eventCategory"));
+        if (kind == null && "snmp".equalsIgnoreCase(firstNonBlank(text(payload, "protocol"), text(event, "protocol")))) {
+            kind = "snmp";
+        }
+        Instant observedAt = observedAt(event, payload);
+        if ("snmp".equalsIgnoreCase(kind)) {
+            addSnmpRows(record, event, payload, observedAt, metricRows, stateRows, eventRows);
+            return;
+        }
+        if ("metric".equalsIgnoreCase(kind)) {
+            Map<String, Object> row = metricRow(record, event, payload, observedAt, "AGENT");
+            if (row != null) {
+                metricRows.add(row);
+            }
+            return;
+        }
+        if ("state".equalsIgnoreCase(kind)) {
+            stateRows.add(stateRow(
+                    observedAt,
+                    assetUid(record, event, payload),
+                    "AGENT",
+                    record.sourceId(),
+                    firstNonBlank(record.itemType(), text(payload, "state_type"), "state"),
+                    firstNonBlank(record.itemKey(), text(payload, "state_key"), "state"),
+                    json(payload)));
+            return;
+        }
+        if ("event".equalsIgnoreCase(kind)) {
+            eventRows.add(eventRow(
+                    observedAt,
+                    assetUid(record, event, payload),
+                    "AGENT",
+                    record.sourceId(),
+                    firstNonBlank(text(payload, "event_type"), text(event, "event_type"), record.itemType(), "agent.event"),
+                    firstNonBlank(text(payload, "severity"), text(event, "severity"), text(event.path("common"), "severity")),
+                    json(payload)));
+            return;
+        }
+        if ("asset".equalsIgnoreCase(kind) || "identity".equalsIgnoreCase(record.itemType())) {
+            stateRows.add(stateRow(
+                    observedAt,
+                    assetUid(record, event, payload),
+                    "AGENT",
+                    record.sourceId(),
+                    "identity",
+                    firstNonBlank(record.itemKey(), record.sourceId()),
+                    json(payload)));
+        }
+    }
+
+    private void addSnmpRows(
+            EventRecord record,
+            JsonNode event,
+            JsonNode payload,
+            Instant observedAt,
+            List<Map<String, Object>> metricRows,
+            List<Map<String, Object>> stateRows,
+            List<Map<String, Object>> eventRows
+    ) {
+        String targetHost = firstNonBlank(text(payload, "target_host"), text(event, "target_host"), record.sourceId());
+        String targetName = firstNonBlank(text(payload, "target_name"), text(event, "target_name"), targetHost);
+        ObjectNode identity = OBJECT_MAPPER.createObjectNode()
+                .put("target_name", targetName)
+                .put("target_host", targetHost);
+        stateRows.add(stateRow(observedAt, targetHost, "SNMP", record.sourceId(), "identity", targetHost, json(identity)));
+
+        JsonNode metrics = payload.path("metrics");
+        if (metrics.isArray()) {
+            for (JsonNode metric : metrics) {
+                Map<String, Object> row = snmpMetricRow(record, targetHost, observedAt, metric, null);
+                if (row != null) {
+                    metricRows.add(row);
+                }
+            }
+        } else if (metrics.isObject()) {
+            metrics.fields().forEachRemaining(field -> {
+                Map<String, Object> row = snmpMetricRow(record, targetHost, observedAt, field.getValue(), field.getKey());
+                if (row != null) {
+                    metricRows.add(row);
+                }
+            });
+        }
+
+        if ("error".equalsIgnoreCase(firstNonBlank(text(payload, "poll_status"), text(event, "poll_status")))) {
+            eventRows.add(eventRow(observedAt, targetHost, "SNMP", record.sourceId(), "snmp.poll.failure", "WARNING", json(payload)));
+        }
+    }
+
+    private Map<String, Object> metricRow(
+            EventRecord record,
+            JsonNode event,
+            JsonNode metric,
+            Instant observedAt,
+            String sourceType
+    ) {
+        Double value = metricValue(metric);
+        if (value == null) {
+            return null;
+        }
+        Map<String, Object> row = baseTelemetryRow(observedAt, assetUid(record, event, metric), sourceType, record.sourceId());
+        row.put("metric_name", firstNonBlank(
+                text(metric, "metric_name"),
+                text(event, "metric_name"),
+                record.itemKey(),
+                record.itemType()));
+        row.put("metric_value", value);
+        row.put("unit", text(metric, "unit"));
+        row.put("labels_json", json(metricLabels(metric)));
+        return hasText((String) row.get("metric_name")) ? row : null;
+    }
+
+    private Map<String, Object> snmpMetricRow(
+            EventRecord record,
+            String targetHost,
+            Instant observedAt,
+            JsonNode metric,
+            String fallbackName
+    ) {
+        String name = firstNonBlank(text(metric, "name"), fallbackName);
+        Double value = metricValue(metric);
+        if (value == null || name == null || name.isBlank()) {
+            return null;
+        }
+        ObjectNode labels = OBJECT_MAPPER.createObjectNode();
+        copyLabel(metric, labels, "interface");
+        Map<String, Object> row = baseTelemetryRow(observedAt, targetHost, "SNMP", record.sourceId());
+        row.put("metric_name", snmpMetricName(name));
+        row.put("metric_value", value);
+        row.put("unit", text(metric, "unit"));
+        row.put("labels_json", json(labels));
+        return row;
+    }
+
+    private Map<String, Object> stateRow(
+            Instant observedAt,
+            String assetUid,
+            String sourceType,
+            String sourceId,
+            String stateType,
+            String stateKey,
+            String stateJson
+    ) {
+        Map<String, Object> row = baseTelemetryRow(observedAt, assetUid, sourceType, sourceId);
+        row.put("state_type", firstNonBlank(stateType, "state"));
+        row.put("state_key", firstNonBlank(stateKey, "state"));
+        row.put("state_json", stateJson);
+        return row;
+    }
+
+    private Map<String, Object> eventRow(
+            Instant observedAt,
+            String assetUid,
+            String sourceType,
+            String sourceId,
+            String eventType,
+            String severity,
+            String eventJson
+    ) {
+        Map<String, Object> row = baseTelemetryRow(observedAt, assetUid, sourceType, sourceId);
+        row.put("event_type", firstNonBlank(eventType, "event"));
+        row.put("severity", severity);
+        row.put("event_json", eventJson);
+        return row;
+    }
+
+    private Map<String, Object> baseTelemetryRow(Instant observedAt, String assetUid, String sourceType, String sourceId) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("observed_at", formatDateTime64(observedAt));
+        row.put("asset_uid", firstNonBlank(assetUid, sourceId, "unknown"));
+        row.put("source_type", firstNonBlank(sourceType, "AGENT"));
+        row.put("source_id", firstNonBlank(sourceId, assetUid, "unknown"));
+        return row;
+    }
+
+    private void insertTelemetryTable(String tableName, String columns, List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        postQuery("INSERT INTO " + config.telemetryTableReference(tableName) + " " + columns + " FORMAT JSONEachRow",
+                jsonEachRow(rows));
+    }
+
+    private static JsonNode eventJson(EventRecord record) {
+        if (record.eventJson() == null || record.eventJson().isBlank()) {
+            return OBJECT_MAPPER.createObjectNode();
+        }
+        try {
+            return OBJECT_MAPPER.readTree(record.eventJson());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to parse ClickHouse telemetry event JSON", e);
+        }
+    }
+
+    private static JsonNode payloadNode(JsonNode event) {
+        JsonNode payload = event.path("payload");
+        if (payload.isObject()) {
+            return payload;
+        }
+        JsonNode nestedPayload = event.path("additionalAttributes").path("payload");
+        if (nestedPayload.isObject()) {
+            return nestedPayload;
+        }
+        JsonNode rawLog = event.path("common").path("rawLog");
+        if (rawLog.isTextual()) {
+            try {
+                JsonNode rawPayload = OBJECT_MAPPER.readTree(rawLog.asText()).path("payload");
+                if (rawPayload.isObject()) {
+                    return rawPayload;
+                }
+            } catch (IOException ignored) {
+                // Fall through to the transformed event root.
+            }
+        }
+        if (event.isObject()) {
+            ObjectNode flattenedPayload = OBJECT_MAPPER.createObjectNode();
+            event.fields().forEachRemaining(field -> {
+                if (field.getKey().startsWith("payload_") && field.getKey().length() > "payload_".length()) {
+                    flattenedPayload.set(field.getKey().substring("payload_".length()), field.getValue());
+                }
+            });
+            if (flattenedPayload.size() > 0) {
+                return flattenedPayload;
+            }
+        }
+        return event.isObject() ? event : OBJECT_MAPPER.createObjectNode();
+    }
+
+    private static ObjectNode metricLabels(JsonNode metric) {
+        ObjectNode labels = OBJECT_MAPPER.createObjectNode();
+        JsonNode existing = metric.path("labels");
+        if (existing.isObject()) {
+            existing.fields().forEachRemaining(field -> labels.set(field.getKey(), field.getValue()));
+        }
+        copyLabel(metric, labels, "collector");
+        copyLabel(metric, labels, "interface");
+        copyLabel(metric, labels, "direction");
+        copyLabel(metric, labels, "mount_point");
+        copyLabel(metric, labels, "filesystem");
+        copyLabel(metric, labels, "device");
+        return labels;
+    }
+
+    private static void copyLabel(JsonNode source, ObjectNode labels, String field) {
+        JsonNode value = value(source, field);
+        if (value != null && !value.isNull() && !labels.has(field)) {
+            labels.set(field, value);
+        }
+    }
+
+    private static Double metricValue(JsonNode metric) {
+        JsonNode value = value(metric, "metric_value");
+        if (value == null || value.isNull()) {
+            value = value(metric, "value");
+        }
+        if (value == null || value.isNull() || value.asText().isBlank()) {
+            return null;
+        }
+        if (value.isNumber()) {
+            return value.asDouble();
+        }
+        try {
+            return Double.parseDouble(value.asText());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static String assetUid(EventRecord record, JsonNode event, JsonNode payload) {
+        return firstNonBlank(text(payload, "asset_uid"), text(event, "asset_uid"), record.sourceId());
+    }
+
+    private static Instant observedAt(JsonNode event, JsonNode payload) {
+        return instant(firstNonBlank(
+                text(payload, "observed_at"),
+                text(event, "observed_at"),
+                text(event, "@timestamp"),
+                text(event.path("common"), "eventTime"),
+                text(event.path("common"), "time")),
+                Instant.now());
+    }
+
+    private static Instant instant(String text, Instant fallback) {
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Instant.parse(text);
+        } catch (RuntimeException ignored) {
+            try {
+                return LocalDateTime.parse(text, CLICKHOUSE_DATE_TIME_IN).toInstant(ZoneOffset.UTC);
+            } catch (RuntimeException ignoredAgain) {
+                return fallback;
+            }
+        }
+    }
+
+    private static String formatDateTime64(Instant instant) {
+        return CLICKHOUSE_DATE_TIME_OUT.format(instant);
+    }
+
+    private static String snmpMetricName(String name) {
+        return switch (name == null ? "" : name) {
+            case "ifInOctets" -> "interface.in.bytes";
+            case "ifOutOctets" -> "interface.out.bytes";
+            case "ifInErrors" -> "interface.in.errors";
+            case "ifOutErrors" -> "interface.out.errors";
+            case "ifInDiscards" -> "interface.in.discards";
+            case "ifOutDiscards" -> "interface.out.discards";
+            default -> "snmp." + name;
+        };
+    }
+
+    private static JsonNode value(JsonNode node, String field) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        JsonNode direct = node.get(field);
+        if (direct != null && !direct.isNull()) {
+            return direct;
+        }
+        JsonNode flattened = node.get("payload_" + field);
+        return flattened == null || flattened.isNull() ? null : flattened;
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = value(node, field);
+        return value == null ? null : value.asText();
+    }
+
+    private static String json(JsonNode node) {
+        try {
+            if (node == null || node.isMissingNode() || node.isNull()) {
+                return "{}";
+            }
+            return OBJECT_MAPPER.writeValueAsString(node);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to serialize telemetry JSON", e);
+        }
+    }
+
+    private static String jsonEachRow(List<Map<String, Object>> rows) {
+        StringBuilder body = new StringBuilder();
+        for (Map<String, Object> row : rows) {
+            try {
+                body.append(OBJECT_MAPPER.writeValueAsString(row)).append('\n');
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed to serialize ClickHouse telemetry JSONEachRow payload", e);
+            }
+        }
+        return body.toString();
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private void postQuery(String query, String body) {
@@ -166,9 +673,13 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             String username,
             String password,
             String tableName,
+            String metricTableName,
+            String stateTableName,
+            String eventTableName,
             int batchSize,
             int flushIntervalMs,
-            boolean autoCreateSchema
+            boolean autoCreateSchema,
+            boolean writeTelemetryTables
     ) {
         static ClickHouseConfig from(Map<String, String> rawConfig, Function<String, String> envLookup) throws IOException {
             String configParams = rawConfig.get("configParams");
@@ -179,8 +690,14 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             String endpointUrl = normalizeEndpointUrl(requiredText(root, "endpointUrl"));
             String database = optionalText(root, "database", DEFAULT_DATABASE);
             String tableName = optionalText(root, "tableName", DEFAULT_TABLE_NAME);
+            String metricTableName = optionalText(root, "metricTableName", DEFAULT_METRIC_TABLE_NAME);
+            String stateTableName = optionalText(root, "stateTableName", DEFAULT_STATE_TABLE_NAME);
+            String eventTableName = optionalText(root, "eventTableName", DEFAULT_EVENT_TABLE_NAME);
             validateIdentifier(database, "database");
             validateIdentifier(tableName, "tableName");
+            validateIdentifier(metricTableName, "metricTableName");
+            validateIdentifier(stateTableName, "stateTableName");
+            validateIdentifier(eventTableName, "eventTableName");
 
             String username = resolveEnv(root, "usernameEnv", envLookup);
             String password = resolveEnv(root, "passwordEnv", envLookup);
@@ -204,13 +721,23 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
                     username,
                     password,
                     tableName,
+                    metricTableName,
+                    stateTableName,
+                    eventTableName,
                     batchSize,
                     flushIntervalMs,
-                    root.has("autoCreateSchema") && root.get("autoCreateSchema").asBoolean()
+                    root.has("autoCreateSchema") && root.get("autoCreateSchema").asBoolean(),
+                    root.has("writeTelemetryTables")
+                            ? root.get("writeTelemetryTables").asBoolean()
+                            : DEFAULT_TABLE_NAME.equals(tableName)
             );
         }
 
         String tableReference() {
+            return database + "." + tableName;
+        }
+
+        String telemetryTableReference(String tableName) {
             return database + "." + tableName;
         }
 

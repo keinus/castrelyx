@@ -479,6 +479,9 @@ public class ConfigValidationService {
             validateHttpEndpoint(root, "endpointUrl", errors);
             validateIdentifier(root, "database", errors);
             validateIdentifier(root, "tableName", errors);
+            validateIdentifier(root, "metricTableName", errors);
+            validateIdentifier(root, "stateTableName", errors);
+            validateIdentifier(root, "eventTableName", errors);
             if (root.has("batchSize") && root.get("batchSize").asInt() <= 0) {
                 errors.add("configParams.batchSize must be greater than zero");
             }

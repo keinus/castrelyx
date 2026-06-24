@@ -70,6 +70,70 @@ class TelemetryNormalizerTest {
   }
 
   @Test
+  void normalizesAgentAuthAndSystemLogEvents() {
+    List<CanonicalTelemetryRecord> auth = normalizer.normalizeRawLogparserEvent("""
+        {
+          "received_at":"2026-06-24T08:15:30Z",
+          "source_id":"agent-01",
+          "item_kind":"event",
+          "item_type":"log",
+          "item_key":"/var/log/auth.log:abc",
+          "event_json":{
+            "event_type":"auth.login.failure",
+            "event_category":"auth",
+            "platform":"linux",
+            "source_name":"/var/log/auth.log",
+            "actor":"admin",
+            "action":"login",
+            "outcome":"failure",
+            "severity":"WARNING",
+            "message":"Failed password for invalid user admin",
+            "dedup_key":"abc"
+          }
+        }
+        """);
+
+    assertThat(auth).singleElement().satisfies(record -> {
+      assertThat(record.kind()).isEqualTo(CanonicalTelemetryRecord.Kind.EVENT);
+      assertThat(record.assetUid()).isEqualTo("agent-01");
+      assertThat(record.eventType()).isEqualTo("auth.login.failure");
+      assertThat(record.severity()).isEqualTo("WARNING");
+      assertThat(record.eventJson()).contains("\"event_category\":\"auth\"");
+    });
+
+    List<CanonicalTelemetryRecord> system = normalizer.normalizeRawLogparserEvent("""
+        {
+          "received_at":"2026-06-24T08:16:30Z",
+          "source_id":"agent-01",
+          "item_kind":"event",
+          "item_type":"log",
+          "item_key":"System:def",
+          "event_json":{
+            "event_type":"system.service.failure",
+            "event_category":"system",
+            "platform":"windows",
+            "source_name":"System",
+            "provider":"Service Control Manager",
+            "event_id":7031,
+            "record_id":202,
+            "action":"service.failure",
+            "outcome":"failure",
+            "severity":"ERROR",
+            "message":"The Example service terminated unexpectedly.",
+            "dedup_key":"def"
+          }
+        }
+        """);
+
+    assertThat(system).singleElement().satisfies(record -> {
+      assertThat(record.kind()).isEqualTo(CanonicalTelemetryRecord.Kind.EVENT);
+      assertThat(record.eventType()).isEqualTo("system.service.failure");
+      assertThat(record.severity()).isEqualTo("ERROR");
+      assertThat(record.eventJson()).contains("\"record_id\":202");
+    });
+  }
+
+  @Test
   void normalizesSnmpInterfaceCountersAndPollFailure() {
     List<CanonicalTelemetryRecord> records = normalizer.normalizeRawLogparserEvent("""
         {

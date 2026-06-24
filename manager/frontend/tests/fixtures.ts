@@ -1,11 +1,11 @@
 import type { Page, Route } from '@playwright/test';
 
-type MockAsset = { id?: number; assetUid: string; name: string; assetType: string; managementIp?: string; status: string };
+type MockAsset = { id?: number; assetUid: string; name: string; assetType: string; managementIp?: string; location?: string; description?: string; status: string };
 type MockMetricAsset = ReturnType<typeof metricOverview>['assets'][number];
 
 export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' = 'ADMIN') {
   const assets = [
-    { id: 1, assetUid: 'edge-router', name: 'edge-router', assetType: 'ROUTER', managementIp: '10.0.0.1', status: 'active' }
+    { id: 1, assetUid: 'edge-router', name: 'edge-router', assetType: 'ROUTER', managementIp: '10.0.0.1', location: 'Seoul HQ', description: 'WAN router', status: 'active' }
   ];
   const alerts = [
     { id: 1, severity: 'CRITICAL', status: 'ACTIVE', title: 'CPU threshold exceeded' }
@@ -115,6 +115,8 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
         name: payload.name,
         assetType: payload.assetType,
         managementIp: payload.managementIp,
+        location: payload.location,
+        description: payload.description,
         status: 'active'
       };
       assets.unshift(created);
@@ -122,6 +124,29 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
       return;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assets) });
+  });
+  await page.route(/\/api\/assets\/\d+$/, async (route) => {
+    const id = Number(new URL(route.request().url()).pathname.split('/').pop());
+    const index = assets.findIndex((asset) => asset.id === id);
+    if (route.request().method() === 'PUT') {
+      const payload = route.request().postDataJSON();
+      assets[index] = {
+        ...assets[index],
+        name: payload.name,
+        location: payload.location,
+        description: payload.description
+      };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(assets[index]) });
+      return;
+    }
+    if (route.request().method() === 'DELETE') {
+      if (index >= 0) {
+        assets.splice(index, 1);
+      }
+      await route.fulfill({ status: 204, contentType: 'application/json', body: '' });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.route('/api/alerts', routeJson(alerts));
   await page.route('/api/alerts/1/acknowledge', async (route) => {
@@ -145,6 +170,11 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     { serialNumber: '01', subject: 'CN=edge-agent', status: 'ISSUED' }
   ]));
   await page.route('/api/integrations/castrelsign/audit-events', routeJson([]));
+  await page.route('/api/integrations/castrelsign/agent-releases', routeJson([]));
+  await page.route('/api/integrations/castrelsign/agent-update-policies', routeJson([
+    { policyKey: 'global', enabled: true, channel: 'stable' }
+  ]));
+  await page.route('/api/integrations/castrelsign/agent-update-attempts', routeJson([]));
   await page.route('/api/integrations/castrelsign/tokens', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({
@@ -188,16 +218,19 @@ function metricOverview(assets: MockAsset[]) {
   const metricAssets = [
     ...assets.map((asset) => ({
       assetUid: asset.assetUid,
+      id: asset.id,
       name: asset.name,
       assetType: asset.assetType,
       managementIp: asset.managementIp,
+      location: asset.location,
+      description: asset.description,
       status: asset.status,
       lastSeenAt: '2026-06-11T13:34:00Z',
       stale: false,
       health: asset.assetUid === 'edge-router' ? 'warning' : 'unknown',
-      sources: { registered: true, observed: asset.assetUid === 'edge-router', traffic: asset.assetUid === 'edge-router' },
+      sources: { registered: true, observed: asset.assetUid === 'edge-router', traffic: asset.assetUid === 'edge-router', diskIo: asset.assetUid === 'edge-router' },
       metrics: asset.assetUid === 'edge-router'
-        ? { cpuUsagePct: 42.1, memoryUsagePct: 55.4, diskUsagePct: 68.2, normalizedLoadPct: 25, networkInBps: 1200000, networkOutBps: 900000, interfaceErrorCount: 1 }
+        ? { cpuUsagePct: 42.1, memoryUsagePct: 55.4, diskUsagePct: 68.2, normalizedLoadPct: 25, networkInBps: 1200000, networkOutBps: 900000, interfaceErrorCount: 1, diskReadBps: 262144, diskWriteBps: 131072, diskReadIops: 16, diskWriteIops: 8, diskIoUtilizationPct: 42.5 }
         : {}
     })),
     {
@@ -209,8 +242,8 @@ function metricOverview(assets: MockAsset[]) {
       lastSeenAt: '2026-06-11T13:34:00Z',
       stale: false,
       health: 'critical',
-      sources: { registered: false, agent: true, traffic: true, security: true, observed: true },
-      metrics: { cpuUsagePct: 91.2, memoryUsagePct: 67.8, diskUsagePct: 72.4, normalizedLoadPct: 45, networkInBps: 4621.02, networkOutBps: 11663.97, interfaceErrorCount: 0 },
+      sources: { registered: false, agent: true, traffic: true, diskIo: true, security: true, observed: true },
+      metrics: { cpuUsagePct: 91.2, memoryUsagePct: 67.8, diskUsagePct: 72.4, normalizedLoadPct: 45, networkInBps: 4621.02, networkOutBps: 11663.97, interfaceErrorCount: 0, diskReadBps: 1048576, diskWriteBps: 2097152, diskReadIops: 128, diskWriteIops: 64, diskIoUtilizationPct: 87.5 },
       security: { openPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 }
     }
   ] as Array<{
@@ -222,7 +255,7 @@ function metricOverview(assets: MockAsset[]) {
     lastSeenAt?: string;
     stale: boolean;
     health: 'healthy' | 'warning' | 'critical' | 'unknown';
-    sources: { registered?: boolean; agent?: boolean; traffic?: boolean; security?: boolean; observed?: boolean };
+    sources: { registered?: boolean; agent?: boolean; traffic?: boolean; diskIo?: boolean; security?: boolean; observed?: boolean };
     metrics: Record<string, number | null | undefined>;
     security?: { openPorts: number; failedServices: number; firewallDisabled: number; securityEvents: number };
   }>;
@@ -236,7 +269,10 @@ function metricOverview(assets: MockAsset[]) {
       warningAssets: metricAssets.filter((asset) => asset.health === 'warning').length,
       avgCpuUsagePct: 66.7,
       avgMemoryUsagePct: 61.6,
-      maxDiskUsagePct: 72.4
+      maxDiskUsagePct: 72.4,
+      maxDiskIoUtilizationPct: 87.5,
+      totalNetworkInBps: 1204621.02,
+      totalNetworkOutBps: 911663.97
     },
     assets: metricAssets
   };
@@ -253,9 +289,15 @@ function metricDetail(assetUid: string, assets: MockAsset[]) {
       cpu: [{ timestamp: '2026-06-11T13:30:00Z', value: 82 }, { timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.cpuUsagePct ?? null }],
       memory: [{ timestamp: '2026-06-11T13:30:00Z', value: 60 }, { timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.memoryUsagePct ?? null }],
       disk: [{ timestamp: '2026-06-11T13:35:00Z', value: asset.metrics.diskUsagePct ?? null }],
+      diskIo: [{ timestamp: '2026-06-11T13:35:00Z', readBps: asset.metrics.diskReadBps ?? 0, writeBps: asset.metrics.diskWriteBps ?? 0, readIops: asset.metrics.diskReadIops ?? 0, writeIops: asset.metrics.diskWriteIops ?? 0, utilizationPct: asset.metrics.diskIoUtilizationPct ?? 0 }],
       network: [{ timestamp: '2026-06-11T13:35:00Z', inBps: asset.metrics.networkInBps ?? 0, outBps: asset.metrics.networkOutBps ?? 0 }]
     },
-    disks: assetUid === 'nas' ? [{ mountPoint: '/data', filesystem: '/dev/sdb1', usedPct: 72.4 }] : [],
+    disks: assetUid === 'nas'
+      ? [{ mountPoint: '/data', filesystem: '/dev/sdb1', device: 'sdb', usedPct: 72.4, readBps: 1048576, writeBps: 2097152, readIops: 128, writeIops: 64, ioUtilizationPct: 87.5 }]
+      : [{ mountPoint: '/', filesystem: '/dev/sda1', device: 'sda', usedPct: asset.metrics.diskUsagePct ?? 0, readBps: asset.metrics.diskReadBps ?? 0, writeBps: asset.metrics.diskWriteBps ?? 0, readIops: asset.metrics.diskReadIops ?? 0, writeIops: asset.metrics.diskWriteIops ?? 0, ioUtilizationPct: asset.metrics.diskIoUtilizationPct ?? 0 }],
+    diskIo: assetUid === 'nas'
+      ? [{ assetUid: 'nas', device: 'sdb', readBps: 1048576, writeBps: 2097152, readIops: 128, writeIops: 64, ioUtilizationPct: 87.5 }]
+      : [{ assetUid, device: 'sda', readBps: asset.metrics.diskReadBps ?? 0, writeBps: asset.metrics.diskWriteBps ?? 0, readIops: asset.metrics.diskReadIops ?? 0, writeIops: asset.metrics.diskWriteIops ?? 0, ioUtilizationPct: asset.metrics.diskIoUtilizationPct ?? 0 }],
     interfaces: assetUid === 'nas'
       ? [{ assetUid: 'nas', interfaceName: 'enp2s0', inBps: 4621.02, outBps: 11663.97, utilizationPct: 0, errors: 0, discards: 0, status: 'up' }]
       : [{ assetUid: 'edge-router', interfaceName: 'wan0', inBps: 1200000, outBps: 900000, utilizationPct: 12.4, errors: 1, discards: 0, status: 'up' }],

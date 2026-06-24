@@ -29,7 +29,7 @@ public class ClickHouseClient {
   private static final DateTimeFormatter CLICKHOUSE_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSS][.SS][.S]");
   private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_OUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
       .withZone(ZoneOffset.UTC);
-  private static final String RECENT_AGENT_DASHBOARD_FILTER = "AND received_at >= now() - INTERVAL 1 HOUR";
+  private static final String RECENT_TRANSFORMED_DASHBOARD_FILTER = "AND observed_at >= now() - INTERVAL 1 HOUR";
 
   private final ManagerProperties properties;
   private final RestClient restClient;
@@ -48,6 +48,28 @@ public class ClickHouseClient {
     execute(CanonicalTelemetrySchema.createMetricSamples(database));
     execute(CanonicalTelemetrySchema.createStateSnapshots(database));
     execute(CanonicalTelemetrySchema.createEvents(database));
+    ensureCanonicalRetentionAndIndexes(database);
+  }
+
+  private void ensureCanonicalRetentionAndIndexes(String database) {
+    String metricTable = tableReference(database, "manager_metric_samples");
+    String stateTable = tableReference(database, "manager_state_snapshots");
+    String eventTable = tableReference(database, "manager_events");
+    execute("ALTER TABLE " + metricTable
+        + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0");
+    execute("ALTER TABLE " + stateTable
+        + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0");
+    execute("ALTER TABLE " + eventTable
+        + " MODIFY TTL toDateTime(observed_at) + INTERVAL 30 DAY DELETE SETTINGS materialize_ttl_after_modify=0");
+    execute("ALTER TABLE " + metricTable + " ADD INDEX IF NOT EXISTS idx_metric_observed_at observed_at TYPE minmax GRANULARITY 1");
+    execute("ALTER TABLE " + metricTable + " ADD INDEX IF NOT EXISTS idx_metric_name metric_name TYPE set(4096) GRANULARITY 4");
+    execute("ALTER TABLE " + metricTable + " ADD INDEX IF NOT EXISTS idx_metric_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4");
+    execute("ALTER TABLE " + stateTable + " ADD INDEX IF NOT EXISTS idx_state_observed_at observed_at TYPE minmax GRANULARITY 1");
+    execute("ALTER TABLE " + stateTable + " ADD INDEX IF NOT EXISTS idx_state_type state_type TYPE set(1024) GRANULARITY 4");
+    execute("ALTER TABLE " + stateTable + " ADD INDEX IF NOT EXISTS idx_state_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4");
+    execute("ALTER TABLE " + eventTable + " ADD INDEX IF NOT EXISTS idx_event_observed_at observed_at TYPE minmax GRANULARITY 1");
+    execute("ALTER TABLE " + eventTable + " ADD INDEX IF NOT EXISTS idx_event_type event_type TYPE set(1024) GRANULARITY 4");
+    execute("ALTER TABLE " + eventTable + " ADD INDEX IF NOT EXISTS idx_event_asset asset_uid TYPE bloom_filter(0.01) GRANULARITY 4");
   }
 
   public List<RawTelemetryRow> fetchRawTelemetryRows(String cursorValue, int limit) {
@@ -57,7 +79,7 @@ public class ClickHouseClient {
         SELECT received_at, source_id, item_kind, item_type, item_key, event_json
         FROM %s
         %s
-        ORDER BY received_at, source_id, item_key
+        ORDER BY received_at, source_id, ifNull(item_key, '')
         LIMIT %d
         FORMAT JSONEachRow
         """.formatted(table, where, limit);
@@ -94,42 +116,21 @@ public class ClickHouseClient {
 
   public List<TrafficQueryService.InterfaceTraffic> queryInterfaceTraffic(String range, String assetUid) {
     String rangeInterval = rangeInterval(range);
-    Map<String, TrafficQueryService.InterfaceTraffic> rows = new LinkedHashMap<>();
-    for (TrafficQueryService.InterfaceTraffic row : queryRawAgentInterfaceTraffic(rangeInterval, assetUid)) {
-      rows.put(interfaceKey(row), row);
-    }
-    for (TrafficQueryService.InterfaceTraffic row : queryCanonicalInterfaceTraffic(rangeInterval, assetUid)) {
-      rows.putIfAbsent(interfaceKey(row), row);
-    }
-    return TrafficInterfaceFilter.visibleTrafficRows(rows.values()).stream()
+    return TrafficInterfaceFilter.visibleTrafficRows(queryCanonicalInterfaceTraffic(rangeInterval, assetUid)).stream()
         .sorted(Comparator.comparingDouble((TrafficQueryService.InterfaceTraffic row) -> row.inBps() + row.outBps()).reversed())
         .toList();
   }
 
   public List<DiskIo> queryDiskIo(String range, String assetUid) {
     String rangeInterval = rangeInterval(range);
-    Map<String, DiskIo> rows = new LinkedHashMap<>();
-    for (DiskIo row : queryRawAgentDiskIo(rangeInterval, assetUid)) {
-      rows.put(diskIoKey(row), row);
-    }
-    for (DiskIo row : queryCanonicalDiskIo(rangeInterval, assetUid)) {
-      rows.putIfAbsent(diskIoKey(row), row);
-    }
-    return rows.values().stream()
+    return queryCanonicalDiskIo(rangeInterval, assetUid).stream()
         .sorted(Comparator.comparingDouble((DiskIo row) -> row.readBps() + row.writeBps()).reversed())
         .toList();
   }
 
   public List<MetricSample> queryLatestMetricSamples(String range, String assetUid) {
     String rangeInterval = rangeInterval(range);
-    Map<String, MetricSample> rows = new LinkedHashMap<>();
-    for (MetricSample sample : queryRawLatestMetricSamples(rangeInterval, assetUid)) {
-      rows.put(metricSampleKey(sample), sample);
-    }
-    for (MetricSample sample : queryCanonicalLatestMetricSamples(rangeInterval, assetUid)) {
-      rows.putIfAbsent(metricSampleKey(sample), sample);
-    }
-    return rows.values().stream()
+    return queryCanonicalLatestMetricSamples(rangeInterval, assetUid).stream()
         .sorted(Comparator.comparing(MetricSample::observedAt).reversed())
         .toList();
   }
@@ -137,14 +138,7 @@ public class ClickHouseClient {
   public List<MetricSample> queryMetricSeriesSamples(String range, String bucket, String assetUid) {
     String rangeInterval = rangeInterval(range);
     String bucketInterval = bucketInterval(range, bucket);
-    Map<String, MetricSample> rows = new LinkedHashMap<>();
-    for (MetricSample sample : queryRawMetricSeriesSamples(rangeInterval, bucketInterval, assetUid)) {
-      rows.put(metricSeriesKey(sample), sample);
-    }
-    for (MetricSample sample : queryCanonicalMetricSeriesSamples(rangeInterval, bucketInterval, assetUid)) {
-      rows.putIfAbsent(metricSeriesKey(sample), sample);
-    }
-    return rows.values().stream()
+    return queryCanonicalMetricSeriesSamples(rangeInterval, bucketInterval, assetUid).stream()
         .sorted(Comparator.comparing(MetricSample::observedAt))
         .toList();
   }
@@ -724,14 +718,18 @@ public class ClickHouseClient {
   }
 
   public List<ObservedAgentSource> fetchObservedAgentSources() {
-    String table = tableReference(properties.clickhouse().database(), properties.clickhouse().rawTable());
+    String table = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
     List<Map<String, Object>> rows = queryJsonRows("""
         SELECT
-          source_id,
-          max(received_at) AS last_seen_at,
-          argMaxIf(event_json, received_at, item_kind = 'asset' OR item_type = 'identity') AS identity_json
+          asset_uid,
+          argMax(source_id, observed_at) AS source_id,
+          max(observed_at) AS last_seen_at,
+          argMax(state_json, observed_at) AS identity_json
         FROM %s
-        GROUP BY source_id
+        WHERE asset_uid != ''
+          AND source_type = 'AGENT'
+          AND state_type = 'identity'
+        GROUP BY asset_uid
         ORDER BY last_seen_at DESC
         LIMIT 500
         FORMAT JSONEachRow
@@ -746,75 +744,68 @@ public class ClickHouseClient {
   }
 
   public Map<String, Object> queryAgentDashboard(String assetUid) {
-    String rawTable = tableReference(properties.clickhouse().database(), properties.clickhouse().rawTable());
-    String sourceFilter = assetUid == null || assetUid.isBlank() ? "" : "AND source_id = " + sqlString(assetUid);
+    String metricTable = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String stateTable = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
+    String eventTable = tableReference(properties.clickhouse().database(), "manager_events");
+    String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     List<Map<String, Object>> agents = queryJsonRows("""
-        SELECT source_id AS asset_uid, source_id, max(received_at) AS last_seen_at
-        FROM %s
-        WHERE source_id != ''
-          %s
-          %s
-        GROUP BY source_id
+        SELECT asset_uid, argMax(source_id, observed_at) AS source_id, max(observed_at) AS last_seen_at
+        FROM (
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+          UNION ALL
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+          UNION ALL
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+        )
+        GROUP BY asset_uid
         ORDER BY last_seen_at DESC
         LIMIT 50
         FORMAT JSONEachRow
-        """.formatted(rawTable, RECENT_AGENT_DASHBOARD_FILTER, sourceFilter));
+        """.formatted(
+        metricTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter,
+        stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter,
+        eventTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter));
     Map<String, Object> heartbeat = agentHeartbeat(agents);
     List<Map<String, Object>> collectors = queryJsonRows("""
-        SELECT item_type AS name, count() AS sample_count, max(received_at) AS last_seen_at
-        FROM %s
-        WHERE source_id != ''
-          %s
-          %s
-        GROUP BY item_type
+        SELECT name, count() AS sample_count, max(observed_at) AS last_seen_at
+        FROM (
+          SELECT
+            if(JSONExtractString(labels_json, 'collector') = '', source_type, JSONExtractString(labels_json, 'collector')) AS name,
+            observed_at
+          FROM %s
+          WHERE asset_uid != ''
+            %s
+            %s
+        )
+        GROUP BY name
         ORDER BY sample_count DESC, name
         LIMIT 20
         FORMAT JSONEachRow
-        """.formatted(rawTable, RECENT_AGENT_DASHBOARD_FILTER, sourceFilter));
-    List<Map<String, Object>> metrics = queryJsonRows("""
-        SELECT
-          source_id AS asset_uid,
-          metric_name,
-          event_json,
-          last_observed_at AS observed_at
-        FROM (
-          SELECT
-            source_id,
-            item_key AS metric_name,
-            argMax(event_json, received_at) AS event_json,
-            max(received_at) AS last_observed_at
-          FROM %s
-          WHERE item_kind = 'metric'
-            %s
-            %s
-            %s
-          GROUP BY source_id, item_key
-        )
-        ORDER BY last_observed_at DESC, metric_name
-        LIMIT 24
-        FORMAT JSONEachRow
-        """.formatted(rawTable, RECENT_AGENT_DASHBOARD_FILTER, assetMetricRawFilter(), sourceFilter)).stream()
-        .map(ClickHouseClient::rawMetricRow)
+        """.formatted(metricTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
+        .map(ClickHouseClient::normalizeDashboardKeys)
+        .toList();
+    List<Map<String, Object>> metrics = queryCanonicalLatestMetricSamples("INTERVAL 1 HOUR", assetUid).stream()
+        .limit(24)
+        .map(ClickHouseClient::canonicalMetricRow)
         .toList();
     List<Map<String, Object>> stateRows = queryJsonRows("""
         SELECT
-          source_id AS asset_uid,
+          asset_uid,
           source_id,
-          item_type AS state_type,
-          item_key AS state_key,
-          argMax(event_json, received_at) AS event_json,
-          max(received_at) AS observed_at
+          state_type,
+          state_key,
+          argMax(state_json, observed_at) AS state_json,
+          max(observed_at) AS observed_at
         FROM %s
-        WHERE item_kind = 'state'
-          AND source_id != ''
+        WHERE asset_uid != ''
           %s
           %s
-        GROUP BY source_id, item_type, item_key
+        GROUP BY asset_uid, source_id, state_type, state_key
         ORDER BY observed_at DESC
         LIMIT 250
         FORMAT JSONEachRow
-        """.formatted(rawTable, RECENT_AGENT_DASHBOARD_FILTER, sourceFilter)).stream()
-        .map(ClickHouseClient::rawStateRow)
+        """.formatted(stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
+        .map(ClickHouseClient::canonicalStateRow)
         .toList();
     List<Map<String, Object>> sockets = stateRows.stream()
         .filter(row -> "socket".equals(row.get("stateType")))
@@ -838,20 +829,22 @@ public class ClickHouseClient {
         .toList();
     List<Map<String, Object>> events = queryJsonRows("""
         SELECT
-          source_id AS asset_uid,
-          item_type AS event_type,
-          argMax(event_json, received_at) AS event_json,
-          max(received_at) AS observed_at
+          asset_uid,
+          source_id,
+          event_type,
+          argMax(severity, observed_at) AS severity,
+          argMax(event_json, observed_at) AS event_json,
+          max(observed_at) AS observed_at
         FROM %s
-        WHERE item_kind = 'event'
+        WHERE asset_uid != ''
           %s
           %s
-        GROUP BY source_id, item_type
+        GROUP BY asset_uid, source_id, event_type
         ORDER BY observed_at DESC
         LIMIT 20
         FORMAT JSONEachRow
-        """.formatted(rawTable, RECENT_AGENT_DASHBOARD_FILTER, sourceFilter)).stream()
-        .map(ClickHouseClient::rawEventRow)
+        """.formatted(eventTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter)).stream()
+        .map(ClickHouseClient::canonicalEventRow)
         .toList();
     return Map.of(
         "heartbeat", normalizeDashboardKeys(heartbeat),
@@ -866,6 +859,34 @@ public class ClickHouseClient {
             "packages", packages),
         "resources", Map.of("metrics", metrics.stream().map(ClickHouseClient::normalizeDashboardKeys).toList()),
         "events", events.stream().map(ClickHouseClient::normalizeDashboardKeys).toList());
+  }
+
+  public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit) {
+    String table = tableReference(properties.clickhouse().database(), "manager_events");
+    String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
+    String sql = """
+        SELECT
+          asset_uid,
+          source_id,
+          event_type,
+          severity,
+          event_json,
+          observed_at
+        FROM %s
+        WHERE observed_at >= now() - %s
+          AND asset_uid != ''
+          AND source_type = 'AGENT'
+          AND JSONExtractString(event_json, 'message') != ''
+          %s
+          %s
+        ORDER BY observed_at DESC
+        LIMIT %d
+        FORMAT JSONEachRow
+        """.formatted(table, rangeInterval(range), assetFilter, agentLogSeverityFilter(severity), agentLogLimit(limit));
+    return queryJsonRows(sql).stream()
+        .map(ClickHouseClient::canonicalEventRow)
+        .map(ClickHouseClient::normalizeDashboardKeys)
+        .toList();
   }
 
   public Map<String, Object> querySnmpDashboard(Long targetId) {
@@ -1052,6 +1073,21 @@ public class ClickHouseClient {
     };
   }
 
+  static int agentLogLimit(int limit) {
+    if (limit <= 0) {
+      return 200;
+    }
+    return Math.min(limit, 1000);
+  }
+
+  static String agentLogSeverityFilter(String severity) {
+    String normalized = severity == null ? "" : severity.trim().toUpperCase();
+    return switch (normalized) {
+      case "INFO", "WARNING", "ERROR", "CRITICAL" -> "AND upper(ifNull(severity, '')) = " + sqlString(normalized);
+      default -> "";
+    };
+  }
+
   private static String interfaceKey(TrafficQueryService.InterfaceTraffic row) {
     return row.assetUid() + "::" + row.interfaceName();
   }
@@ -1085,6 +1121,56 @@ public class ClickHouseClient {
   private static String nullableText(JsonNode node, String field) {
     JsonNode value = node.get(field);
     return value == null || value.isNull() ? null : value.asText();
+  }
+
+  private static Map<String, Object> canonicalMetricRow(MetricSample sample) {
+    Map<String, Object> metric = new LinkedHashMap<>();
+    metric.put("assetUid", sample.assetUid());
+    metric.put("sourceType", sample.sourceType());
+    metric.put("metricName", sample.metricName());
+    metric.put("value", sample.value());
+    metric.put("unit", sample.unit());
+    metric.put("observedAt", sample.observedAt().toString());
+    if (sample.interfaceName() != null && !sample.interfaceName().isBlank()) {
+      metric.put("interfaceName", sample.interfaceName());
+    }
+    if (sample.mountPoint() != null && !sample.mountPoint().isBlank()) {
+      metric.put("mountPoint", sample.mountPoint());
+    }
+    if (sample.deviceName() != null && !sample.deviceName().isBlank()) {
+      metric.put("deviceName", sample.deviceName());
+    }
+    copyPayloadFields(metric, jsonObject(sample.labelsJson()));
+    return metric;
+  }
+
+  private static Map<String, Object> canonicalStateRow(Map<String, Object> row) {
+    Map<String, Object> state = normalizeDashboardKeys(row);
+    state.remove("stateJson");
+    copyPayloadFields(state, jsonObject(row.get("state_json")));
+    return state;
+  }
+
+  private static Map<String, Object> canonicalEventRow(Map<String, Object> row) {
+    Map<String, Object> event = normalizeDashboardKeys(row);
+    event.remove("eventJson");
+    JsonNode payload = jsonObject(row.get("event_json"));
+    copyPayloadFields(event, payload);
+    copyText(event, payload, "event_type", "eventType");
+    copyText(event, payload, "severity", "severity");
+    copyText(event, payload, "message", "message");
+    copyText(event, payload, "source_name", "sourceName");
+    copyText(event, payload, "outcome", "outcome");
+    return event;
+  }
+
+  private static JsonNode jsonObject(Object json) {
+    try {
+      JsonNode node = OBJECT_MAPPER.readTree(stringValue(json));
+      return node == null || node.isNull() || node.isMissingNode() ? OBJECT_MAPPER.createObjectNode() : node;
+    } catch (Exception ignored) {
+      return OBJECT_MAPPER.createObjectNode();
+    }
   }
 
   private static Map<String, Object> rawMetricRow(Map<String, Object> row) {
@@ -1158,7 +1244,10 @@ public class ClickHouseClient {
     }
     payload.fields().forEachRemaining(field -> {
       if (!field.getValue().isNull()) {
-        target.put(snakeToCamel(field.getKey()), OBJECT_MAPPER.convertValue(field.getValue(), Object.class));
+        String key = field.getKey().startsWith("payload_")
+            ? field.getKey().substring("payload_".length())
+            : field.getKey();
+        target.put(snakeToCamel(key), OBJECT_MAPPER.convertValue(field.getValue(), Object.class));
       }
     });
   }
