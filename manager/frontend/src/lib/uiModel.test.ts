@@ -22,6 +22,7 @@ describe('manager UI model', () => {
       'assets',
       'traffic',
       'agent',
+      'agentLogs',
       'snmp',
       'alerts',
       'castrelsign',

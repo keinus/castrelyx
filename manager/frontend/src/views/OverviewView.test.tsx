@@ -15,7 +15,7 @@ describe('OverviewView', () => {
       '/api/dashboards/agent': {
         body: {
           heartbeat: { healthy: 2, stale: 1, lastSeenAt: '2026-06-11T13:34:00Z' },
-          securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 },
+          securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1 },
           collectors: [{ name: 'socket', sampleCount: 12, lastSeenAt: '2026-06-11T13:34:00Z' }],
           states: {
             sockets: [{
@@ -27,14 +27,7 @@ describe('OverviewView', () => {
             }],
             services: [{ assetUid: 'nas', name: 'ssh.service', status: 'failed' }],
             firewalls: [{ assetUid: 'nas', backend: 'ufw', enabled: false }]
-          },
-          events: [{
-            assetUid: 'nas',
-            eventType: 'auth',
-            severity: 'WARNING',
-            message: 'SSH login failed for alice',
-            observedAt: '2026-06-11T13:33:00Z'
-          }]
+          }
         } satisfies AgentDashboard
       },
       '/api/dashboards/snmp': {
@@ -52,6 +45,15 @@ describe('OverviewView', () => {
             status: 'up'
           }]
         } satisfies SnmpDashboard
+      },
+      '/api/agent/logs?range=1h&severity=ALL&limit=8': {
+        body: [{
+          assetUid: 'nas',
+          eventType: 'auth',
+          severity: 'WARNING',
+          message: 'SSH login failed for alice',
+          observedAt: '2026-06-11T13:33:00Z'
+        }]
       },
       '/api/traffic/interfaces?range=1h': {
         body: [{
@@ -72,23 +74,23 @@ describe('OverviewView', () => {
 
     render(<OverviewView summary={summary} alerts={alerts} />);
 
-    expect(await screen.findByRole('heading', { name: 'NMS 보안 통합 관제' })).toBeInTheDocument();
-    expect(screen.getByText('Network Health')).toBeInTheDocument();
-    expect(screen.getByText('Security Posture')).toBeInTheDocument();
-    expect(screen.getByText('Response Queue')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
+    expect(screen.getByText('상위 트래픽')).toBeInTheDocument();
+    expect(screen.getByText('보안/상태 신호')).toBeInTheDocument();
+    expect(screen.getByText('대응 큐')).toBeInTheDocument();
     expect(screen.getByText('enp2s0')).toBeInTheDocument();
     expect(screen.getByText('11.66 Kbps')).toBeInTheDocument();
     expect(screen.getByText('0.0.0.0:22')).toBeInTheDocument();
     expect(screen.getByText('ssh.service')).toBeInTheDocument();
     expect(screen.getAllByText('SSH login failed for alice').length).toBeGreaterThan(0);
+    expect(screen.queryByText('로그 이벤트')).not.toBeInTheDocument();
     expect(screen.getByText('CPU threshold exceeded')).toBeInTheDocument();
-    expect(screen.getByText('Asset Top 5')).toBeInTheDocument();
-    expect(screen.getByText('CPU Top 5')).toBeInTheDocument();
-    expect(screen.getByText('Disk I/O Top 5')).toBeInTheDocument();
+    expect(screen.getByText('자산 리소스 Top')).toBeInTheDocument();
+    expect(screen.getByText('Disk I/O')).toBeInTheDocument();
 
-    const criticalCard = screen.getByText('Critical').closest('section');
+    const criticalCard = screen.getByText('장애/경고').closest('section');
     expect(criticalCard).not.toBeNull();
-    expect(within(criticalCard as HTMLElement).getByText('1')).toBeInTheDocument();
+    expect(within(criticalCard as HTMLElement).getByText('1/1')).toBeInTheDocument();
   });
 
   it('shows available traffic when a detail dashboard request stalls', async () => {
@@ -102,6 +104,7 @@ describe('OverviewView', () => {
           interfaces: []
         } satisfies SnmpDashboard
       },
+      '/api/agent/logs?range=1h&severity=ALL&limit=8': { body: [] },
       '/api/traffic/interfaces?range=1h': {
         body: [{
           assetUid: 'nas',
@@ -126,13 +129,14 @@ describe('OverviewView', () => {
     });
 
     expect(screen.getByText('enp2s0')).toBeInTheDocument();
-    expect(screen.getByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 상황판을 표시합니다.')).toBeInTheDocument();
+    expect(screen.getByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 개요를 표시합니다.')).toBeInTheDocument();
     expect(screen.queryByText('관제 상세 정보를 갱신하는 중입니다.')).not.toBeInTheDocument();
   });
 
   it('keeps the overview usable when detail dashboards fail', async () => {
     mockFetch({
       '/api/dashboards/agent': { status: 500, body: {} },
+      '/api/agent/logs?range=1h&severity=ALL&limit=8': { status: 500, body: {} },
       '/api/dashboards/snmp': { status: 500, body: {} },
       '/api/traffic/interfaces?range=1h': { status: 500, body: {} },
       '/api/metrics/assets?range=1h': { status: 500, body: {} }
@@ -140,8 +144,8 @@ describe('OverviewView', () => {
 
     render(<OverviewView summary={{ ...summary, trafficTopInterfaces: [] }} alerts={[]} />);
 
-    expect(await screen.findByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 상황판을 표시합니다.')).toBeInTheDocument();
-    expect(screen.getByText('전체 자산')).toBeInTheDocument();
+    expect(await screen.findByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 개요를 표시합니다.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '관리 장비' })).toBeInTheDocument();
     expect(screen.getByText('트래픽 신호 대기')).toBeInTheDocument();
     expect(screen.getByText('대응 대기 없음')).toBeInTheDocument();
   });

@@ -6,7 +6,6 @@ import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
 import type {
   AgentDashboard,
-  AgentEventSummary,
   AgentFirewallState,
   AgentMetricSummary,
   AgentServiceState,
@@ -37,7 +36,6 @@ export function AgentDashboardView() {
   const agents = dashboard.agents ?? [];
   const collectors = dashboard.collectors ?? [];
   const metrics = dashboard.resources?.metrics ?? [];
-  const events = dashboard.events ?? [];
   const sockets = dashboard.states?.sockets ?? [];
   const services = dashboard.states?.services ?? [];
   const firewalls = dashboard.states?.firewalls ?? [];
@@ -63,7 +61,7 @@ export function AgentDashboardView() {
           ['정상 Agent', String(dashboard.heartbeat?.healthy ?? 0)],
           ['오래된 Agent', String(dashboard.heartbeat?.stale ?? 0)],
           ['노출 포트', String(posture.exposedPorts ?? exposedSockets.length)],
-          ['보안 이벤트', String(posture.securityEvents ?? events.length)]
+          ['서비스 이상', String(posture.failedServices ?? failedServices.length)]
         ]}
       />
 
@@ -172,13 +170,6 @@ export function AgentDashboardView() {
           <MetricTable metrics={metrics} />
         </section>
 
-        <section className="data-panel security-panel-wide">
-          <div className="panel-heading">
-            <h3>Recent security events</h3>
-            <span>{events.length} events</span>
-          </div>
-          <EventTable events={events} />
-        </section>
       </div>
     </ViewFrame>
   );
@@ -225,30 +216,6 @@ function MetricTable({ metrics }: { metrics: AgentMetricSummary[] }) {
             </tr>
           ))}
           {metrics.length === 0 && <tr><td colSpan={4}>수집된 resource metric 없음</td></tr>}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function EventTable({ events }: { events: AgentEventSummary[] }) {
-  return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr><th>Agent</th><th>Type</th><th>Severity</th><th>Message</th><th>Observed</th></tr>
-        </thead>
-        <tbody>
-          {events.map((event) => (
-            <tr key={`${event.assetUid}-${event.eventType}-${event.observedAt}-${event.message}`}>
-              <td>{event.assetUid ?? '-'}</td>
-              <td>{event.eventType ?? '-'}</td>
-              <td>{event.severity ?? '-'}</td>
-              <td className="wrap-cell">{event.message ?? event.sourceName ?? event.outcome ?? '-'}</td>
-              <td>{formatDate(event.observedAt)}</td>
-            </tr>
-          ))}
-          {events.length === 0 && <tr><td colSpan={5}>수집된 event 없음</td></tr>}
         </tbody>
       </table>
     </div>

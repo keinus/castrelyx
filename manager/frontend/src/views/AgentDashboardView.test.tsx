@@ -18,8 +18,7 @@ describe('AgentDashboardView', () => {
         securityPosture: {
           exposedPorts: 1,
           failedServices: 1,
-          firewallDisabled: 1,
-          securityEvents: 1
+          firewallDisabled: 1
         },
         agents: [
           { assetUid: 'nas', sourceId: 'nas', lastSeenAt: '2026-06-11T13:34:00Z' }
@@ -60,16 +59,7 @@ describe('AgentDashboardView', () => {
           metrics: [
             { assetUid: 'nas', metricName: 'disk.usage', value: 72.4, unit: 'percent', observedAt: '2026-06-11T13:34:00Z' }
           ]
-        },
-        events: [
-          {
-            assetUid: 'nas',
-            eventType: 'log',
-            severity: 'WARNING',
-            message: 'SSH login failed for alice',
-            observedAt: '2026-06-11T13:33:00Z'
-          }
-        ]
+        }
       })
     }));
     vi.stubGlobal('fetch', fetchMock);
@@ -85,8 +75,8 @@ describe('AgentDashboardView', () => {
     expect(screen.getByText('sshd')).toBeInTheDocument();
     expect(screen.getByText('ssh.service')).toBeInTheDocument();
     expect(screen.getByText('방화벽 비활성')).toBeInTheDocument();
-    expect(screen.getByText('SSH login failed for alice')).toBeInTheDocument();
-    expect(screen.getByText('log')).toBeInTheDocument();
+    expect(screen.queryByText('SSH login failed for alice')).not.toBeInTheDocument();
+    expect(screen.queryByText('Recent security events')).not.toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/dashboards/agent',

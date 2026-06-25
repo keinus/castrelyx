@@ -196,7 +196,7 @@ export default function App({ bootstrap }: AppProps) {
           <span>로그아웃</span>
         </button>
       </aside>
-      <section className={`content ${activeView === 'overview' ? 'content-command-center' : ''}`}>
+      <section className="content">
         <TopBar username={boot.user?.username ?? 'viewer'} />
         <ViewSwitch
           active={activeView}
@@ -270,6 +270,6 @@ function ViewSwitch({
     case 'settings':
       return <SettingsView />;
     default:
-      return <OverviewView summary={summary} alerts={alerts} />;
+      return <OverviewView summary={summary} alerts={alerts} assets={assets} />;
   }
 }

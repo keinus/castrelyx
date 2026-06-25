@@ -35,7 +35,7 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
   }));
   await page.route('/api/dashboards/agent', routeJson({
     heartbeat: { healthy: 1, stale: 0, lastSeenAt: '2026-06-11T13:34:00Z' },
-    securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 },
+    securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1 },
     agents: [{ assetUid: 'nas', sourceId: 'nas', lastSeenAt: '2026-06-11T13:34:00Z' }],
     collectors: [{ name: 'package', sampleCount: 15477, lastSeenAt: '2026-06-11T13:34:00Z' }],
     states: {
@@ -62,6 +62,13 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
       observedAt: '2026-06-11T13:33:00Z'
     }]
   }));
+  await page.route('/api/agent/logs?range=1h&severity=ALL&limit=8', routeJson([{
+    assetUid: 'nas',
+    eventType: 'log',
+    severity: 'WARNING',
+    message: 'SSH login failed for alice',
+    observedAt: '2026-06-11T13:33:00Z'
+  }]));
   await page.route('/api/dashboards/snmp', routeJson({
     polls: { success: 4, failure: 1 },
     targets: ['edge-router'],
@@ -244,7 +251,7 @@ function metricOverview(assets: MockAsset[]) {
       health: 'critical',
       sources: { registered: false, agent: true, traffic: true, diskIo: true, security: true, observed: true },
       metrics: { cpuUsagePct: 91.2, memoryUsagePct: 67.8, diskUsagePct: 72.4, normalizedLoadPct: 45, networkInBps: 4621.02, networkOutBps: 11663.97, interfaceErrorCount: 0, diskReadBps: 1048576, diskWriteBps: 2097152, diskReadIops: 128, diskWriteIops: 64, diskIoUtilizationPct: 87.5 },
-      security: { openPorts: 1, failedServices: 1, firewallDisabled: 1, securityEvents: 1 }
+      security: { openPorts: 1, failedServices: 1, firewallDisabled: 1 }
     }
   ] as Array<{
     assetUid: string;
@@ -257,7 +264,7 @@ function metricOverview(assets: MockAsset[]) {
     health: 'healthy' | 'warning' | 'critical' | 'unknown';
     sources: { registered?: boolean; agent?: boolean; traffic?: boolean; diskIo?: boolean; security?: boolean; observed?: boolean };
     metrics: Record<string, number | null | undefined>;
-    security?: { openPorts: number; failedServices: number; firewallDisabled: number; securityEvents: number };
+    security?: { openPorts: number; failedServices: number; firewallDisabled: number };
   }>;
   return {
     range: '1h',
@@ -302,7 +309,7 @@ function metricDetail(assetUid: string, assets: MockAsset[]) {
       ? [{ assetUid: 'nas', interfaceName: 'enp2s0', inBps: 4621.02, outBps: 11663.97, utilizationPct: 0, errors: 0, discards: 0, status: 'up' }]
       : [{ assetUid: 'edge-router', interfaceName: 'wan0', inBps: 1200000, outBps: 900000, utilizationPct: 12.4, errors: 1, discards: 0, status: 'up' }],
     processes: assetUid === 'nas' ? [{ assetUid: 'nas', pid: 22, name: 'sshd', user: 'root', memoryBytes: 4096, listeningSocketCount: 1 }] : [],
-    security: asset.security ?? { openPorts: 0, failedServices: 0, firewallDisabled: 0, securityEvents: 0 },
+    security: asset.security ?? { openPorts: 0, failedServices: 0, firewallDisabled: 0 },
     collectors: [{ name: 'metric', sampleCount: 10, lastSeenAt: '2026-06-11T13:34:00Z' }]
   };
 }

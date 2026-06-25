@@ -8,15 +8,20 @@ test('admin can reach asset metric dashboard and see create action', async ({ pa
   await page.getByRole('button', { name: '자산' }).click();
 
   await expect(page.getByRole('heading', { name: '자산 관리' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '자산 현황 트리' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '자산 관제 스캔' })).toBeVisible();
   await expect(assetRow(page, 'edge-router')).toBeVisible();
   await expect(assetRow(page, 'nas')).toBeVisible();
-  await expect(page.locator('.asset-tree-summary').filter({ hasText: 'Seoul HQ' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'CPU Usage' })).toHaveCount(0);
+  await expect(page.getByText('Disk by mount')).toHaveCount(0);
+  await assetRow(page, 'nas').getByRole('button', { name: /nas/ }).click();
   await expect(page.getByRole('heading', { name: 'CPU Usage' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Memory Usage' })).toBeVisible();
   await expect(page.getByText('Disk I/O Top 5')).toHaveCount(0);
-  await expect(page.getByText('Disk by mount')).not.toBeVisible();
-  await page.getByRole('tab', { name: 'I/O' }).click();
+  await page.getByRole('tab', { name: '신호' }).click();
+  await expect(page.getByRole('heading', { name: 'Open ports' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Process/socket map' })).toBeVisible();
+  await expect(page.getByText('Security events')).toHaveCount(0);
+  await page.getByRole('tab', { name: '스토리지' }).click();
   await expect(page.getByText('Disk by mount')).toBeVisible();
   await expect(page.getByText('Disk I/O devices')).toBeVisible();
   await expect(page.getByLabel('자산 추가')).toBeVisible();
@@ -65,5 +70,5 @@ test('viewer can inspect assets but does not see mutation actions or settings', 
 });
 
 function assetRow(page: import('@playwright/test').Page, name: string) {
-  return page.locator('.asset-tree-item').filter({ hasText: name });
+  return page.locator('.asset-scan-table tbody tr').filter({ hasText: name });
 }

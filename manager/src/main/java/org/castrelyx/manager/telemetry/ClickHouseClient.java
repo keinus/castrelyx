@@ -748,8 +748,8 @@ public class ClickHouseClient {
     String stateTable = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
     String eventTable = tableReference(properties.clickhouse().database(), "manager_events");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
-    int stateLimit = assetUid == null || assetUid.isBlank() ? 250 : 500;
-    int stateTypeLimit = assetUid == null || assetUid.isBlank() ? 50 : 200;
+    int stateTypeLimit = assetUid == null || assetUid.isBlank() ? 50 : 500;
+    int packageLimit = assetUid == null || assetUid.isBlank() ? 50 : 200;
     int eventLimit = assetUid == null || assetUid.isBlank() ? 20 : 100;
     List<Map<String, Object>> agents = queryJsonRows("""
         SELECT asset_uid, argMax(source_id, observed_at) AS source_id, max(observed_at) AS last_seen_at
@@ -791,54 +791,11 @@ public class ClickHouseClient {
         .limit(24)
         .map(ClickHouseClient::canonicalMetricRow)
         .toList();
-    List<Map<String, Object>> stateRows = queryJsonRows("""
-        SELECT
-          asset_uid,
-          source_id,
-          state_type,
-          state_key,
-          state_json,
-          latest_observed_at AS observed_at
-        FROM (
-          SELECT
-            asset_uid,
-            source_id,
-            state_type,
-            state_key,
-            argMax(state_json, observed_at) AS state_json,
-            max(observed_at) AS latest_observed_at
-          FROM %s
-          WHERE asset_uid != ''
-            %s
-            %s
-          GROUP BY asset_uid, source_id, state_type, state_key
-        )
-        ORDER BY latest_observed_at DESC
-        LIMIT %d
-        FORMAT JSONEachRow
-        """.formatted(stateTable, RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter, stateLimit)).stream()
-        .map(ClickHouseClient::canonicalStateRow)
-        .toList();
-    List<Map<String, Object>> sockets = stateRows.stream()
-        .filter(row -> "socket".equals(row.get("stateType")))
-        .limit(stateTypeLimit)
-        .toList();
-    List<Map<String, Object>> services = stateRows.stream()
-        .filter(row -> "service".equals(row.get("stateType")))
-        .limit(stateTypeLimit)
-        .toList();
-    List<Map<String, Object>> firewalls = stateRows.stream()
-        .filter(row -> "firewall".equals(row.get("stateType")))
-        .limit(stateTypeLimit)
-        .toList();
-    List<Map<String, Object>> processes = stateRows.stream()
-        .filter(row -> "process".equals(row.get("stateType")))
-        .limit(stateTypeLimit)
-        .toList();
-    List<Map<String, Object>> packages = stateRows.stream()
-        .filter(row -> "package".equals(row.get("stateType")))
-        .limit(stateTypeLimit)
-        .toList();
+    List<Map<String, Object>> sockets = queryDashboardStateRows(stateTable, assetFilter, "socket", stateTypeLimit);
+    List<Map<String, Object>> services = queryDashboardStateRows(stateTable, assetFilter, "service", stateTypeLimit);
+    List<Map<String, Object>> firewalls = queryDashboardStateRows(stateTable, assetFilter, "firewall", stateTypeLimit);
+    List<Map<String, Object>> processes = queryDashboardStateRows(stateTable, assetFilter, "process", stateTypeLimit);
+    List<Map<String, Object>> packages = queryDashboardStateRows(stateTable, assetFilter, "package", packageLimit);
     List<Map<String, Object>> events = queryJsonRows("""
         SELECT
           asset_uid,
@@ -869,7 +826,7 @@ public class ClickHouseClient {
         .toList();
     return Map.of(
         "heartbeat", normalizeDashboardKeys(heartbeat),
-        "securityPosture", securityPosture(sockets, services, firewalls, events),
+        "securityPosture", securityPosture(sockets, services, firewalls),
         "agents", agents.stream().map(ClickHouseClient::normalizeDashboardKeys).toList(),
         "collectors", collectors.stream().map(ClickHouseClient::normalizeDashboardKeys).toList(),
         "states", Map.of(
@@ -880,6 +837,42 @@ public class ClickHouseClient {
             "packages", packages),
         "resources", Map.of("metrics", metrics.stream().map(ClickHouseClient::normalizeDashboardKeys).toList()),
         "events", events.stream().map(ClickHouseClient::normalizeDashboardKeys).toList());
+  }
+
+  private List<Map<String, Object>> queryDashboardStateRows(
+      String stateTable,
+      String assetFilter,
+      String stateType,
+      int limit) {
+    return queryJsonRows("""
+        SELECT
+          asset_uid,
+          source_id,
+          state_type,
+          state_key,
+          state_json,
+          latest_observed_at AS observed_at
+        FROM (
+          SELECT
+            asset_uid,
+            source_id,
+            state_type,
+            state_key,
+            argMax(state_json, observed_at) AS state_json,
+            max(observed_at) AS latest_observed_at
+          FROM %s
+          WHERE asset_uid != ''
+            AND state_type = %s
+            %s
+            %s
+          GROUP BY asset_uid, source_id, state_type, state_key
+        )
+        ORDER BY latest_observed_at DESC
+        LIMIT %d
+        FORMAT JSONEachRow
+        """.formatted(stateTable, sqlString(stateType), RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter, limit)).stream()
+        .map(ClickHouseClient::canonicalStateRow)
+        .toList();
   }
 
   public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit) {
@@ -1283,13 +1276,11 @@ public class ClickHouseClient {
   private static Map<String, Object> securityPosture(
       List<Map<String, Object>> sockets,
       List<Map<String, Object>> services,
-      List<Map<String, Object>> firewalls,
-      List<Map<String, Object>> events) {
+      List<Map<String, Object>> firewalls) {
     return Map.of(
         "exposedPorts", sockets.stream().filter(ClickHouseClient::isListeningSocket).count(),
         "failedServices", services.stream().filter(ClickHouseClient::isProblemService).count(),
-        "firewallDisabled", firewalls.stream().filter(ClickHouseClient::isFirewallDisabled).count(),
-        "securityEvents", (long) events.size());
+        "firewallDisabled", firewalls.stream().filter(ClickHouseClient::isFirewallDisabled).count());
   }
 
   private static boolean isListeningSocket(Map<String, Object> row) {

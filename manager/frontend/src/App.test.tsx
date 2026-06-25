@@ -14,7 +14,7 @@ describe('App shell', () => {
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
     expect(await screen.findByRole('heading', { name: 'Castrelyx Manager' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'NMS 보안 통합 관제' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Traffic/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Agent Logs' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();
@@ -95,6 +95,7 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
       }
     },
     '/api/dashboards/agent': { body: { heartbeat: { healthy: 0, stale: 0 }, collectors: [], events: [] } },
+    '/api/agent/logs?range=1h&severity=ALL&limit=8': { body: [] },
     '/api/agent/logs?range=1h&severity=ALL&limit=300': { body: [] },
     '/api/dashboards/snmp': { body: { polls: { success: 0, failure: 0 }, targets: [], interfaces: [] } },
     '/api/traffic/interfaces?range=1h': { body: [] },

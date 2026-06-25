@@ -1,9 +1,10 @@
 import {
-  ChevronDown,
-  ChevronRight,
+  ArrowLeft,
+  Cpu,
+  Database,
   Edit3,
-  ListChecks,
-  MapPin,
+  HardDrive,
+  Network,
   Plus,
   RefreshCw,
   Save,
@@ -13,7 +14,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -30,10 +31,12 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
-import type { AgentEventSummary, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
+import type { AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
 import { canMutate, formatBps } from '../lib/uiModel';
 import { cn } from '../lib/utils';
 
@@ -62,17 +65,6 @@ type AssetsViewProps = {
 type HealthFilter = 'all' | AssetMetricSummary['health'];
 type RangeOption = '15m' | '30m' | '1h' | '6h' | '24h';
 
-type AssetTypeGroup = {
-  assetType: string;
-  assets: AssetMetricSummary[];
-};
-
-type AssetLocationGroup = {
-  location: string;
-  assets: AssetMetricSummary[];
-  types: AssetTypeGroup[];
-};
-
 type AssetDiskRow = NonNullable<AssetMetricDetail['disks']>[number];
 type ProcessSocketGroup = {
   key: string;
@@ -83,7 +75,6 @@ type ProcessSocketGroup = {
   executablePath?: string;
   sockets: AgentSocketState[];
 };
-type DetailModalKind = 'disk' | 'signals';
 
 const ASSET_METRICS_REFRESH_MS = 30_000;
 
@@ -134,29 +125,58 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
   const [overview, setOverview] = useState<AssetMetricsOverview>(emptyOverview);
   const [detail, setDetail] = useState<AssetMetricDetail | null>(null);
   const [selectedAssetUid, setSelectedAssetUid] = useState('');
+  const [selectedAssetSnapshot, setSelectedAssetSnapshot] = useState<AssetMetricSummary | null>(null);
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
   const [mutationError, setMutationError] = useState('');
+  const overviewRef = useRef(overview);
+  const selectedAssetUidRef = useRef(selectedAssetUid);
+
+  useEffect(() => {
+    overviewRef.current = overview;
+  }, [overview]);
+
+  useEffect(() => {
+    selectedAssetUidRef.current = selectedAssetUid;
+  }, [selectedAssetUid]);
 
   async function loadMetrics(nextRange = range) {
-    setLoading(true);
+    const hasStableOverview = overviewRef.current.assets.length > 0;
+    if (hasStableOverview) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError('');
     try {
       const response = await api.assetMetrics(nextRange);
       setOverview(response);
-      const nextSelected = response.assets.find((asset) => asset.assetUid === selectedAssetUid)?.assetUid
-        ?? response.assets[0]?.assetUid
-        ?? '';
-      setSelectedAssetUid(nextSelected);
-      setDetailRefreshToken((value) => value + 1);
+      const activeAssetUid = selectedAssetUidRef.current;
+      if (activeAssetUid) {
+        const refreshedAsset = response.assets.find((asset) => asset.assetUid === activeAssetUid);
+        if (refreshedAsset) {
+          setSelectedAssetSnapshot(refreshedAsset);
+        }
+        setDetailRefreshToken((value) => value + 1);
+      }
     } catch {
-      setOverview(fallbackOverview(assets, nextRange));
-      setDetailRefreshToken((value) => value + 1);
+      const fallback = fallbackOverview(assets, nextRange);
+      setOverview((current) => (current.assets.length > 0 ? current : fallback));
+      const activeAssetUid = selectedAssetUidRef.current;
+      if (activeAssetUid) {
+        const fallbackAsset = fallback.assets.find((asset) => asset.assetUid === activeAssetUid);
+        if (fallbackAsset) {
+          setSelectedAssetSnapshot(fallbackAsset);
+        }
+        setDetailRefreshToken((value) => value + 1);
+      }
       setError('자산 메트릭 정보를 불러오지 못했습니다. 등록된 자산 기본 정보만 표시합니다.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -197,33 +217,33 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
   }, [healthFilter, overview.assets, query]);
 
   const selectedAsset = useMemo(
-    () => filteredAssets.find((asset) => asset.assetUid === selectedAssetUid)
-      ?? overview.assets.find((asset) => asset.assetUid === selectedAssetUid)
-      ?? filteredAssets[0]
-      ?? overview.assets[0],
-    [filteredAssets, overview.assets, selectedAssetUid]
+    () => overview.assets.find((asset) => asset.assetUid === selectedAssetUid)
+      ?? (selectedAssetSnapshot?.assetUid === selectedAssetUid ? selectedAssetSnapshot : undefined),
+    [overview.assets, selectedAssetSnapshot, selectedAssetUid]
   );
 
-  const tree = useMemo(() => buildAssetTree(filteredAssets), [filteredAssets]);
+  const scanAssets = useMemo(() => sortAssetsForScan(filteredAssets), [filteredAssets]);
   const summary = overview.summary;
   const canManageAssets = canMutate(role, 'asset:update');
 
   useEffect(() => {
-    if (!selectedAsset?.assetUid) {
+    if (!selectedAssetUid) {
       setDetail(null);
+      setDetailLoading(false);
       return;
     }
     let cancelled = false;
     setDetailLoading(true);
-    api.assetMetricDetail(selectedAsset.assetUid, range)
+    api.assetMetricDetail(selectedAssetUid, range)
       .then((response) => {
         if (!cancelled) {
           setDetail(response);
+          setSelectedAssetSnapshot(response.asset);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setDetail(null);
+          setDetail((current) => (current?.asset.assetUid === selectedAssetUid ? current : null));
         }
       })
       .finally(() => {
@@ -234,7 +254,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
     return () => {
       cancelled = true;
     };
-  }, [detailRefreshToken, range, selectedAsset?.assetUid]);
+  }, [detailRefreshToken, range, selectedAssetUid]);
 
   useEffect(() => {
     setEditing(false);
@@ -244,12 +264,26 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
     setEditDescription(selectedAsset?.description ?? '');
   }, [selectedAsset?.assetUid]);
 
-  function selectAsset(assetUid: string) {
+  function openAssetDetail(assetUid: string) {
     if (assetUid === selectedAssetUid) {
       setDetailRefreshToken((value) => value + 1);
       return;
     }
+    selectedAssetUidRef.current = assetUid;
     setSelectedAssetUid(assetUid);
+    setSelectedAssetSnapshot(overviewRef.current.assets.find((asset) => asset.assetUid === assetUid) ?? null);
+    setDetail(null);
+    setDetailRefreshToken((value) => value + 1);
+  }
+
+  function returnToList() {
+    selectedAssetUidRef.current = '';
+    setSelectedAssetUid('');
+    setSelectedAssetSnapshot(null);
+    setDetail(null);
+    setDetailLoading(false);
+    setEditing(false);
+    setMutationError('');
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -297,8 +331,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
     }
     setMutationError('');
     await onDelete(selectedAsset.id);
-    setSelectedAssetUid('');
-    setDetail(null);
+    returnToList();
     await loadMetrics(range);
   }
 
@@ -310,8 +343,8 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
           <>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" aria-label="자산 새로고침" onClick={() => void loadMetrics(range)} type="button">
-                  <RefreshCw size={18} />
+                <Button variant="outline" size="icon" aria-label="자산 새로고침" onClick={() => void loadMetrics(range)} disabled={loading || refreshing} type="button">
+                  <RefreshCw className={cn(refreshing && 'asset-refresh-spin')} size={18} />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>자산 새로고침</TooltipContent>
@@ -319,7 +352,16 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
             {canMutate(role, 'asset:create') && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="자산 추가" onClick={() => setCreating((value) => !value)} type="button">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="자산 추가"
+                    onClick={() => {
+                      returnToList();
+                      setCreating((value) => !value);
+                    }}
+                    type="button"
+                  >
                     <Plus size={18} />
                   </Button>
                 </TooltipTrigger>
@@ -330,7 +372,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
         )}
       >
         {error && <div className="notice asset-notice">{error}</div>}
-        {loading && <div className="notice">자산 정보를 갱신하는 중입니다.</div>}
+        {loading && overview.assets.length === 0 && <div className="notice">자산 정보를 갱신하는 중입니다.</div>}
         {mutationError && <div className="notice asset-notice">{mutationError}</div>}
 
         {creating && (
@@ -381,39 +423,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
           </Card>
         )}
 
-        <div className="asset-workspace-grid">
-          <Card className="asset-tree-card">
-            <CardHeader className="pb-3">
-              <div className="asset-tree-heading">
-                <div>
-                  <CardTitle>자산 현황 트리</CardTitle>
-                  <CardDescription>{filteredAssets.length} assets · {summary.observedAssets} observed</CardDescription>
-                </div>
-                <Badge variant={summary.criticalAssets > 0 ? 'critical' : 'secondary'}>{summary.criticalAssets} Critical</Badge>
-              </div>
-              <div className="asset-tree-toolbar">
-                <label className="asset-search-field">
-                  <Search size={16} aria-hidden="true" />
-                  <input
-                    aria-label="자산 검색"
-                    placeholder="이름, UID, IP, 위치 검색"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                </label>
-                <NativeSelect aria-label="조회 범위" value={range} onChange={(event) => setRange(event.target.value as RangeOption)}>
-                  {rangeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </NativeSelect>
-                <NativeSelect aria-label="상태 필터" value={healthFilter} onChange={(event) => setHealthFilter(event.target.value as HealthFilter)}>
-                  {healthFilters.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}
-                </NativeSelect>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <AssetTree groups={tree} selectedAssetUid={selectedAsset?.assetUid ?? ''} onSelect={selectAsset} />
-            </CardContent>
-          </Card>
-
+        {selectedAsset ? (
           <AssetDetailPanel
             asset={selectedAsset}
             detail={detail?.asset.assetUid === selectedAsset?.assetUid ? detail : null}
@@ -435,74 +445,219 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
             }}
             onSubmitEdit={submitEdit}
             onDelete={() => void deleteSelectedAsset()}
+            onBack={returnToList}
           />
-        </div>
+        ) : (
+          <AssetFleetScan
+            assets={scanAssets}
+            summary={summary}
+            range={range}
+            query={query}
+            healthFilter={healthFilter}
+            onRangeChange={setRange}
+            onQueryChange={setQuery}
+            onHealthFilterChange={setHealthFilter}
+            onOpenAsset={openAssetDetail}
+          />
+        )}
       </ViewFrame>
     </TooltipProvider>
   );
 }
 
-function AssetTree({
-  groups,
-  selectedAssetUid,
-  onSelect
+function AssetFleetScan({
+  assets,
+  summary,
+  range,
+  query,
+  healthFilter,
+  onRangeChange,
+  onQueryChange,
+  onHealthFilterChange,
+  onOpenAsset
 }: {
-  groups: AssetLocationGroup[];
-  selectedAssetUid: string;
-  onSelect: (assetUid: string) => void;
+  assets: AssetMetricSummary[];
+  summary: AssetMetricsOverview['summary'];
+  range: RangeOption;
+  query: string;
+  healthFilter: HealthFilter;
+  onRangeChange: (value: RangeOption) => void;
+  onQueryChange: (value: string) => void;
+  onHealthFilterChange: (value: HealthFilter) => void;
+  onOpenAsset: (assetUid: string) => void;
 }) {
-  if (groups.length === 0) {
-    return (
-      <div className="asset-empty-state">
-        <Server size={28} />
-        <strong>조건에 맞는 자산이 없습니다.</strong>
-        <span>검색어나 상태 필터를 조정해 보세요.</span>
-      </div>
-    );
-  }
-
   return (
-    <div className="asset-tree-list">
-      {groups.map((group) => (
-        <details key={group.location} open>
-          <summary className="asset-tree-summary">
-            <ChevronDown size={15} aria-hidden="true" />
-            <MapPin size={15} aria-hidden="true" />
-            <span>{group.location}</span>
-            <em>{group.assets.length}</em>
-          </summary>
-          <div className="asset-tree-branch">
-            {group.types.map((type) => (
-              <details key={`${group.location}-${type.assetType}`} open>
-                <summary className="asset-tree-summary asset-tree-type">
-                  <ChevronRight size={15} aria-hidden="true" />
-                  <span>{type.assetType}</span>
-                  <em>{type.assets.length}</em>
-                </summary>
-                <div className="asset-tree-leaves">
-                  {type.assets.map((asset) => (
-                    <button
-                      aria-pressed={selectedAssetUid === asset.assetUid}
-                      className={cn('asset-tree-item', selectedAssetUid === asset.assetUid && 'selected')}
-                      key={asset.assetUid}
-                      onClick={() => onSelect(asset.assetUid)}
-                      type="button"
-                    >
-                      <span className={cn('asset-tree-dot', asset.health)} aria-hidden="true" />
-                      <div>
-                        <strong>{asset.name}</strong>
-                        <span>{[asset.assetUid, asset.managementIp].filter(Boolean).join(' · ') || asset.assetType}</span>
-                      </div>
-                      <HealthBadge health={asset.health} />
-                    </button>
-                  ))}
-                </div>
-              </details>
-            ))}
+    <section className="asset-fleet-scan">
+      <div className="asset-fleet-summary-grid">
+        <AssetFleetKpi icon={<Server size={17} />} label="전체 자산" value={summary.totalAssets} meta={`${summary.observedAssets} observed`} />
+        <AssetFleetKpi icon={<ShieldAlert size={17} />} label="Critical" value={summary.criticalAssets} tone={summary.criticalAssets > 0 ? 'critical' : 'neutral'} meta={`${summary.warningAssets} warning`} />
+        <AssetFleetKpi icon={<RefreshCw size={17} />} label="Stale" value={summary.staleAssets} tone={summary.staleAssets > 0 ? 'warning' : 'neutral'} meta="수집 지연" />
+        <AssetFleetKpi icon={<Network size={17} />} label="Network" value={formatBps((summary.totalNetworkInBps ?? 0) + (summary.totalNetworkOutBps ?? 0))} meta="RX + TX" />
+      </div>
+
+      <Card className="asset-scan-card">
+        <CardHeader className="asset-scan-header">
+          <div className="asset-scan-heading">
+            <div>
+              <CardTitle>자산 관제 스캔</CardTitle>
+              <CardDescription>상태가 나쁜 자산을 먼저 보고, 필요한 자산만 상세 분석으로 들어갑니다.</CardDescription>
+            </div>
+            <Badge variant={summary.criticalAssets > 0 ? 'critical' : 'secondary'}>{assets.length} 표시</Badge>
           </div>
-        </details>
-      ))}
-    </div>
+          <div className="asset-scan-toolbar">
+            <label className="asset-search-field">
+              <Search size={16} aria-hidden="true" />
+              <input
+                aria-label="자산 검색"
+                placeholder="이름, UID, IP, 위치 검색"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+              />
+            </label>
+            <NativeSelect aria-label="조회 범위" value={range} onChange={(event) => onRangeChange(event.target.value as RangeOption)}>
+              {rangeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </NativeSelect>
+            <NativeSelect aria-label="상태 필터" value={healthFilter} onChange={(event) => onHealthFilterChange(event.target.value as HealthFilter)}>
+              {healthFilters.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}
+            </NativeSelect>
+          </div>
+        </CardHeader>
+        <CardContent className="asset-scan-content">
+          {assets.length === 0 ? (
+            <div className="asset-empty-state">
+              <Server size={28} />
+              <strong>조건에 맞는 자산이 없습니다.</strong>
+              <span>검색어나 상태 필터를 조정해 보세요.</span>
+            </div>
+          ) : (
+            <div className="asset-scan-table-wrap">
+              <Table className="asset-scan-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>상태</TableHead>
+                    <TableHead>자산</TableHead>
+                    <TableHead>위치 / IP</TableHead>
+                    <TableHead>리소스</TableHead>
+                    <TableHead>네트워크</TableHead>
+                    <TableHead>보안</TableHead>
+                    <TableHead>수집</TableHead>
+                    <TableHead>상세</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {assets.map((asset) => (
+                    <TableRow key={asset.assetUid} className={cn(asset.health === 'critical' && 'asset-row-critical')}>
+                      <TableCell><HealthBadge health={asset.health} /></TableCell>
+                      <TableCell>
+                        <button className="asset-scan-name-button" type="button" onClick={() => onOpenAsset(asset.assetUid)}>
+                          <strong>{asset.name}</strong>
+                          <span>{asset.assetUid}</span>
+                        </button>
+                        <div className="asset-scan-meta-row">
+                          <Badge variant="secondary">{asset.assetType || 'UNKNOWN'}</Badge>
+                          <SourceBadges asset={asset} />
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="asset-scan-stack">
+                          <strong>{asset.location || '미지정 위치'}</strong>
+                          <span>{asset.managementIp || '-'}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="asset-scan-metric-strip">
+                          <MetricPill label="CPU" value={formatPercent(asset.metrics.cpuUsagePct)} tone={metricTone(asset.metrics.cpuUsagePct)} />
+                          <MetricPill label="MEM" value={formatPercent(asset.metrics.memoryUsagePct)} tone={metricTone(asset.metrics.memoryUsagePct)} />
+                          <MetricPill label="DISK" value={formatPercent(asset.metrics.diskUsagePct)} tone={metricTone(asset.metrics.diskUsagePct)} />
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="asset-scan-stack">
+                          <strong>{formatBps(asset.metrics.networkInBps ?? 0)} RX</strong>
+                          <span>{formatBps(asset.metrics.networkOutBps ?? 0)} TX</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="asset-scan-stack">
+                          <strong>{securitySignalLabel(asset.security)}</strong>
+                          <span>{asset.security?.openPorts ?? 0} ports · {asset.security?.failedServices ?? 0} failed</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="asset-scan-stack">
+                          <strong>{asset.stale ? 'Stale' : asset.sources.observed ? 'Observed' : 'Registered'}</strong>
+                          <span>{formatDate(asset.lastSeenAt)}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Button type="button" variant="outline" size="sm" onClick={() => onOpenAsset(asset.assetUid)}>
+                          상세
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function AssetFleetKpi({
+  icon,
+  label,
+  value,
+  meta,
+  tone = 'neutral'
+}: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode;
+  meta: string;
+  tone?: 'neutral' | 'warning' | 'critical';
+}) {
+  return (
+    <section className={cn('asset-fleet-kpi', tone)}>
+      <div aria-hidden="true">{icon}</div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{meta}</small>
+    </section>
+  );
+}
+
+function MetricPill({ label, value, tone }: { label: string; value: string; tone: 'neutral' | 'warning' | 'critical' }) {
+  return (
+    <span className={cn('asset-metric-pill', tone)}>
+      <em>{label}</em>
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+function AssetDetailSnapshotTile({
+  icon,
+  label,
+  value,
+  meta,
+  tone = 'neutral'
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  meta: string;
+  tone?: 'neutral' | 'warning' | 'critical';
+}) {
+  return (
+    <section className={cn('asset-detail-snapshot-tile', tone)}>
+      <div aria-hidden="true">{icon}</div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{meta}</small>
+    </section>
   );
 }
 
@@ -521,7 +676,8 @@ function AssetDetailPanel({
   onStartEdit,
   onCancelEdit,
   onSubmitEdit,
-  onDelete
+  onDelete,
+  onBack
 }: {
   asset?: AssetMetricSummary;
   detail: AssetMetricDetail | null;
@@ -538,15 +694,8 @@ function AssetDetailPanel({
   onCancelEdit: () => void;
   onSubmitEdit: (event: FormEvent<HTMLFormElement>) => void;
   onDelete: () => void;
+  onBack: () => void;
 }) {
-  const [detailModal, setDetailModal] = useState<DetailModalKind | null>(null);
-
-  useEffect(() => {
-    if (asset?.assetUid) {
-      setDetailModal(null);
-    }
-  }, [asset?.assetUid]);
-
   if (!asset) {
     return (
       <Card className="asset-detail-card">
@@ -567,7 +716,6 @@ function AssetDetailPanel({
   const diskIoRows = detail?.diskIo ?? disks.filter((disk) => disk.device);
   const processes = detail?.processes ?? [];
   const sockets = detail?.sockets ?? [];
-  const securityEvents = security?.events ?? [];
   const primaryMounts = ['/', '/tmp'].map((mountPoint) => ({
     mountPoint,
     disk: findDiskByMount(disks, mountPoint)
@@ -583,6 +731,15 @@ function AssetDetailPanel({
     (total, process) => total + (process.listeningSocketCount ?? 0) + (process.connectedSocketCount ?? 0),
     0
   );
+  const listeningSockets = sockets.filter(isListeningSocketRow);
+  const connectedSockets = sockets.filter(isConnectedSocketRow);
+  const publicListeningSockets = listeningSockets.filter(isPublicListeningSocket);
+  const openPortCount = security?.openPorts ?? listeningSockets.length;
+  const signalTone = (security?.firewallDisabled ?? 0) > 0 || (security?.failedServices ?? 0) > 0
+    ? 'critical'
+    : openPortCount > 0
+      ? 'warning'
+      : 'neutral';
 
   return (
     <Card className="asset-detail-card asset-detail-card-elevated">
@@ -602,6 +759,9 @@ function AssetDetailPanel({
             </div>
           </div>
           <div className="asset-detail-actions">
+            <Button type="button" variant="outline" size="sm" onClick={onBack}>
+              <ArrowLeft size={16} />목록
+            </Button>
             <HealthBadge health={asset.health} />
             {canManage && (
               <>
@@ -674,50 +834,51 @@ function AssetDetailPanel({
           </section>
         )}
 
-        <div className="asset-main-dashboard">
-          <div className="asset-chart-grid">
-            <ChartBlock title="CPU Usage" points={detail?.series.cpu?.length ?? 0} meta={formatPercent(metrics.cpuUsagePct)} empty="CPU 사용률 시계열이 없습니다.">
-              <PercentAreaChart data={detail?.series.cpu ?? []} color="var(--chart-1)" name="CPU" />
-            </ChartBlock>
-            <ChartBlock title="Memory Usage" points={detail?.series.memory?.length ?? 0} meta={formatPercent(metrics.memoryUsagePct)} empty="메모리 사용률 시계열이 없습니다.">
-              <PercentAreaChart data={detail?.series.memory ?? []} color="var(--chart-2)" name="Memory" />
-            </ChartBlock>
-            <ChartBlock title="Disk Usage" points={detail?.series.disk?.length ?? 0} meta={formatPercent(metrics.diskUsagePct)} empty="디스크 사용률 시계열이 없습니다.">
-              <PercentAreaChart data={detail?.series.disk ?? []} color="var(--chart-3)" name="Disk" />
-            </ChartBlock>
-            <ChartBlock title="Network RX/TX" points={detail?.series.network?.length ?? 0} meta={`${formatBps(metrics.networkInBps ?? 0)} RX / ${formatBps(metrics.networkOutBps ?? 0)} TX`} empty="인터페이스 RX/TX 시계열이 없습니다.">
-              <NetworkLineChart data={detail?.series.network ?? []} />
-            </ChartBlock>
-            <ChartBlock
-              title="Disk I/O"
-              points={detail?.series.diskIo?.length ?? 0}
-              meta={`${formatBytesPerSecond(metrics.diskReadBps)} read / ${formatBytesPerSecond(metrics.diskWriteBps)} write · ${formatIops(totalDiskIops)} · ${formatPercent(maxDiskIoUtilization)}`}
-              empty="Disk I/O 시계열이 없습니다."
-            >
-              <DiskIoLineChart data={detail?.series.diskIo ?? []} />
-            </ChartBlock>
-          </div>
-
-          <div className="asset-detail-lower-grid asset-main-lower-grid">
-            <DiskCapacityPanel
-              mounts={primaryMounts}
-              totalMounts={disks.length}
-              diskIoDeviceCount={diskIoRows.length}
-              onOpenDetails={() => setDetailModal('disk')}
-            />
-            <SignalPosturePanel
-              security={security}
-              interfacesCount={interfaces.length}
-              processesCount={processes.length}
-              processSocketCount={processSocketCount}
-              onOpenDetails={() => setDetailModal('signals')}
-            />
-          </div>
+        <div className="asset-detail-snapshot-grid">
+          <AssetDetailSnapshotTile icon={<Cpu size={17} />} label="CPU" value={formatPercent(metrics.cpuUsagePct)} meta={`load ${formatPercent(metrics.normalizedLoadPct)}`} tone={metricTone(metrics.cpuUsagePct)} />
+          <AssetDetailSnapshotTile icon={<Database size={17} />} label="Memory" value={formatPercent(metrics.memoryUsagePct)} meta={formatBytes(metrics.memoryAvailableBytes)} tone={metricTone(metrics.memoryUsagePct)} />
+          <AssetDetailSnapshotTile icon={<HardDrive size={17} />} label="Disk" value={formatPercent(metrics.diskUsagePct)} meta={`${disks.length} mounts`} tone={metricTone(metrics.diskUsagePct)} />
+          <AssetDetailSnapshotTile icon={<Network size={17} />} label="Network" value={formatBps((metrics.networkInBps ?? 0) + (metrics.networkOutBps ?? 0))} meta="RX + TX" />
+          <AssetDetailSnapshotTile icon={<ShieldAlert size={17} />} label="Signals" value={securitySignalLabel(security)} meta={`${openPortCount} open · ${processes.length} proc`} tone={signalTone} />
         </div>
 
-        {detailModal === 'disk' && (
-          <DetailModal title="Disk I/O / mount 상세" onClose={() => setDetailModal(null)}>
-            <div className="asset-modal-grid">
+        <Tabs defaultValue="performance" className="asset-detail-tabs">
+          <TabsList className="asset-detail-tab-list">
+            <TabsTrigger value="performance">성능</TabsTrigger>
+            <TabsTrigger value="storage">스토리지</TabsTrigger>
+            <TabsTrigger value="network">네트워크</TabsTrigger>
+            <TabsTrigger value="signals">신호</TabsTrigger>
+            <TabsTrigger value="processes">프로세스</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="performance">
+            <div className="asset-chart-grid">
+              <ChartBlock title="CPU Usage" points={detail?.series.cpu?.length ?? 0} meta={formatPercent(metrics.cpuUsagePct)} empty="CPU 사용률 시계열이 없습니다.">
+                <PercentAreaChart data={detail?.series.cpu ?? []} color="var(--chart-1)" name="CPU" />
+              </ChartBlock>
+              <ChartBlock title="Memory Usage" points={detail?.series.memory?.length ?? 0} meta={formatPercent(metrics.memoryUsagePct)} empty="메모리 사용률 시계열이 없습니다.">
+                <PercentAreaChart data={detail?.series.memory ?? []} color="var(--chart-2)" name="Memory" />
+              </ChartBlock>
+              <ChartBlock title="Network RX/TX" points={detail?.series.network?.length ?? 0} meta={`${formatBps(metrics.networkInBps ?? 0)} RX / ${formatBps(metrics.networkOutBps ?? 0)} TX`} empty="인터페이스 RX/TX 시계열이 없습니다.">
+                <NetworkLineChart data={detail?.series.network ?? []} />
+              </ChartBlock>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="storage">
+            <div className="asset-tab-grid">
+              <DiskCapacityPanel mounts={primaryMounts} totalMounts={disks.length} diskIoDeviceCount={diskIoRows.length} />
+              <ChartBlock title="Disk Usage" points={detail?.series.disk?.length ?? 0} meta={formatPercent(metrics.diskUsagePct)} empty="디스크 사용률 시계열이 없습니다.">
+                <PercentAreaChart data={detail?.series.disk ?? []} color="var(--chart-3)" name="Disk" />
+              </ChartBlock>
+              <ChartBlock
+                title="Disk I/O"
+                points={detail?.series.diskIo?.length ?? 0}
+                meta={`${formatBytesPerSecond(metrics.diskReadBps)} read / ${formatBytesPerSecond(metrics.diskWriteBps)} write · ${formatIops(totalDiskIops)} · ${formatPercent(maxDiskIoUtilization)}`}
+                empty="Disk I/O 시계열이 없습니다."
+              >
+                <DiskIoLineChart data={detail?.series.diskIo ?? []} />
+              </ChartBlock>
               <DetailList title="Disk I/O devices" meta={`${diskIoRows.length} devices`} empty="수집된 Disk I/O 장치 정보가 없습니다.">
                 {diskIoRows.map((disk) => (
                   <li key={disk.device ?? 'unknown'}>
@@ -741,44 +902,45 @@ function AssetDetailPanel({
                 ))}
               </DetailList>
             </div>
-          </DetailModal>
-        )}
+          </TabsContent>
 
-        {detailModal === 'signals' && (
-          <DetailModal title="Signal 상세" onClose={() => setDetailModal(null)}>
-            <div className="asset-modal-grid">
-              <DetailList
-                title="Security events"
-                meta={formatEventCount(security?.securityEvents, securityEvents.length)}
-                empty="수집된 보안 이벤트가 없습니다."
-                className="asset-security-event-panel"
-              >
-                {securityEvents.map((event, index) => {
-                  const actionMeta = eventActionMeta(event);
-                  return (
-                    <li key={`${event.assetUid ?? asset.assetUid}-${event.eventType ?? 'event'}-${event.observedAt ?? event.eventTime ?? index}-${event.dedupKey ?? event.message ?? index}`}>
-                      <div>
-                        <strong>{eventTitle(event)}</strong>
-                        <span>{eventMeta(event)}</span>
-                        {actionMeta && <span>{actionMeta}</span>}
-                      </div>
-                      <em className={severityClass(event.severity)}>{event.severity ?? 'INFO'}</em>
-                    </li>
-                  );
-                })}
-              </DetailList>
-              <ProcessNetstatPanel processes={processes} sockets={sockets} />
+          <TabsContent value="network">
+            <div className="asset-tab-grid">
+              <ChartBlock title="Network RX/TX" points={detail?.series.network?.length ?? 0} meta={`${formatBps(metrics.networkInBps ?? 0)} RX / ${formatBps(metrics.networkOutBps ?? 0)} TX`} empty="인터페이스 RX/TX 시계열이 없습니다.">
+                <NetworkLineChart data={detail?.series.network ?? []} />
+              </ChartBlock>
               <DetailList title="Interfaces" meta={`${interfaces.length} interfaces`} empty="수집된 인터페이스 정보가 없습니다.">
                 {interfaces.map((row) => (
                   <li key={`${row.assetUid}-${row.interfaceName}`}>
                     <div>
                       <strong>{row.interfaceName}</strong>
-                      <span>errors/drops {row.errors + row.discards}</span>
+                      <span>errors/drops {row.errors + row.discards} · status {row.status}</span>
                     </div>
                     <em>{formatBps(row.inBps)} / {formatBps(row.outBps)}</em>
                   </li>
                 ))}
               </DetailList>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="signals">
+            <div className="asset-signals-layout">
+              <SignalPosturePanel
+                security={security}
+                interfacesCount={interfaces.length}
+                processesCount={processes.length}
+                processSocketCount={processSocketCount}
+                listeningCount={listeningSockets.length}
+                connectedCount={connectedSockets.length}
+                publicListeningCount={publicListeningSockets.length}
+              />
+              <OpenPortsPanel sockets={listeningSockets} declaredOpenPorts={openPortCount} />
+              <ProcessNetstatPanel processes={processes} sockets={sockets} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="processes">
+            <div className="asset-tab-grid">
               <DetailList title="Processes" meta={`${processes.length} rows`} empty="수집된 process 정보가 없습니다.">
                 {processes.map((process) => (
                   <li key={`${process.pid}-${process.name}`}>
@@ -790,9 +952,10 @@ function AssetDetailPanel({
                   </li>
                 ))}
               </DetailList>
+              <ProcessNetstatPanel processes={processes} sockets={sockets} />
             </div>
-          </DetailModal>
-        )}
+          </TabsContent>
+        </Tabs>
       </CardContent>
     </Card>
   );
@@ -801,21 +964,17 @@ function AssetDetailPanel({
 function DiskCapacityPanel({
   mounts,
   totalMounts,
-  diskIoDeviceCount,
-  onOpenDetails
+  diskIoDeviceCount
 }: {
   mounts: Array<{ mountPoint: string; disk?: AssetDiskRow }>;
   totalMounts: number;
   diskIoDeviceCount: number;
-  onOpenDetails: () => void;
 }) {
   return (
     <section className="asset-disk-capacity-panel">
       <div className="panel-heading">
         <h4>Mount capacity</h4>
-        <Button type="button" variant="outline" size="sm" aria-label="Disk 상세 보기" onClick={onOpenDetails}>
-          <ListChecks size={14} />상세
-        </Button>
+        <span>{totalMounts} mounts</span>
       </div>
       <div className="asset-disk-capacity-grid">
         {mounts.map(({ mountPoint, disk }) => (
@@ -842,45 +1001,92 @@ function SignalPosturePanel({
   interfacesCount,
   processesCount,
   processSocketCount,
-  onOpenDetails
+  listeningCount,
+  connectedCount,
+  publicListeningCount
 }: {
   security?: AssetMetricSummary['security'];
   interfacesCount: number;
   processesCount: number;
   processSocketCount: number;
-  onOpenDetails: () => void;
+  listeningCount: number;
+  connectedCount: number;
+  publicListeningCount: number;
 }) {
+  const openPorts = security?.openPorts ?? listeningCount;
+  const failedServices = security?.failedServices ?? 0;
+  const firewallDisabled = security?.firewallDisabled ?? 0;
   return (
     <section className="asset-signal-posture-panel asset-signal-main-panel">
       <div className="panel-heading">
-        <h4>Security Signals</h4>
-        <Button type="button" variant="outline" size="sm" aria-label="Signal 상세 보기" onClick={onOpenDetails}>
-          <ShieldAlert size={14} />상세
-        </Button>
+        <h4>Signal summary</h4>
+        <span>{securitySignalLabel(security)}</span>
+      </div>
+      <div className={cn('asset-signal-hero', openPorts > 0 && 'warning', (failedServices > 0 || firewallDisabled > 0) && 'critical')}>
+        <div>
+          <strong>{openPorts}</strong>
+          <span>open ports</span>
+        </div>
+        <p>{publicListeningCount} public listen · {connectedCount} connected · {processesCount} processes</p>
       </div>
       <ul className="asset-signal-check-list">
-        <li className={(security?.securityEvents ?? 0) > 0 ? 'warning' : 'healthy'}>
-          <span>Security events</span>
-          <strong>{security?.securityEvents ?? 0}</strong>
-          <em>recent events</em>
-        </li>
-        <li className={(security?.openPorts ?? 0) > 0 ? 'warning' : 'healthy'}>
-          <span>Open ports</span>
-          <strong>{security?.openPorts ?? 0}</strong>
-          <em>listening sockets</em>
-        </li>
-        <li className={(security?.failedServices ?? 0) > 0 ? 'warning' : 'healthy'}>
+        <li className={failedServices > 0 ? 'warning' : 'healthy'}>
           <span>Failed services</span>
-          <strong>{security?.failedServices ?? 0}</strong>
+          <strong>{failedServices}</strong>
           <em>service state</em>
         </li>
-        <li className={(security?.firewallDisabled ?? 0) > 0 ? 'critical' : 'healthy'}>
+        <li className={firewallDisabled > 0 ? 'critical' : 'healthy'}>
           <span>Firewall disabled</span>
-          <strong>{security?.firewallDisabled ?? 0}</strong>
+          <strong>{firewallDisabled}</strong>
           <em>host firewall</em>
+        </li>
+        <li className={processSocketCount > 0 ? 'neutral' : 'healthy'}>
+          <span>Socket coverage</span>
+          <strong>{processSocketCount}</strong>
+          <em>process-linked sockets</em>
         </li>
       </ul>
       <p className="asset-panel-footnote">{interfacesCount} interfaces · {processesCount} processes · {processSocketCount} sockets</p>
+    </section>
+  );
+}
+
+function OpenPortsPanel({
+  sockets,
+  declaredOpenPorts
+}: {
+  sockets: AgentSocketState[];
+  declaredOpenPorts: number;
+}) {
+  return (
+    <section className="asset-open-ports-panel">
+      <div className="panel-heading">
+        <h4>Open ports</h4>
+        <span>{declaredOpenPorts} listening</span>
+      </div>
+      {sockets.length === 0 ? (
+        <p className="asset-empty-detail">
+          {declaredOpenPorts > 0
+            ? 'open port count는 있지만 socket 상세 row가 응답에 없습니다.'
+            : '수집된 listening socket이 없습니다.'}
+        </p>
+      ) : (
+        <div className="asset-open-port-grid">
+          {sockets.map((socket, index) => (
+            <article
+              className={cn('asset-open-port-card', isPublicListeningSocket(socket) && 'public')}
+              key={`${socket.stateKey ?? socket.processId ?? 'socket'}-${socket.protocol ?? 'socket'}-${socket.localAddress ?? ''}-${socket.localPort ?? ''}-${index}`}
+            >
+              <div className="asset-open-port-title">
+                <strong>{socketEndpoint(socket.localAddress, socket.localPort)}</strong>
+                <Badge variant="secondary">{socket.protocol ?? 'socket'}</Badge>
+              </div>
+              <span>{socket.processName ?? 'process unknown'}{socket.processId != null ? ` · pid ${socket.processId}` : ''}</span>
+              <em>{isPublicListeningSocket(socket) ? 'public listen' : 'local listen'} · {formatDate(socket.observedAt)}</em>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -890,7 +1096,7 @@ function ProcessNetstatPanel({ processes, sockets }: { processes: AgentProcessSt
   return (
     <section className="asset-detail-list-panel asset-netstat-panel">
       <div className="panel-heading">
-        <h4>Process netstat</h4>
+        <h4>Process/socket map</h4>
         <span>{sockets.length} sockets · {groups.length} processes</span>
       </div>
       {groups.length === 0 ? (
@@ -939,22 +1145,6 @@ function ProcessNetstatPanel({ processes, sockets }: { processes: AgentProcessSt
         </div>
       )}
     </section>
-  );
-}
-
-function DetailModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <section className="modal-panel asset-detail-modal" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
-        <div className="asset-detail-modal-header">
-          <h3>{title}</h3>
-          <Button type="button" size="icon" variant="ghost" aria-label={`${title} 닫기`} onClick={onClose}>
-            <X size={16} />
-          </Button>
-        </div>
-        <div className="asset-detail-modal-body">{children}</div>
-      </section>
-    </div>
   );
 }
 
@@ -1062,7 +1252,7 @@ function SourceBadges({ asset }: { asset: AssetMetricSummary }) {
     ['SNMP', asset.sources.snmp],
     ['TRAFFIC', asset.sources.traffic],
     ['DISKIO', asset.sources.diskIo],
-    ['SEC', asset.sources.security]
+    ['SIG', asset.sources.security]
   ] as const;
   const visibleSources = sources.filter(([, enabled]) => enabled);
   if (visibleSources.length === 0) {
@@ -1077,35 +1267,44 @@ function SourceBadges({ asset }: { asset: AssetMetricSummary }) {
   );
 }
 
-function buildAssetTree(assets: AssetMetricSummary[]): AssetLocationGroup[] {
-  const locations = new Map<string, AssetMetricSummary[]>();
-  for (const asset of assets) {
-    const location = asset.location?.trim() || '미지정 위치';
-    const group = locations.get(location) ?? [];
-    group.push(asset);
-    locations.set(location, group);
+function sortAssetsForScan(assets: AssetMetricSummary[]) {
+  return [...assets].sort((left, right) => {
+    const rankDelta = assetScanRank(left) - assetScanRank(right);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+    const leftSeen = Date.parse(left.lastSeenAt ?? '');
+    const rightSeen = Date.parse(right.lastSeenAt ?? '');
+    const seenDelta = (Number.isNaN(rightSeen) ? 0 : rightSeen) - (Number.isNaN(leftSeen) ? 0 : leftSeen);
+    return seenDelta || left.name.localeCompare(right.name, 'ko-KR');
+  });
+}
+
+function assetScanRank(asset: AssetMetricSummary) {
+  if (asset.health === 'critical') {
+    return 0;
   }
-  return [...locations.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, 'ko-KR'))
-    .map(([location, locationAssets]) => {
-      const types = new Map<string, AssetMetricSummary[]>();
-      for (const asset of locationAssets) {
-        const assetType = asset.assetType || 'UNKNOWN';
-        const group = types.get(assetType) ?? [];
-        group.push(asset);
-        types.set(assetType, group);
-      }
-      return {
-        location,
-        assets: locationAssets,
-        types: [...types.entries()]
-          .sort(([left], [right]) => left.localeCompare(right, 'ko-KR'))
-          .map(([assetType, typeAssets]) => ({
-            assetType,
-            assets: [...typeAssets].sort((left, right) => left.name.localeCompare(right.name, 'ko-KR'))
-          }))
-      };
-    });
+  if (asset.health === 'warning') {
+    return 1;
+  }
+  if (asset.stale) {
+    return 2;
+  }
+  if (asset.health === 'unknown') {
+    return 3;
+  }
+  return 4;
+}
+
+function securitySignalLabel(security?: AssetMetricSummary['security']) {
+  const ports = security?.openPorts ?? 0;
+  const failed = security?.failedServices ?? 0;
+  const firewall = security?.firewallDisabled ?? 0;
+  const total = ports + failed + firewall;
+  if (total === 0) {
+    return '신호 없음';
+  }
+  return `${total} signals`;
 }
 
 function chartData(data: MetricPoint[]) {
@@ -1181,43 +1380,6 @@ function healthLabel(health: AssetMetricSummary['health']) {
     return 'HEALTHY';
   }
   return '미수집';
-}
-
-function eventTitle(event: AgentEventSummary) {
-  return event.message ?? event.sourceName ?? event.outcome ?? event.eventType ?? 'Security event';
-}
-
-function eventMeta(event: AgentEventSummary) {
-  const timestamp = event.eventTime ?? event.observedAt;
-  return [
-    event.eventType,
-    event.eventCategory,
-    event.sourceName ?? event.channel ?? event.program ?? event.provider ?? event.platform,
-    timestamp ? formatDate(timestamp) : null
-  ].filter(Boolean).join(' · ') || '-';
-}
-
-function eventActionMeta(event: AgentEventSummary) {
-  return [event.actor, event.action, event.outcome].filter(Boolean).join(' / ');
-}
-
-function formatEventCount(total: number | undefined, visible: number) {
-  if (total == null || total === visible) {
-    return `${visible} events`;
-  }
-  return `${visible} of ${total} events`;
-}
-
-function severityClass(severity?: string) {
-  switch ((severity ?? '').toUpperCase()) {
-    case 'CRITICAL':
-    case 'ERROR':
-      return 'critical';
-    case 'WARNING':
-      return 'warning';
-    default:
-      return 'info';
-  }
 }
 
 function buildProcessSocketGroups(processes: AgentProcessState[], sockets: AgentSocketState[]): ProcessSocketGroup[] {

@@ -110,8 +110,6 @@ export type AssetMetricSummary = {
     openPorts?: number;
     failedServices?: number;
     firewallDisabled?: number;
-    securityEvents?: number;
-    events?: AgentEventSummary[];
   };
 };
 
@@ -191,7 +189,6 @@ export type AgentDashboard = {
     exposedPorts?: number;
     failedServices?: number;
     firewallDisabled?: number;
-    securityEvents?: number;
   };
   agents?: AgentDashboardAgent[];
   collectors?: AgentCollectorSummary[];

@@ -1,0 +1,11 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - img [ref=e5]
+    - heading "Castrelyx Manager" [level=1] [ref=e8]
+    - generic [ref=e9]:
+      - text: 계정
+      - textbox "계정" [ref=e10]: admin
+    - generic [ref=e11]:
+      - text: 비밀번호
+      - textbox "비밀번호" [ref=e12]
+    - button "로그인" [ref=e13] [cursor=pointer]

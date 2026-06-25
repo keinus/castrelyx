@@ -17,7 +17,7 @@ describe('AssetsView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders an asset tree and selected asset detail charts without fleet averages or top5 cards', async () => {
+  it('renders a fleet scan first and loads selected asset detail on demand', async () => {
     const fetchMock = mockFetch({
       '/api/metrics/assets?range=1h': { body: overview },
       '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail }
@@ -25,42 +25,52 @@ describe('AssetsView', () => {
 
     render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
 
-    expect(await screen.findByRole('heading', { name: '자산 현황 트리' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '자산 관제 스캔' })).toBeInTheDocument();
     expect(screen.getByText('Seoul HQ')).toBeInTheDocument();
     expect(screen.getAllByText('LINUX_SERVER').length).toBeGreaterThan(0);
     expect(screen.getAllByText('nas').length).toBeGreaterThan(0);
-    expect(screen.getByText('위치')).toBeInTheDocument();
     expect(screen.getAllByText('Seoul HQ / Rack A').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('CPU Usage').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Memory Usage').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Disk I/O').length).toBeGreaterThan(0);
+    expect(screen.getByText('리소스')).toBeInTheDocument();
     expect(screen.queryByText('SNMP')).not.toBeInTheDocument();
     expect(screen.queryByText('평균 CPU')).not.toBeInTheDocument();
     expect(screen.queryByText('Disk I/O Top 5')).not.toBeInTheDocument();
+    expect(screen.queryByText('CPU Usage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Disk by mount')).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/metrics/assets/nas?range=1h&bucket=auto',
+      expect.objectContaining({ credentials: 'include' })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/metrics/assets/nas?range=1h&bucket=auto',
       expect.objectContaining({ credentials: 'include' })
     ));
+    expect(await screen.findByRole('heading', { name: 'nas' })).toBeInTheDocument();
+    expect(screen.getAllByText('CPU Usage').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Memory Usage').length).toBeGreaterThan(0);
     expect(screen.queryByRole('tab', { name: 'I/O' })).not.toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
-    expect(screen.getByText('/tmp')).toBeInTheDocument();
+    expect(screen.queryByText('/')).not.toBeInTheDocument();
     expect(screen.queryByText('/data')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disk 상세 보기' }));
+    activateTab('스토리지');
     expect(await screen.findByText('Disk by mount')).toBeInTheDocument();
-    expect(await screen.findByText('/data')).toBeInTheDocument();
-    expect(await screen.findByText('sdb')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Disk I/O / mount 상세 닫기' }));
+    await waitFor(() => expect(screen.getAllByText('/').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('/tmp').length).toBeGreaterThan(0);
+    expect(screen.getByText('/data')).toBeInTheDocument();
+    expect(screen.getByText('sdb')).toBeInTheDocument();
 
-    expect(screen.queryByText('Failed password for invalid user')).not.toBeInTheDocument();
     expect(screen.queryByText('sshd')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Signal 상세 보기' }));
-    expect(await screen.findByText('Failed password for invalid user')).toBeInTheDocument();
-    expect(screen.getByText(/auth\.login\.failure/)).toBeInTheDocument();
-    expect(screen.getByText('WARNING')).toBeInTheDocument();
-    expect(await screen.findByText('Process netstat')).toBeInTheDocument();
+    activateTab('신호');
+    expect(await screen.findByText('Signal summary')).toBeInTheDocument();
+    expect(screen.getByText('Open ports')).toBeInTheDocument();
+    expect(screen.getByText('Process/socket map')).toBeInTheDocument();
+    expect(screen.getAllByText('0.0.0.0:22').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Failed password for invalid user')).not.toBeInTheDocument();
+    expect(screen.queryByText(/auth\.login\.failure/)).not.toBeInTheDocument();
+    activateTab('프로세스');
+    expect(await screen.findByText('Process/socket map')).toBeInTheDocument();
     expect(screen.getAllByText('sshd').length).toBeGreaterThan(0);
-    expect(screen.getByText('0.0.0.0:22')).toBeInTheDocument();
     expect(screen.getByText('192.168.50.10:443')).toBeInTheDocument();
   });
 
@@ -81,6 +91,39 @@ describe('AssetsView', () => {
     await waitFor(() => expect(screen.getByText('조건에 맞는 자산이 없습니다.')).toBeInTheDocument());
   });
 
+  it('keeps the selected detail mounted when a refresh returns a transient empty overview', async () => {
+    const emptyRefresh: AssetMetricsOverview = {
+      ...overview,
+      summary: {
+        totalAssets: 0,
+        observedAssets: 0,
+        staleAssets: 0,
+        criticalAssets: 0,
+        warningAssets: 0,
+        totalNetworkInBps: 0,
+        totalNetworkOutBps: 0
+      },
+      assets: []
+    };
+    const fetchMock = mockFetch({
+      '/api/metrics/assets?range=1h': [{ body: overview }, { body: emptyRefresh }],
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail }
+    });
+
+    render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: '자산 관제 스캔' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
+    expect(await screen.findByRole('heading', { name: 'nas' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('자산 새로고침'));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/metrics/assets?range=1h')).toHaveLength(2));
+
+    expect(screen.getByRole('heading', { name: 'nas' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '자산 관제 스캔' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('CPU Usage').length).toBeGreaterThan(0);
+  });
+
   it('lets operators edit selected asset name, location, and description', async () => {
     const onUpdate = vi.fn(async () => undefined);
     mockFetch({
@@ -90,7 +133,8 @@ describe('AssetsView', () => {
 
     render(<AssetsView role="OPERATOR" assets={assets} onCreate={vi.fn()} onUpdate={onUpdate} onDelete={vi.fn()} />);
 
-    await screen.findByRole('heading', { name: '자산 현황 트리' });
+    await screen.findByRole('heading', { name: '자산 관제 스캔' });
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
     await waitFor(() => expect(screen.getByText(/관리 IP 192\.168\.50\.21/)).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('자산 정보 수정'));
     fireEvent.change(await screen.findByLabelText('수정 자산명'), { target: { value: 'nas-main' } });
@@ -115,6 +159,8 @@ describe('AssetsView', () => {
 
     await waitFor(() => expect(screen.getAllByText('Seoul HQ / Rack A').length).toBeGreaterThan(0));
     expect(screen.queryByLabelText('자산 추가')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
+    await waitFor(() => expect(screen.getByText(/관리 IP 192\.168\.50\.21/)).toBeInTheDocument());
     expect(screen.queryByLabelText('자산 정보 수정')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('자산 삭제')).not.toBeInTheDocument();
   });
@@ -174,7 +220,7 @@ const overview: AssetMetricsOverview = {
         diskWriteIops: 64,
         diskIoUtilizationPct: 87.5
       },
-      security: { openPorts: 1, failedServices: 0, firewallDisabled: 0, securityEvents: 1 }
+      security: { openPorts: 1, failedServices: 0, firewallDisabled: 0 }
     },
     {
       id: 1,
@@ -263,20 +309,7 @@ const detail: AssetMetricDetail = {
   security: {
     openPorts: 1,
     failedServices: 0,
-    firewallDisabled: 0,
-    securityEvents: 1,
-    events: [{
-      assetUid: 'nas',
-      eventType: 'auth.login.failure',
-      eventCategory: 'auth',
-      severity: 'WARNING',
-      message: 'Failed password for invalid user',
-      sourceName: 'sshd',
-      actor: 'invalid-user',
-      action: 'login',
-      outcome: 'failure',
-      observedAt: '2026-06-11T13:35:00Z'
-    }]
+    firewallDisabled: 0
   },
   collectors: [{ name: 'metric', sampleCount: 10, lastSeenAt: '2026-06-11T13:34:00Z' }]
 };
@@ -286,10 +319,16 @@ type MockResponse = {
   status?: number;
 };
 
-function mockFetch(responses: Record<string, MockResponse>) {
+function mockFetch(responses: Record<string, MockResponse | MockResponse[]>) {
+  const callsByPath = new Map<string, number>();
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    const response = responses[path] ?? { status: 404, body: {} };
+    const candidate = responses[path] ?? { status: 404, body: {} };
+    const callIndex = callsByPath.get(path) ?? 0;
+    callsByPath.set(path, callIndex + 1);
+    const response = Array.isArray(candidate)
+      ? candidate[Math.min(callIndex, candidate.length - 1)]
+      : candidate;
     const status = response.status ?? 200;
     return {
       ok: status < 400,
@@ -300,4 +339,12 @@ function mockFetch(responses: Record<string, MockResponse>) {
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
+}
+
+function activateTab(name: string) {
+  const tab = screen.getByRole('tab', { name });
+  fireEvent.pointerDown(tab, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.click(tab);
+  fireEvent.keyDown(tab, { key: 'Enter', code: 'Enter' });
 }

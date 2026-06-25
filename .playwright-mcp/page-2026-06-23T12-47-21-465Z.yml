@@ -1,0 +1,168 @@
+- main [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e6]
+      - generic [ref=e11]:
+        - heading "Castrelyx Manager" [level=1] [ref=e12]
+        - text: ADMIN
+    - navigation [ref=e13]:
+      - button "개요" [ref=e14] [cursor=pointer]:
+        - img [ref=e15]
+        - generic [ref=e18]: 개요
+      - button "자산" [ref=e19] [cursor=pointer]:
+        - img [ref=e20]
+        - generic [ref=e30]: 자산
+      - button "Traffic" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - generic [ref=e34]: Traffic
+      - button "Agent" [ref=e35] [cursor=pointer]:
+        - img [ref=e36]
+        - generic [ref=e39]: Agent
+      - button "SNMP" [ref=e40] [cursor=pointer]:
+        - img [ref=e41]
+        - generic [ref=e45]: SNMP
+      - button "알림" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e50]: 알림
+      - button "CastrelSign" [ref=e51] [cursor=pointer]:
+        - img [ref=e52]
+        - generic [ref=e55]: CastrelSign
+      - button "LogParser" [ref=e56] [cursor=pointer]:
+        - img [ref=e57]
+        - generic [ref=e60]: LogParser
+      - button "설정" [ref=e61] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e65]: 설정
+    - button "로그아웃" [ref=e66] [cursor=pointer]:
+      - img [ref=e67]
+      - generic [ref=e70]: 로그아웃
+  - generic [ref=e71]:
+    - generic [ref=e73]:
+      - generic [ref=e74]: NMS Control Plane
+      - strong [ref=e75]: admin
+    - generic [ref=e76]:
+      - generic [ref=e77]:
+        - generic [ref=e78]:
+          - generic [ref=e79]: Operations Home
+          - heading "NMS 보안 통합 관제" [level=2] [ref=e80]
+          - paragraph [ref=e81]: Network, security, and collection signals in one operator view.
+        - generic [ref=e82]:
+          - generic [ref=e85]:
+            - strong [ref=e86]: 갱신 중
+            - generic [ref=e87]: 마지막 갱신 -
+          - button "새로고침" [ref=e88] [cursor=pointer]:
+            - img [ref=e89]
+      - generic [ref=e94]: 관제 상세 정보를 갱신하는 중입니다.
+      - generic [ref=e95]:
+        - generic [ref=e96]:
+          - generic [ref=e97]: 전체 자산
+          - strong [ref=e99]: "0"
+          - generic [ref=e100]: managed assets
+        - generic [ref=e101]:
+          - generic [ref=e102]: Critical
+          - strong [ref=e104]: "0"
+          - generic [ref=e105]: 0 warning
+        - generic [ref=e106]:
+          - generic [ref=e107]: Agent 상태
+          - strong [ref=e109]: 0/0
+          - generic [ref=e110]: healthy / stale
+        - generic [ref=e111]:
+          - generic [ref=e112]: SNMP 실패
+          - strong [ref=e114]: "0"
+          - generic [ref=e115]: 0 success
+        - generic [ref=e116]:
+          - generic [ref=e117]: Open Ports
+          - strong [ref=e119]: "0"
+          - generic [ref=e120]: 0 events
+      - generic [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e123]:
+            - heading "Network Health" [level=3] [ref=e124]
+            - generic [ref=e125]: 0 top interfaces
+          - generic [ref=e126]:
+            - generic [ref=e127]:
+              - generic [ref=e128]: SNMP Success
+              - strong [ref=e129]: "0"
+            - generic [ref=e130]:
+              - generic [ref=e131]: SNMP Failure
+              - strong [ref=e132]: "0"
+          - generic [ref=e133]:
+            - strong [ref=e134]: 트래픽 신호 대기
+            - generic [ref=e135]: 수집된 인터페이스 트래픽이 아직 없습니다.
+          - generic [ref=e136]:
+            - strong [ref=e137]: 에러/드롭 없음
+            - generic [ref=e138]: 최근 수집 기준 인터페이스 오류 신호가 없습니다.
+        - generic [ref=e139]:
+          - generic [ref=e140]:
+            - heading "Response Queue" [level=3] [ref=e141]
+            - generic [ref=e142]: 0 active
+          - generic [ref=e143]:
+            - strong [ref=e144]: 대응 대기 없음
+            - generic [ref=e145]: 활성 Critical/Warning 알림과 최근 보안 이벤트가 없습니다.
+        - generic [ref=e146]:
+          - generic [ref=e147]:
+            - heading "Security Posture" [level=3] [ref=e148]
+            - generic [ref=e149]: "-"
+          - generic [ref=e150]:
+            - generic [ref=e151]:
+              - generic [ref=e152]: 노출 포트
+              - strong [ref=e153]: "0"
+            - generic [ref=e154]:
+              - generic [ref=e155]: 서비스 이상
+              - strong [ref=e156]: "0"
+            - generic [ref=e157]:
+              - generic [ref=e158]: 방화벽 비활성
+              - strong [ref=e159]: "0"
+            - generic [ref=e160]:
+              - generic [ref=e161]: 보안 이벤트
+              - strong [ref=e162]: "0"
+          - generic [ref=e163]:
+            - strong [ref=e164]: 보안 finding 없음
+            - generic [ref=e165]: 현재 표시할 보안 finding 없음
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - heading "Collection Coverage" [level=3] [ref=e168]
+            - generic [ref=e169]: 0 collectors
+          - generic [ref=e170]:
+            - generic [ref=e171]: Agent last seen
+            - strong [ref=e172]: "-"
+          - generic [ref=e173]:
+            - strong [ref=e174]: Collector 대기
+            - generic [ref=e175]: 아직 표시할 collector coverage가 없습니다.
+        - generic [ref=e176]:
+          - generic [ref=e177]:
+            - heading "Asset Top 5" [level=3] [ref=e178]
+            - generic [ref=e179]: 0 assets
+          - generic [ref=e180]:
+            - generic [ref=e181]:
+              - generic [ref=e182]:
+                - strong [ref=e183]: CPU Top 5
+                - generic [ref=e184]: 0 assets
+              - paragraph [ref=e185]: 표시할 자산 메트릭 없음
+            - generic [ref=e186]:
+              - generic [ref=e187]:
+                - strong [ref=e188]: Memory Top 5
+                - generic [ref=e189]: 0 assets
+              - paragraph [ref=e190]: 표시할 자산 메트릭 없음
+            - generic [ref=e191]:
+              - generic [ref=e192]:
+                - strong [ref=e193]: Disk Top 5
+                - generic [ref=e194]: 0 assets
+              - paragraph [ref=e195]: 표시할 자산 메트릭 없음
+            - generic [ref=e196]:
+              - generic [ref=e197]:
+                - strong [ref=e198]: Disk I/O Top 5
+                - generic [ref=e199]: 0 assets
+              - paragraph [ref=e200]: 표시할 자산 메트릭 없음
+            - generic [ref=e201]:
+              - generic [ref=e202]:
+                - strong [ref=e203]: Network Top 5
+                - generic [ref=e204]: 0 assets
+              - paragraph [ref=e205]: 표시할 자산 메트릭 없음
+        - generic [ref=e206]:
+          - generic [ref=e207]:
+            - heading "Recent Security Events" [level=3] [ref=e208]
+            - generic [ref=e209]: 0 events
+          - generic [ref=e210]:
+            - strong [ref=e211]: 최근 보안 이벤트 없음
+            - generic [ref=e212]: 수집된 event가 아직 없습니다.
