@@ -12,6 +12,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  Thermometer,
   Trash2,
   X
 } from 'lucide-react';
@@ -583,6 +584,7 @@ function AssetFleetScan({
                           <MetricPill label="CPU" value={formatPercent(asset.metrics.cpuUsagePct)} tone={metricTone(asset.metrics.cpuUsagePct)} />
                           <MetricPill label="MEM" value={formatPercent(asset.metrics.memoryUsagePct)} tone={metricTone(asset.metrics.memoryUsagePct)} />
                           <MetricPill label="DISK" value={formatPercent(asset.metrics.diskUsagePct)} tone={metricTone(asset.metrics.diskUsagePct)} />
+                          <MetricPill label="TEMP" value={formatTemperature(asset.metrics.temperatureCelsius)} tone={temperatureTone(asset.metrics.temperatureCelsius)} />
                         </div>
                       </TableCell>
                       <TableCell>
@@ -731,7 +733,16 @@ function AssetDetailPanel({
     );
   }
 
-  const metrics = detail?.asset.metrics ?? asset.metrics;
+  const baseMetrics = detail?.asset.metrics ?? asset.metrics;
+  const series = detail?.series;
+  const metrics = {
+    ...baseMetrics,
+    cpuUsagePct: latestMetricValue(series?.cpu, baseMetrics.cpuUsagePct),
+    memoryUsagePct: latestMetricValue(series?.memory, baseMetrics.memoryUsagePct),
+    diskUsagePct: latestMetricValue(series?.disk, baseMetrics.diskUsagePct),
+    normalizedLoadPct: latestMetricValue(series?.load, baseMetrics.normalizedLoadPct),
+    temperatureCelsius: latestMetricValue(series?.temperature, baseMetrics.temperatureCelsius)
+  };
   const security = detail?.security ?? asset.security;
   const interfaces = detail?.interfaces ?? [];
   const disks = detail?.disks ?? [];
@@ -860,6 +871,7 @@ function AssetDetailPanel({
           <AssetDetailSnapshotTile icon={<Cpu size={17} />} label="CPU" value={formatPercent(metrics.cpuUsagePct)} meta={`load ${formatPercent(metrics.normalizedLoadPct)}`} tone={metricTone(metrics.cpuUsagePct)} />
           <AssetDetailSnapshotTile icon={<Database size={17} />} label="Memory" value={formatPercent(metrics.memoryUsagePct)} meta={formatBytes(metrics.memoryAvailableBytes)} tone={metricTone(metrics.memoryUsagePct)} />
           <AssetDetailSnapshotTile icon={<HardDrive size={17} />} label="Disk" value={formatPercent(metrics.diskUsagePct)} meta={`${disks.length} mounts`} tone={metricTone(metrics.diskUsagePct)} />
+          <AssetDetailSnapshotTile icon={<Thermometer size={17} />} label="Temp" value={formatTemperature(metrics.temperatureCelsius)} meta="hottest sensor" tone={temperatureTone(metrics.temperatureCelsius)} />
           <AssetDetailSnapshotTile icon={<Network size={17} />} label="Network" value={formatBps((metrics.networkInBps ?? 0) + (metrics.networkOutBps ?? 0))} meta="RX + TX" />
           <AssetDetailSnapshotTile icon={<ShieldAlert size={17} />} label="Signals" value={securitySignalLabel(security)} meta={`${openPortCount} open · ${processes.length} proc`} tone={signalTone} />
         </div>
@@ -882,6 +894,9 @@ function AssetDetailPanel({
               </ChartBlock>
               <ChartBlock title="Memory Usage" points={detail?.series.memory?.length ?? 0} meta={formatPercent(metrics.memoryUsagePct)} empty="메모리 사용률 시계열이 없습니다.">
                 <PercentAreaChart data={detail?.series.memory ?? []} color="var(--chart-2)" name="Memory" />
+              </ChartBlock>
+              <ChartBlock title="Temperature" points={detail?.series.temperature?.length ?? 0} meta={formatTemperature(metrics.temperatureCelsius)} empty="Temperature series is not available.">
+                <TemperatureAreaChart data={detail?.series.temperature ?? []} />
               </ChartBlock>
               <ChartBlock title="Network RX/TX" points={detail?.series.network?.length ?? 0} meta={`${formatBps(metrics.networkInBps ?? 0)} RX / ${formatBps(metrics.networkOutBps ?? 0)} TX`} empty="인터페이스 RX/TX 시계열이 없습니다.">
                 <NetworkLineChart data={detail?.series.network ?? []} />
@@ -1373,6 +1388,21 @@ function PercentAreaChart({ data, color, name }: { data: MetricPoint[]; color: s
   );
 }
 
+function TemperatureAreaChart({ data }: { data: MetricPoint[] }) {
+  const config = { value: { label: 'Temperature', color: 'var(--chart-4)' } } satisfies ChartConfig;
+  return (
+    <ChartContainer config={config} className="asset-chart-box">
+      <AreaChart data={chartData(data)}>
+        <CartesianGrid vertical={false} />
+        <XAxis dataKey="label" tickLine={false} axisLine={false} />
+        <YAxis tickLine={false} axisLine={false} domain={['auto', 'auto']} width={42} />
+        <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatTemperature(Number(value))} />} />
+        <Area type="monotone" dataKey="value" name="Temperature" stroke="var(--color-value)" fill="var(--color-value)" fillOpacity={0.16} strokeWidth={2} isAnimationActive />
+      </AreaChart>
+    </ChartContainer>
+  );
+}
+
 function NetworkLineChart({ data }: { data: MetricPoint[] }) {
   const config = {
     inBps: { label: 'RX', color: 'var(--chart-1)' },
@@ -1553,6 +1583,11 @@ function rangeLabel(range: RangeOption) {
   return rangeOptions.find((option) => option.value === range)?.label ?? range;
 }
 
+function latestMetricValue(points: MetricPoint[] | undefined, fallback?: number | null) {
+  const latest = points && points.length > 0 ? points[points.length - 1]?.value : undefined;
+  return isFiniteNumber(latest) ? latest : fallback;
+}
+
 function chartData(data: MetricPoint[]) {
   return data.map((point) => ({
     ...point,
@@ -1603,6 +1638,19 @@ function findDiskByMount(disks: AssetDiskRow[], mountPoint: string) {
 }
 
 function metricTone(value?: number | null): 'neutral' | 'warning' | 'critical' {
+  if (value == null || !Number.isFinite(value)) {
+    return 'neutral';
+  }
+  if (value >= 90) {
+    return 'critical';
+  }
+  if (value >= 80) {
+    return 'warning';
+  }
+  return 'neutral';
+}
+
+function temperatureTone(value?: number | null): 'neutral' | 'warning' | 'critical' {
   if (value == null || !Number.isFinite(value)) {
     return 'neutral';
   }
@@ -1794,6 +1842,13 @@ function formatPercent(value?: number | null) {
     return '미수집';
   }
   return `${value.toFixed(1)}%`;
+}
+
+function formatTemperature(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) {
+    return '-';
+  }
+  return `${value.toFixed(1)}C`;
 }
 
 function formatBytes(value?: number | null) {

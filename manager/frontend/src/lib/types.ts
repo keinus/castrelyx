@@ -159,6 +159,7 @@ export type AssetMetricDetail = {
     cpu?: MetricPoint[];
     memory?: MetricPoint[];
     disk?: MetricPoint[];
+    temperature?: MetricPoint[];
     diskIo?: MetricPoint[];
     load?: MetricPoint[];
     network?: MetricPoint[];

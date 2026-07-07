@@ -90,6 +90,7 @@ class AssetMetricsQueryServiceTest {
         .satisfies(interfaceRow -> assertThat(interfaceTraffic(interfaceRow).interfaceName()).isEqualTo("enp2s0"));
 
     Map<String, Object> series = map(detail.get("series"));
+    assertThat(map(list(series.get("temperature")).get(0))).containsEntry("value", 82.5);
     Map<String, Object> diskIoPoint = map(list(series.get("diskIo")).get(0));
     assertThat(diskIoPoint)
         .containsEntry("readBps", 1024.0)
@@ -237,7 +238,8 @@ class AssetMetricsQueryServiceTest {
           sample("cpu.usage", 91.0, "percent", null),
           sample("memory.usage", 62.0, "percent", null),
           sample("host.disk.used_percent", 72.4, "percent", "/data"),
-          sample("host.temperature.celsius", 82.5, "celsius", null));
+          sample("host.temperature.celsius", 82.5, "celsius", null),
+          sample("host.temperature.celsius", 78.0, "celsius", null));
     }
 
     private static MetricSample sample(String name, double value, String unit, String mountPoint) {

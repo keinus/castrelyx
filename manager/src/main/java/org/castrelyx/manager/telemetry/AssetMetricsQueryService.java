@@ -202,6 +202,7 @@ public class AssetMetricsQueryService {
     rows.put("cpu", directSeries(samples, List.of("cpu.usage", "host.cpu.usage_percent", "system.cpu.total.norm.pct"), "value"));
     rows.put("memory", memorySeries(samples));
     rows.put("disk", diskSeries(samples));
+    rows.put("temperature", temperatureSeries(samples));
     rows.put("load", loadSeries(samples));
     rows.put("network", networkSeries(samples));
     rows.put("diskIo", diskIoSeries(samples));
@@ -216,6 +217,16 @@ public class AssetMetricsQueryService {
       }
     }
     return values.entrySet().stream().map(entry -> point(entry.getKey(), field, entry.getValue())).toList();
+  }
+
+  private static List<Map<String, Object>> temperatureSeries(List<MetricSample> samples) {
+    Map<Instant, Double> values = new LinkedHashMap<>();
+    for (MetricSample sample : samples) {
+      if ("host.temperature.celsius".equals(sample.metricName())) {
+        values.merge(sample.observedAt(), sample.value(), Math::max);
+      }
+    }
+    return values.entrySet().stream().map(entry -> point(entry.getKey(), "value", entry.getValue())).toList();
   }
 
   private static List<Map<String, Object>> memorySeries(List<MetricSample> samples) {

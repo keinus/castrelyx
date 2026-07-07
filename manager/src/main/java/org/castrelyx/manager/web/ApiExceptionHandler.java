@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -40,6 +42,21 @@ public class ApiExceptionHandler {
   @ExceptionHandler(MethodArgumentNotValidException.class)
   ResponseEntity<Map<String, String>> validation(MethodArgumentNotValidException exception) {
     return error(HttpStatus.BAD_REQUEST, "invalid request");
+  }
+
+  @ExceptionHandler(RestClientResponseException.class)
+  ResponseEntity<Map<String, String>> upstreamResponse(RestClientResponseException exception) {
+    String statusText = exception.getStatusText() == null || exception.getStatusText().isBlank()
+        ? exception.getStatusCode().toString()
+        : exception.getStatusText();
+    return error(
+        HttpStatus.BAD_GATEWAY,
+        "upstream service returned " + exception.getStatusCode().value() + " " + statusText);
+  }
+
+  @ExceptionHandler(ResourceAccessException.class)
+  ResponseEntity<Map<String, String>> upstreamUnavailable(ResourceAccessException exception) {
+    return error(HttpStatus.SERVICE_UNAVAILABLE, "upstream service unavailable");
   }
 
   private static ResponseEntity<Map<String, String>> error(HttpStatus status, String message) {

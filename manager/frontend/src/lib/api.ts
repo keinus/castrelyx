@@ -30,7 +30,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw await responseError(response);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -45,7 +45,7 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
     ...init
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw await responseError(response);
   }
   return response.blob();
 }
@@ -57,9 +57,20 @@ async function requestForm<T>(path: string, body: FormData): Promise<T> {
     body
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw await responseError(response);
   }
   return (await response.json()) as T;
+}
+
+async function responseError(response: Response) {
+  const fallback = `${response.status} ${response.statusText}`;
+  try {
+    const body = await response.clone().json() as { error?: string; message?: string };
+    const message = body.error ?? body.message;
+    return new Error(message ? `${fallback}: ${message}` : fallback);
+  } catch {
+    return new Error(fallback);
+  }
 }
 
 export async function bootstrap(): Promise<BootstrapState> {

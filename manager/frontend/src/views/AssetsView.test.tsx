@@ -92,6 +92,48 @@ describe('AssetsView', () => {
     expect(screen.getByText('192.168.50.10:443')).toBeInTheDocument();
   });
 
+  it('uses the latest detail series values for snapshot metrics and temperature', async () => {
+    const detailWithCurrentSeries: AssetMetricDetail = {
+      ...detail,
+      asset: {
+        ...detail.asset,
+        metrics: {
+          ...detail.asset.metrics,
+          cpuUsagePct: 0,
+          memoryUsagePct: 0,
+          diskUsagePct: 0,
+          normalizedLoadPct: 0,
+          temperatureCelsius: null
+        }
+      },
+      series: {
+        ...detail.series,
+        cpu: [
+          { timestamp: '2026-06-11T13:30:00Z', value: 0.3 },
+          { timestamp: '2026-06-11T13:35:00Z', value: 0.5 }
+        ],
+        memory: [{ timestamp: '2026-06-11T13:35:00Z', value: 42.2 }],
+        disk: [{ timestamp: '2026-06-11T13:35:00Z', value: 12.4 }],
+        load: [{ timestamp: '2026-06-11T13:35:00Z', value: 8.1 }],
+        temperature: [{ timestamp: '2026-06-11T13:35:00Z', value: 46.8 }]
+      }
+    };
+    mockFetch({
+      '/api/metrics/assets?range=1h': { body: overview },
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detailWithCurrentSeries }
+    });
+
+    render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
+
+    await screen.findByText('Seoul HQ / Rack A');
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
+    await screen.findByRole('heading', { name: 'nas' });
+
+    expect(screen.getAllByText('0.5%').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('46.8C').length).toBeGreaterThan(0);
+    expect(screen.getByText('Temperature')).toBeInTheDocument();
+  });
+
   it('filters assets and falls back to registered inventory when metrics API fails', async () => {
     mockFetch({
       '/api/metrics/assets?range=1h': { status: 500, body: {} }
@@ -294,7 +336,8 @@ const overview: AssetMetricsOverview = {
         diskWriteBps: 2097152,
         diskReadIops: 128,
         diskWriteIops: 64,
-        diskIoUtilizationPct: 87.5
+        diskIoUtilizationPct: 87.5,
+        temperatureCelsius: 82.5
       },
       security: { openPorts: 1, failedServices: 0, firewallDisabled: 0 }
     },
@@ -322,6 +365,7 @@ const detail: AssetMetricDetail = {
     cpu: [{ timestamp: '2026-06-11T13:30:00Z', value: 82 }, { timestamp: '2026-06-11T13:35:00Z', value: 91.2 }],
     memory: [{ timestamp: '2026-06-11T13:30:00Z', value: 60 }, { timestamp: '2026-06-11T13:35:00Z', value: 67.8 }],
     disk: [{ timestamp: '2026-06-11T13:30:00Z', value: 72.4 }],
+    temperature: [{ timestamp: '2026-06-11T13:35:00Z', value: 82.5 }],
     diskIo: [{ timestamp: '2026-06-11T13:35:00Z', readBps: 1048576, writeBps: 2097152, readIops: 128, writeIops: 64, utilizationPct: 87.5 }],
     network: [{ timestamp: '2026-06-11T13:35:00Z', inBps: 4621.02, outBps: 11663.97 }]
   },
@@ -424,11 +468,19 @@ function mockFetch(responses: Record<string, MockResponse | MockResponse[]>) {
       ? candidate[Math.min(callIndex, candidate.length - 1)]
       : candidate;
     const status = response.status ?? 200;
+    const body = response.body;
     return {
       ok: status < 400,
       status,
       statusText: status < 400 ? 'OK' : 'Error',
-      json: async () => response.body
+      json: async () => body,
+      clone: () => ({
+        ok: status < 400,
+        status,
+        statusText: status < 400 ? 'OK' : 'Error',
+        json: async () => body
+      }),
+      blob: async () => new Blob([typeof body === 'string' ? body : JSON.stringify(body)])
     };
   });
   vi.stubGlobal('fetch', fetchMock);

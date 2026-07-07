@@ -1,10 +1,12 @@
 package org.castrelyx.manager.web;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -34,6 +36,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.client.HttpClientErrorException;
 
 @ActiveProfiles("test")
 @SpringBootTest
@@ -145,6 +148,30 @@ class AssetFileControllerTest {
                 {"operation":"ROOTS","request":{}}
                 """))
         .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void upstreamFileManagerErrorsReturnBadGatewayInsteadOfInternalServerError() throws Exception {
+    Cookie operator = loginCookie("operator");
+    doThrow(HttpClientErrorException.create(
+        HttpStatus.NOT_FOUND,
+        "Not Found",
+        HttpHeaders.EMPTY,
+        new byte[0],
+        StandardCharsets.UTF_8)).when(client).createAgentFileCommand(
+            eq("agent-01"),
+            eq("ROOTS"),
+            anyMap(),
+            eq(120L));
+
+    mockMvc.perform(post("/api/assets/agent-01/files/commands")
+            .cookie(operator)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {"operation":"ROOTS","request":{}}
+                """))
+        .andExpect(status().isBadGateway())
+        .andExpect(jsonPath("$.error", containsString("upstream service returned 404")));
   }
 
   private Cookie loginCookie(String username) throws Exception {
