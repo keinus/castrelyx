@@ -62,10 +62,24 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
       observedAt: '2026-06-11T13:33:00Z'
     }]
   }));
-  await page.route('/api/agent/logs?range=1h&severity=ALL&limit=8', routeJson([{
+  await page.route('/api/agent/logs?range=7d&severity=CRITICAL&limit=8', routeJson([{
     assetUid: 'nas',
-    eventType: 'log',
+    eventType: 'filesystem',
+    severity: 'CRITICAL',
+    message: 'Root filesystem full',
+    observedAt: '2026-06-11T13:33:00Z'
+  }]));
+  await page.route('/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas', routeJson([{
+    assetUid: 'nas',
+    sourceId: 'nas-agent',
+    eventType: 'auth.login.failure',
+    eventCategory: 'auth',
     severity: 'WARNING',
+    sourceName: 'sshd',
+    program: 'sshd',
+    actor: 'alice',
+    action: 'login',
+    outcome: 'failure',
     message: 'SSH login failed for alice',
     observedAt: '2026-06-11T13:33:00Z'
   }]));

@@ -667,7 +667,7 @@ public class ClickHouseClient {
         """;
   }
 
-  private static String assetMetricCanonicalFilter() {
+  static String assetMetricCanonicalFilter() {
     return """
         AND (
           metric_name IN (
@@ -678,6 +678,7 @@ public class ClickHouseClient {
             'memory.usage',
             'host.memory.total_bytes',
             'host.memory.available_bytes',
+            'host.temperature.celsius',
             'disk.usage',
             'host.load.1',
             'host.load.5',
@@ -692,7 +693,7 @@ public class ClickHouseClient {
         """;
   }
 
-  private static String assetMetricRawFilter() {
+  static String assetMetricRawFilter() {
     return """
         AND (
           item_key IN (
@@ -703,6 +704,7 @@ public class ClickHouseClient {
             'memory.usage',
             'host.memory.total_bytes',
             'host.memory.available_bytes',
+            'host.temperature.celsius',
             'disk.usage',
             'host.load.1',
             'host.load.5',
@@ -794,6 +796,7 @@ public class ClickHouseClient {
     List<Map<String, Object>> sockets = queryDashboardStateRows(stateTable, assetFilter, "socket", stateTypeLimit);
     List<Map<String, Object>> services = queryDashboardStateRows(stateTable, assetFilter, "service", stateTypeLimit);
     List<Map<String, Object>> firewalls = queryDashboardStateRows(stateTable, assetFilter, "firewall", stateTypeLimit);
+    List<Map<String, Object>> interfaces = queryDashboardStateRows(stateTable, assetFilter, "interface", stateTypeLimit);
     List<Map<String, Object>> processes = queryDashboardStateRows(stateTable, assetFilter, "process", stateTypeLimit);
     List<Map<String, Object>> packages = queryDashboardStateRows(stateTable, assetFilter, "package", packageLimit);
     List<Map<String, Object>> events = queryJsonRows("""
@@ -833,6 +836,7 @@ public class ClickHouseClient {
             "sockets", sockets,
             "services", services,
             "firewalls", firewalls,
+            "interfaces", interfaces,
             "processes", processes,
             "packages", packages),
         "resources", Map.of("metrics", metrics.stream().map(ClickHouseClient::normalizeDashboardKeys).toList()),

@@ -14,29 +14,36 @@ import (
 )
 
 type Config struct {
-	ManagerURL          string
-	EnrollmentToken     string
-	AgentID             string
-	TenantID            string
-	BatchInterval       time.Duration
-	SpoolDir            string
-	MaxSpoolRecord      int64
-	CertDir             string
-	CACertPath          string
-	ClientCertPath      string
-	ClientKeyPath       string
-	TLSServerName       string
-	IngestTransport     string
-	TCPIngestAddr       string
-	TCPIngestServerName string
-	EnabledCollectors   []string
-	LogCursorPath       string
-	LogMessageMaxBytes  int
-	UpdateEnabled       bool
-	UpdateChannel       string
-	UpdateCheckInterval time.Duration
-	UpdateDir           string
-	UpdatePublicKeyPath string
+	ManagerURL                  string
+	EnrollmentToken             string
+	AgentID                     string
+	TenantID                    string
+	BatchInterval               time.Duration
+	SpoolDir                    string
+	MaxSpoolRecord              int64
+	CertDir                     string
+	CACertPath                  string
+	ClientCertPath              string
+	ClientKeyPath               string
+	TLSServerName               string
+	IngestTransport             string
+	TCPIngestAddr               string
+	TCPIngestServerName         string
+	EnabledCollectors           []string
+	LogCursorPath               string
+	LogMessageMaxBytes          int
+	UpdateEnabled               bool
+	UpdateChannel               string
+	UpdateCheckInterval         time.Duration
+	UpdateDir                   string
+	UpdatePublicKeyPath         string
+	RemoteTasksEnabled          bool
+	RemoteTaskInterval          time.Duration
+	FileManagerEnabled          bool
+	FileManagerRoots            []string
+	FileManagerAllowDelete      bool
+	FileManagerMaxTransferBytes int64
+	FileManagerPollInterval     time.Duration
 }
 
 func Load(path string) (Config, error) {
@@ -47,21 +54,29 @@ func Load(path string) (Config, error) {
 	defer f.Close()
 
 	cfg := Config{
-		TenantID:          "default",
-		BatchInterval:     30 * time.Second,
-		SpoolDir:          defaultSpoolDir(),
-		MaxSpoolRecord:    8 * 1024 * 1024,
-		IngestTransport:   "https",
-		EnabledCollectors: defaultCollectors(),
-		LogMessageMaxBytes: 1024,
-		UpdateEnabled:     true,
-		UpdateChannel:     "stable",
-		UpdateCheckInterval: 6 * time.Hour,
-		UpdateDir:         defaultUpdateDir(),
+		TenantID:                    "default",
+		BatchInterval:               30 * time.Second,
+		SpoolDir:                    defaultSpoolDir(),
+		MaxSpoolRecord:              8 * 1024 * 1024,
+		IngestTransport:             "https",
+		EnabledCollectors:           defaultCollectors(),
+		LogMessageMaxBytes:          1024,
+		UpdateEnabled:               true,
+		UpdateChannel:               "stable",
+		UpdateCheckInterval:         6 * time.Hour,
+		UpdateDir:                   defaultUpdateDir(),
+		RemoteTasksEnabled:          true,
+		RemoteTaskInterval:          10 * time.Second,
+		FileManagerEnabled:          true,
+		FileManagerRoots:            defaultFileManagerRoots(),
+		FileManagerAllowDelete:      true,
+		FileManagerMaxTransferBytes: 256 * 1024 * 1024,
+		FileManagerPollInterval:     5 * time.Second,
 	}
 
-	var inCollectors bool
+	var listKey string
 	var explicitCollectors bool
+	var explicitFileManagerRoots bool
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		raw := stripComment(scanner.Text())
@@ -70,21 +85,35 @@ func Load(path string) (Config, error) {
 			continue
 		}
 		if strings.HasSuffix(line, ":") {
-			inCollectors = strings.TrimSuffix(line, ":") == "collectors"
+			key := strings.TrimSuffix(line, ":")
+			if key == "collectors" || key == "file_manager_roots" {
+				listKey = key
+			} else {
+				listKey = ""
+			}
 			continue
 		}
-		if inCollectors && strings.HasPrefix(line, "-") {
+		if listKey != "" && strings.HasPrefix(line, "-") {
 			value := strings.TrimSpace(strings.TrimPrefix(line, "-"))
-			if value != "" {
+			if value == "" {
+				continue
+			}
+			if listKey == "collectors" {
 				if !explicitCollectors {
 					cfg.EnabledCollectors = nil
 					explicitCollectors = true
 				}
 				cfg.EnabledCollectors = append(cfg.EnabledCollectors, value)
+			} else if listKey == "file_manager_roots" {
+				if !explicitFileManagerRoots {
+					cfg.FileManagerRoots = nil
+					explicitFileManagerRoots = true
+				}
+				cfg.FileManagerRoots = append(cfg.FileManagerRoots, value)
 			}
 			continue
 		}
-		inCollectors = false
+		listKey = ""
 
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -161,6 +190,42 @@ func Load(path string) (Config, error) {
 			cfg.UpdateDir = value
 		case "update_public_key_path":
 			cfg.UpdatePublicKeyPath = value
+		case "remote_tasks_enabled":
+			enabled, err := parseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid remote_tasks_enabled: %w", err)
+			}
+			cfg.RemoteTasksEnabled = enabled
+		case "remote_task_interval":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid remote_task_interval: %w", err)
+			}
+			cfg.RemoteTaskInterval = d
+		case "file_manager_enabled":
+			enabled, err := parseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid file_manager_enabled: %w", err)
+			}
+			cfg.FileManagerEnabled = enabled
+		case "file_manager_allow_delete":
+			enabled, err := parseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid file_manager_allow_delete: %w", err)
+			}
+			cfg.FileManagerAllowDelete = enabled
+		case "file_manager_max_transfer_bytes":
+			n, err := parseBytes(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid file_manager_max_transfer_bytes: %w", err)
+			}
+			cfg.FileManagerMaxTransferBytes = n
+		case "file_manager_poll_interval":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid file_manager_poll_interval: %w", err)
+			}
+			cfg.FileManagerPollInterval = d
 		default:
 			return Config{}, fmt.Errorf("unknown config key %q", key)
 		}
@@ -240,6 +305,18 @@ func Load(path string) (Config, error) {
 	if cfg.UpdatePublicKeyPath != "" {
 		cfg.UpdatePublicKeyPath = resolvePath(filepath.Dir(path), cfg.UpdatePublicKeyPath)
 	}
+	if cfg.RemoteTaskInterval <= 0 {
+		cfg.RemoteTaskInterval = 10 * time.Second
+	}
+	if cfg.FileManagerPollInterval <= 0 {
+		return Config{}, errors.New("file_manager_poll_interval must be positive")
+	}
+	if cfg.FileManagerMaxTransferBytes <= 0 {
+		return Config{}, errors.New("file_manager_max_transfer_bytes must be positive")
+	}
+	for i, root := range cfg.FileManagerRoots {
+		cfg.FileManagerRoots[i] = resolvePath(filepath.Dir(path), root)
+	}
 	if cfg.EnrollmentToken == "" && !certificateFilesExist(cfg) {
 		return Config{}, errors.New("enrollment_token is required when client certificate files are missing")
 	}
@@ -256,6 +333,23 @@ func defaultUpdateDir() string {
 		return filepath.Join(base, "Castrelyx", "update")
 	}
 	return "/var/lib/castrelyx-agent/update"
+}
+
+func defaultFileManagerRoots() []string {
+	if runtime.GOOS == "windows" {
+		roots := []string{}
+		for drive := 'C'; drive <= 'Z'; drive++ {
+			path := string(drive) + `:\`
+			if _, err := os.Stat(path); err == nil {
+				roots = append(roots, path)
+			}
+		}
+		if len(roots) > 0 {
+			return roots
+		}
+		return []string{`C:\`}
+	}
+	return []string{"/"}
 }
 
 func defaultCollectors() []string {

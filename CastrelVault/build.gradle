@@ -1,0 +1,51 @@
+plugins {
+  id 'java'
+  id 'org.springframework.boot' version '3.5.10'
+  id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'org.castrelyx'
+version = '0.1.0'
+
+java {
+  sourceCompatibility = JavaVersion.VERSION_21
+  targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.release = 21
+  options.compilerArgs << '-parameters'
+}
+
+dependencies {
+  implementation 'org.springframework.boot:spring-boot-starter-web'
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  implementation 'org.springframework.boot:spring-boot-starter-validation'
+  implementation 'org.springframework.security:spring-security-crypto'
+  implementation 'org.xerial:sqlite-jdbc:3.47.1.0'
+  implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+  testImplementation 'org.springframework.boot:spring-boot-starter-test'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+  useJUnitPlatform()
+}
+
+tasks.register('frontendInstall', Exec) {
+  workingDir = file('frontend')
+  commandLine = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm install'] : ['npm', 'install']
+}
+
+tasks.register('frontendBuild', Exec) {
+  dependsOn 'frontendInstall'
+  workingDir = file('frontend')
+  commandLine = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm run build'] : ['npm', 'run', 'build']
+}
+
+tasks.named('processResources') {
+  if (file('frontend/package.json').exists() && !project.hasProperty('skipFrontend')) {
+    dependsOn 'frontendBuild'
+  }
+}

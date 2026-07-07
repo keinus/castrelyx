@@ -216,6 +216,10 @@ class CastrelSignIntegrationControllerTest {
         .contains("update_enabled: true")
         .contains("update_channel: stable")
         .contains("update_public_key_path: ./update_public_key.pem")
+        .contains("file_manager_enabled: true")
+        .contains("file_manager_allow_delete: true")
+        .contains("file_manager_roots:")
+        .contains("  - /")
         .contains("  - process")
         .doesNotContain("cert_dir: ./certs")
         .doesNotContain("spool_dir: ./spool");

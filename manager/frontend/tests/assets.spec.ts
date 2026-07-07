@@ -21,6 +21,10 @@ test('admin can reach asset metric dashboard and see create action', async ({ pa
   await expect(page.getByRole('heading', { name: 'Open ports' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Process/socket map' })).toBeVisible();
   await expect(page.getByText('Security events')).toHaveCount(0);
+  await page.getByRole('tab', { name: '로그' }).click();
+  await expect(page.getByRole('heading', { name: '자산 로그' })).toBeVisible();
+  await expect(page.getByText('SSH login failed for alice')).toBeVisible();
+  await expect(page.getByText('auth.login.failure')).toBeVisible();
   await page.getByRole('tab', { name: '스토리지' }).click();
   await expect(page.getByText('Disk by mount')).toBeVisible();
   await expect(page.getByText('Disk I/O devices')).toBeVisible();

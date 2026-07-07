@@ -132,5 +132,92 @@ public class SchemaInitializer implements InitializingBean {
           foreign key(release_id) references agent_releases(id)
         )
         """);
+    jdbcTemplate.execute("""
+        create table if not exists agent_remote_tasks (
+          task_id text primary key,
+          agent_id text not null,
+          task_type text not null,
+          payload_json text not null,
+          status text not null,
+          result_json text,
+          error_message text,
+          created_at text not null,
+          updated_at text not null,
+          expires_at text not null,
+          claimed_at text,
+          completed_at text
+        )
+        """);
+    jdbcTemplate.execute("create index if not exists idx_agent_remote_tasks_agent_status on agent_remote_tasks(agent_id, status, expires_at)");
+    jdbcTemplate.execute("""
+        create table if not exists agent_file_commands (
+          command_id text primary key,
+          agent_id text not null,
+          operation text not null,
+          request_json text not null,
+          status text not null,
+          response_json text,
+          error_message text,
+          created_at text not null,
+          updated_at text not null,
+          expires_at text not null,
+          claimed_at text,
+          completed_at text
+        )
+        """);
+    jdbcTemplate.execute("create index if not exists idx_agent_file_commands_agent_status on agent_file_commands(agent_id, status, expires_at)");
+    jdbcTemplate.execute("""
+        create table if not exists agent_file_transfers (
+          transfer_id text primary key,
+          command_id text not null,
+          direction text not null,
+          filename text not null,
+          content_type text not null,
+          size_bytes integer not null,
+          storage_path text not null,
+          created_at text not null,
+          completed_at text,
+          foreign key(command_id) references agent_file_commands(command_id)
+        )
+        """);
+    jdbcTemplate.execute("create index if not exists idx_agent_file_transfers_command on agent_file_transfers(command_id, direction)");
+    jdbcTemplate.execute("""
+        create table if not exists application_principals (
+          principal_id text primary key,
+          display_name text not null,
+          status text not null,
+          permissions_json text not null,
+          created_at text not null,
+          updated_at text not null
+        )
+        """);
+    jdbcTemplate.execute("""
+        create table if not exists application_enrollment_tokens (
+          id integer primary key autoincrement,
+          name text not null,
+          token_hash text not null unique,
+          principal_id text not null,
+          used_at text,
+          expires_at text not null,
+          revoked_at text,
+          created_at text not null,
+          foreign key(principal_id) references application_principals(principal_id)
+        )
+        """);
+    jdbcTemplate.execute("create index if not exists idx_application_enrollment_tokens_hash on application_enrollment_tokens(token_hash)");
+    jdbcTemplate.execute("""
+        create table if not exists application_certificates (
+          id integer primary key autoincrement,
+          principal_id text not null,
+          serial_number text not null unique,
+          subject_dn text not null,
+          not_before text not null,
+          not_after text not null,
+          pem text not null,
+          status text not null,
+          issued_at text not null,
+          foreign key(principal_id) references application_principals(principal_id)
+        )
+        """);
   }
 }

@@ -1,0 +1,11 @@
+manager/frontend/src/lib/types.ts
+manager/frontend/src/styles.css
+manager/frontend/src/views/OverviewView.test.tsx
+manager/frontend/src/views/OverviewView.tsx
+manager/src/main/java/org/castrelyx/manager/telemetry/AssetMetricsQueryService.java
+manager/src/main/java/org/castrelyx/manager/telemetry/ClickHouseClient.java
+manager/src/main/resources/static/index.html
+manager/src/main/resources/static/assets/index-9--qp5nK.css
+manager/src/main/resources/static/assets/index-B-ch0u65.js
+manager/src/test/java/org/castrelyx/manager/telemetry/AssetMetricsQueryServiceTest.java
+manager/src/test/java/org/castrelyx/manager/telemetry/ClickHouseClientTest.java

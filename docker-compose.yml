@@ -48,6 +48,31 @@ services:
     ports:
       - "8443:8443"
 
+  castrelvault:
+    build:
+      context: .
+      dockerfile: CastrelVault/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      castrelsign:
+        condition: service_started
+    environment:
+      CASTRELVAULT_DATA_DIR: /var/lib/castrelvault
+      CASTRELVAULT_MASTER_KEYS: ${CASTRELVAULT_MASTER_KEYS:-key-2026:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      CASTRELVAULT_ACTIVE_MASTER_KEY_ID: ${CASTRELVAULT_ACTIVE_MASTER_KEY_ID:-key-2026}
+      CASTRELVAULT_BOOTSTRAP_ADMIN_USERNAME: ${CASTRELVAULT_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      CASTRELVAULT_BOOTSTRAP_ADMIN_PASSWORD: ${CASTRELVAULT_BOOTSTRAP_ADMIN_PASSWORD:-change-this-bootstrap-password}
+      CASTRELVAULT_CASTRELSIGN_BASE_URL: ${CASTRELVAULT_CASTRELSIGN_BASE_URL:-https://castrelsign:8443}
+      CASTRELVAULT_CASTRELSIGN_ADMIN_TOKEN: ${CASTRELSIGN_ADMIN_TOKEN:-replace-with-admin-token}
+      CASTRELVAULT_CASTRELSIGN_CA_CERT_PATH: /var/lib/castrelsign/certs/ca.pem
+      CASTRELVAULT_MANAGER_BASE_URL: ${CASTRELVAULT_MANAGER_BASE_URL:-http://manager:8780}
+      CASTRELVAULT_MANAGER_MIGRATION_TOKEN: ${MANAGER_VAULT_MIGRATION_TOKEN:-replace-with-vault-migration-token}
+    volumes:
+      - castrelvault-data:/var/lib/castrelvault
+      - castrelsign-data:/var/lib/castrelsign:ro
+    ports:
+      - "8781:8781"
+
   logparser:
     build:
       context: .
@@ -101,6 +126,8 @@ services:
       MANAGER_CLICKHOUSE_USER: ${MANAGER_CLICKHOUSE_USER:-default}
       MANAGER_CLICKHOUSE_PASSWORD: ${MANAGER_CLICKHOUSE_PASSWORD:-change-clickhouse-me}
       MANAGER_CLICKHOUSE_RAW_TABLE: ${MANAGER_CLICKHOUSE_RAW_TABLE:-castrelyx_agent_events}
+      MANAGER_VAULT_BASE_URL: ${MANAGER_VAULT_BASE_URL:-http://castrelvault:8781}
+      MANAGER_VAULT_MIGRATION_TOKEN: ${MANAGER_VAULT_MIGRATION_TOKEN:-replace-with-vault-migration-token}
     ports:
       - "${MANAGER_PORT:-8780}:8780"
 
@@ -108,4 +135,5 @@ volumes:
   mariadb-data:
   clickhouse-data:
   castrelsign-data:
+  castrelvault-data:
   logparser-data:

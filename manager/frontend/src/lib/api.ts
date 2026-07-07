@@ -7,6 +7,7 @@ import type {
   AgentDashboard,
   AssetMetricDetail,
   AssetMetricsOverview,
+  AssetFileCommand,
   Asset,
   BootstrapState,
   CastrelSignAuditEvent,
@@ -18,6 +19,7 @@ import type {
   IntegrationConfig,
   InterfaceTraffic,
   LogparserStatus,
+  RemoteAccessSession,
   SnmpDashboard
 } from './types';
 
@@ -98,12 +100,49 @@ export const api = {
     request<AssetMetricDetail>(
       `/api/metrics/assets/${encodeURIComponent(assetUid)}?range=${encodeURIComponent(range)}&bucket=${encodeURIComponent(bucket)}`
     ),
+  createRemoteSshSession: (payload: {
+    assetId?: number;
+    assetUid?: string;
+    agentId?: string;
+    targetHost?: string;
+    targetPort?: number;
+    sshUser?: string;
+  }) =>
+    request<RemoteAccessSession>('/api/remote-access/ssh-sessions', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  closeRemoteSshSession: (sessionId: string) =>
+    request<void>(`/api/remote-access/ssh-sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
   assets: () => request<Asset[]>('/api/assets'),
   createAsset: (payload: { name: string; assetType: string; managementIp?: string; location?: string; description?: string }) =>
     request<Asset>('/api/assets', { method: 'POST', body: JSON.stringify(payload) }),
   updateAsset: (id: number, payload: { name: string; location?: string; description?: string }) =>
     request<Asset>(`/api/assets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteAsset: (id: number) => request<void>(`/api/assets/${id}`, { method: 'DELETE' }),
+  createAssetFileCommand: (assetUid: string, operation: string, payload: Record<string, unknown> = {}) =>
+    request<AssetFileCommand>(`/api/assets/${encodeURIComponent(assetUid)}/files/commands`, {
+      method: 'POST',
+      body: JSON.stringify({ operation, request: payload })
+    }),
+  getAssetFileCommand: (assetUid: string, commandId: string) =>
+    request<AssetFileCommand>(
+      `/api/assets/${encodeURIComponent(assetUid)}/files/commands/${encodeURIComponent(commandId)}`
+    ),
+  uploadAssetFile: (assetUid: string, path: string, file: File, overwrite = true) => {
+    const body = new FormData();
+    body.set('path', path);
+    body.set('overwrite', String(overwrite));
+    body.set('file', file);
+    return requestForm<AssetFileCommand>(`/api/assets/${encodeURIComponent(assetUid)}/files/upload`, body);
+  },
+  createAssetFileDownload: (assetUid: string, path: string) =>
+    request<AssetFileCommand>(`/api/assets/${encodeURIComponent(assetUid)}/files/download`, {
+      method: 'POST',
+      body: JSON.stringify({ path })
+    }),
+  downloadAssetFileCommand: (assetUid: string, commandId: string) =>
+    requestBlob(`/api/assets/${encodeURIComponent(assetUid)}/files/commands/${encodeURIComponent(commandId)}/download`),
   alerts: () => request<AlertRow[]>('/api/alerts'),
   acknowledgeAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/acknowledge`, { method: 'POST' }),
   resolveAlert: (id: number) => request<AlertRow>(`/api/alerts/${id}/resolve`, { method: 'POST' }),

@@ -6,5 +6,6 @@ public record IntegrationConfig(
     String serviceName,
     String baseUrl,
     SecretValue secret,
+    String vaultRef,
     boolean enabled) {
 }

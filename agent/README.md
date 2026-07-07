@@ -77,6 +77,12 @@ spool_dir: /var/lib/castrelyx-agent/spool
 max_spool_record_bytes: 8mb
 log_cursor_path: /var/lib/castrelyx-agent/spool/log-cursors.json
 log_message_max_bytes: 1024
+file_manager_enabled: true
+file_manager_allow_delete: true
+file_manager_max_transfer_bytes: 256mb
+file_manager_poll_interval: 5s
+file_manager_roots:
+  - /
 collectors:
   - identity
   - metric
@@ -111,6 +117,11 @@ collectors:
 | `ingest_transport` | 선택 | `https` | `https` 또는 `tcp_mtls`만 허용합니다. |
 | `tcp_ingest_addr` | 조건부 | 없음 | `ingest_transport: tcp_mtls`일 때 필수입니다. `host:port` 형식입니다. |
 | `tcp_ingest_server_name` | 선택 | `tls_server_name` | TCP/mTLS server certificate 검증용 ServerName입니다. |
+| `file_manager_enabled` | 선택 | `true` | CastrelSign mTLS command channel 기반 파일 관리자 polling을 켜거나 끕니다. |
+| `file_manager_roots` | 선택 | OS별 기본 root | 자산 파일 관리자 화면에서 노출할 허용 root 목록입니다. |
+| `file_manager_allow_delete` | 선택 | `true` | 원격 삭제 명령 허용 여부입니다. |
+| `file_manager_max_transfer_bytes` | 선택 | `256mb` | 업로드/다운로드 단일 파일 최대 크기입니다. |
+| `file_manager_poll_interval` | 선택 | `5s` | 파일 관리자 command polling 주기입니다. |
 | `collectors` | 선택 | 기본 collector 전체 | 활성 collector 목록입니다. 알 수 없는 이름은 설정 오류입니다. |
 
 `manager_url`과 enrollment 응답의 `ingest_url`은 모두 `https`만 허용됩니다. HTTP URL을 넣으면 설정 또는 sender 생성 단계에서 실패합니다.
@@ -428,9 +439,16 @@ Linux 수집:
 - `/var/log/secure`
 - `/var/log/syslog`
 - `/var/log/messages`
+- `/var/log/suricata/eve.json`
+- `/var/log/suricata/fast.log`
+- `/var/log/suricata/suricata.log`
+- `/var/log/zeek/current/{conn,notice,dns,http,ssl,weird}.log`
+- `/opt/zeek/logs/current/{conn,notice,dns,http,ssl,weird}.log`
+- `/usr/local/zeek/logs/current/{conn,notice,dns,http,ssl,weird}.log`
+- `/var/log/bro/current/{conn,notice,dns,http,ssl,weird}.log`
 - `journald`
 
-Linux file log는 cursor 파일에 inode+offset을 저장합니다. 첫 실행이나 rotation/truncation 감지 시에는 최근 tail만 bounded resync하고, 이후 실행부터 새로 추가된 줄만 전송합니다. journald는 journal cursor를 저장하고 `--after-cursor` 기반으로 증분 수집합니다.
+Linux file log는 cursor 파일에 inode+offset을 저장합니다. 첫 실행이나 rotation/truncation 감지 시에는 최근 tail만 bounded resync하고, 이후 실행부터 새로 추가된 줄만 전송합니다. 존재하지 않는 Suricata/Zeek 경로는 조용히 건너뜁니다. journald는 journal cursor를 저장하고 `--after-cursor` 기반으로 증분 수집합니다.
 
 Windows 수집:
 
@@ -458,14 +476,14 @@ Windows Event Log는 channel별 `RecordId`를 cursor 파일에 저장합니다. 
 | `kind` | `event` |
 | `type` | `log` |
 | `key` | `source_name:dedup_hash_prefix` |
-| `payload.event_type` | `pam.session.open`, `auth.login.failure`, `auth.login.success`, `auth.privilege.sudo`, `system.service.failure`, `system.kernel` 등 |
+| `payload.event_type` | `pam.session.open`, `auth.login.failure`, `auth.login.success`, `auth.privilege.sudo`, `system.service.failure`, `system.kernel`, `suricata.alert`, `zeek.notice`, `zeek.conn` 등 |
 | `payload.event_category` | `auth`, `system`, `security` 등 |
 | `payload.platform` | `linux` 또는 `windows` |
 | `payload.source` | `agent` |
 | `payload.source_name` | file path, `journald`, Windows channel |
 | `payload.channel` | auth/system/journald 또는 Windows channel |
 | `payload.program` | Linux syslog identifier 또는 process name |
-| `payload.provider` | Windows provider |
+| `payload.provider` | Windows provider, `suricata`, `zeek` |
 | `payload.pid` | Linux PID |
 | `payload.event_id` | Windows Event ID |
 | `payload.record_id` | Windows RecordId |
@@ -478,6 +496,8 @@ Windows Event Log는 channel별 `RecordId`를 cursor 파일에 저장합니다. 
 | `payload.message` | scrub 및 길이 제한이 적용된 짧은 message |
 | `payload.raw_ref` | 현재 기본값 null |
 | `payload.dedup_key` | platform/source/time/record/message 기반 SHA-256 |
+
+Suricata `eve.json` alert는 `signature`, `signature_id`, `src_ip`, `src_port`, `dest_ip`, `dest_port`, `proto`, `flow_id` 같은 구조화 필드를 추가합니다. Zeek TSV log는 header line을 전송하지 않고, `conn`, `notice`, `dns`, `http`, `ssl`, `weird` log별로 `uid`, endpoint, protocol, query, status, note 등 핵심 필드를 추가합니다.
 
 `payload.message`는 정규화 보조용 짧은 문자열입니다. `password`, `token`, `api_key`, `authorization`, `secret`, `credential`, Bearer token 형태의 값은 scrub한 뒤 `log_message_max_bytes`로 제한합니다. 전체 raw log 보존은 기본 동작에 포함하지 않습니다.
 
@@ -1000,7 +1020,7 @@ Manager 쪽에서는 agent dashboard, traffic view, asset list가 raw/canonical 
 
 ## 현재 구현상 제한
 
-- Agent 설정 parser는 완전한 YAML parser가 아니라 단순 key/value와 `collectors` list만 처리합니다.
+- Agent 설정 parser는 완전한 YAML parser가 아니라 단순 key/value와 `collectors`, `file_manager_roots` list만 처리합니다.
 - `manager_url` 이름은 Manager처럼 보이지만 실제 agent API 구현은 CastrelSign에 있습니다.
 - Log tailer cursor는 local JSON 파일 기반이며, Windows는 Event Log bookmark XML이 아니라 channel별 `RecordId`를 저장합니다.
 - 일반 payload 자유 텍스트 문자열은 key 기반 redaction만 적용합니다. 단, log tailer message는 pattern scrub과 길이 제한을 적용합니다.

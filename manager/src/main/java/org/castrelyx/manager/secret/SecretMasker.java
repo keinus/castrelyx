@@ -10,4 +10,8 @@ public final class SecretMasker {
     }
     return new SecretValue(true, "********");
   }
+
+  public static SecretValue maskConfigured(boolean configured) {
+    return configured ? new SecretValue(true, "********") : new SecretValue(false, null);
+  }
 }

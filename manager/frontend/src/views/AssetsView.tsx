@@ -3,6 +3,7 @@ import {
   Cpu,
   Database,
   Edit3,
+  FileText,
   HardDrive,
   Network,
   Plus,
@@ -14,7 +15,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -34,9 +35,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { AssetFileManager } from './AssetFileManager';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
-import type { AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
+import type { AgentLogEvent, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
 import { canMutate, formatBps } from '../lib/uiModel';
 import { cn } from '../lib/utils';
 
@@ -64,6 +66,7 @@ type AssetsViewProps = {
 
 type HealthFilter = 'all' | AssetMetricSummary['health'];
 type RangeOption = '15m' | '30m' | '1h' | '6h' | '24h';
+type LogSeverityOption = 'ALL' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
 type AssetDiskRow = NonNullable<AssetMetricDetail['disks']>[number];
 type ProcessSocketGroup = {
@@ -77,6 +80,8 @@ type ProcessSocketGroup = {
 };
 
 const ASSET_METRICS_REFRESH_MS = 30_000;
+const ASSET_LOGS_REFRESH_MS = 30_000;
+const ASSET_LOG_LIMIT = 120;
 
 const rangeOptions: { value: RangeOption; label: string }[] = [
   { value: '15m', label: '15분' },
@@ -92,6 +97,14 @@ const healthFilters: { value: HealthFilter; label: string }[] = [
   { value: 'warning', label: 'Warning' },
   { value: 'healthy', label: 'Healthy' },
   { value: 'unknown', label: '미수집' }
+];
+
+const logSeverityOptions: { value: LogSeverityOption; label: string }[] = [
+  { value: 'ALL', label: '전체 심각도' },
+  { value: 'INFO', label: 'Info' },
+  { value: 'WARNING', label: 'Warning' },
+  { value: 'ERROR', label: 'Error' },
+  { value: 'CRITICAL', label: 'Critical' }
 ];
 
 const emptyOverview: AssetMetricsOverview = {
@@ -427,6 +440,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
           <AssetDetailPanel
             asset={selectedAsset}
             detail={detail?.asset.assetUid === selectedAsset?.assetUid ? detail : null}
+            range={range}
             loading={detailLoading}
             canManage={canManageAssets}
             editing={editing}
@@ -664,6 +678,7 @@ function AssetDetailSnapshotTile({
 function AssetDetailPanel({
   asset,
   detail,
+  range,
   loading,
   canManage,
   editing,
@@ -681,6 +696,7 @@ function AssetDetailPanel({
 }: {
   asset?: AssetMetricSummary;
   detail: AssetMetricDetail | null;
+  range: RangeOption;
   loading: boolean;
   canManage: boolean;
   editing: boolean;
@@ -696,6 +712,12 @@ function AssetDetailPanel({
   onDelete: () => void;
   onBack: () => void;
 }) {
+  const [activeDetailTab, setActiveDetailTab] = useState('performance');
+
+  useEffect(() => {
+    setActiveDetailTab('performance');
+  }, [asset?.assetUid]);
+
   if (!asset) {
     return (
       <Card className="asset-detail-card">
@@ -842,12 +864,14 @@ function AssetDetailPanel({
           <AssetDetailSnapshotTile icon={<ShieldAlert size={17} />} label="Signals" value={securitySignalLabel(security)} meta={`${openPortCount} open · ${processes.length} proc`} tone={signalTone} />
         </div>
 
-        <Tabs defaultValue="performance" className="asset-detail-tabs">
+        <Tabs value={activeDetailTab} onValueChange={setActiveDetailTab} className="asset-detail-tabs">
           <TabsList className="asset-detail-tab-list">
             <TabsTrigger value="performance">성능</TabsTrigger>
             <TabsTrigger value="storage">스토리지</TabsTrigger>
             <TabsTrigger value="network">네트워크</TabsTrigger>
             <TabsTrigger value="signals">신호</TabsTrigger>
+            <TabsTrigger value="logs">로그</TabsTrigger>
+            <TabsTrigger value="files">파일</TabsTrigger>
             <TabsTrigger value="processes">프로세스</TabsTrigger>
           </TabsList>
 
@@ -939,6 +963,14 @@ function AssetDetailPanel({
             </div>
           </TabsContent>
 
+          <TabsContent value="logs">
+            <AssetLogsPanel assetUid={asset.assetUid} range={range} active={activeDetailTab === 'logs'} />
+          </TabsContent>
+
+          <TabsContent value="files">
+            <AssetFileManager assetUid={asset.assetUid} active={activeDetailTab === 'files'} canAccess={canMutateSelected} />
+          </TabsContent>
+
           <TabsContent value="processes">
             <div className="asset-tab-grid">
               <DetailList title="Processes" meta={`${processes.length} rows`} empty="수집된 process 정보가 없습니다.">
@@ -958,6 +990,172 @@ function AssetDetailPanel({
         </Tabs>
       </CardContent>
     </Card>
+  );
+}
+
+function AssetLogsPanel({
+  assetUid,
+  range,
+  active
+}: {
+  assetUid: string;
+  range: RangeOption;
+  active: boolean;
+}) {
+  const [logs, setLogs] = useState<AgentLogEvent[]>([]);
+  const [severity, setSeverity] = useState<LogSeverityOption>('ALL');
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadLogs = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+    if (!assetUid) {
+      return;
+    }
+    if (mode === 'refresh') {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError('');
+    try {
+      setLogs(await api.agentLogs(range, severity, ASSET_LOG_LIMIT, assetUid));
+    } catch {
+      setLogs([]);
+      setError('자산 로그를 불러오지 못했습니다.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [assetUid, range, severity]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    void loadLogs('initial');
+  }, [active, loadLogs]);
+
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+    const refreshTimer = window.setInterval(() => {
+      void loadLogs('refresh');
+    }, ASSET_LOGS_REFRESH_MS);
+    return () => window.clearInterval(refreshTimer);
+  }, [active, loadLogs]);
+
+  const visibleLogs = useMemo(() => filterAssetLogs(logs, query), [logs, query]);
+  const summary = useMemo(() => summarizeAssetLogs(visibleLogs), [visibleLogs]);
+
+  return (
+    <section className="asset-log-monitor-panel">
+      <div className="panel-heading">
+        <h4>자산 로그</h4>
+        <span>{assetUid} · {rangeLabel(range)} · {logs.length} loaded</span>
+      </div>
+
+      <div className="asset-log-toolbar">
+        <label className="traffic-filter-field asset-log-search-field">
+          <Search size={16} aria-hidden="true" />
+          <input
+            aria-label="자산 로그 검색"
+            placeholder="메시지, 유형, 소스 검색"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <NativeSelect aria-label="로그 심각도" value={severity} onChange={(event) => setSeverity(event.target.value as LogSeverityOption)}>
+          {logSeverityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </NativeSelect>
+        <Button type="button" variant="outline" size="sm" onClick={() => void loadLogs('refresh')} disabled={loading || refreshing}>
+          <RefreshCw className={cn(refreshing && 'asset-refresh-spin')} size={15} />
+          새로고침
+        </Button>
+      </div>
+
+      {error && <p className="asset-empty-detail asset-log-error">{error}</p>}
+      {loading && logs.length === 0 && (
+        <div className="grid gap-2">
+          <Skeleton className="h-4 w-52" />
+          <Skeleton className="h-28 w-full" />
+        </div>
+      )}
+
+      <div className="asset-log-summary-grid">
+        <AssetLogStat label="표시 로그" value={visibleLogs.length} />
+        <AssetLogStat label="Warning+" value={summary.warningOrHigher} tone={summary.warningOrHigher > 0 ? 'warning' : 'neutral'} />
+        <AssetLogStat label="인증 이벤트" value={summary.auth} />
+        <AssetLogStat label="최근 관측" value={summary.lastObserved} compact />
+      </div>
+
+      <div className="table-scroll">
+        <Table className="agent-log-table asset-log-table">
+          <TableHeader>
+            <TableRow>
+              <TableHead>관측 시각</TableHead>
+              <TableHead>심각도</TableHead>
+              <TableHead>유형</TableHead>
+              <TableHead>소스</TableHead>
+              <TableHead>메시지</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visibleLogs.map((log, index) => (
+              <TableRow key={`${log.assetUid}-${log.eventType}-${log.observedAt}-${log.dedupKey ?? log.message ?? index}`}>
+                <TableCell>{formatDate(log.observedAt)}</TableCell>
+                <TableCell><Badge variant={agentLogSeverityBadgeVariant(log.severity)}>{log.severity ?? 'INFO'}</Badge></TableCell>
+                <TableCell>
+                  <div className="agent-log-meta">
+                    <strong>{log.eventType ?? '-'}</strong>
+                    <span>{log.eventCategory ?? log.outcome ?? '-'}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="agent-log-meta">
+                    <strong>{log.sourceName ?? log.channel ?? log.sourceId ?? '-'}</strong>
+                    <span>{log.program ?? log.provider ?? log.platform ?? '-'}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="agent-log-message">
+                  <div>
+                    <FileText size={15} aria-hidden="true" />
+                    <span>{log.message ?? '-'}</span>
+                  </div>
+                  {(log.actor || log.action) && <em>{[log.actor, log.action].filter(Boolean).join(' / ')}</em>}
+                </TableCell>
+              </TableRow>
+            ))}
+            {!loading && visibleLogs.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5}>해당 조건의 자산 로그가 없습니다.</TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </section>
+  );
+}
+
+function AssetLogStat({
+  label,
+  value,
+  tone = 'neutral',
+  compact = false
+}: {
+  label: string;
+  value: string | number;
+  tone?: 'neutral' | 'warning' | 'critical';
+  compact?: boolean;
+}) {
+  return (
+    <span className={cn('asset-log-stat', tone, compact && 'compact')}>
+      <em>{label}</em>
+      <strong>{value}</strong>
+    </span>
   );
 }
 
@@ -1169,7 +1367,7 @@ function PercentAreaChart({ data, color, name }: { data: MetricPoint[]; color: s
         <XAxis dataKey="label" tickLine={false} axisLine={false} />
         <YAxis tickLine={false} axisLine={false} domain={[0, 100]} width={34} />
         <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatPercent(Number(value))} />} />
-        <Area type="monotone" dataKey="value" name={name} stroke="var(--color-value)" fill="var(--color-value)" fillOpacity={0.16} strokeWidth={2} isAnimationActive={false} />
+        <Area type="monotone" dataKey="value" name={name} stroke="var(--color-value)" fill="var(--color-value)" fillOpacity={0.16} strokeWidth={2} isAnimationActive />
       </AreaChart>
     </ChartContainer>
   );
@@ -1188,8 +1386,8 @@ function NetworkLineChart({ data }: { data: MetricPoint[] }) {
         <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(value) => formatBps(Number(value)).replace(' ', '')} />
         <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatBps(Number(value))} />} />
         <ChartLegend content={<ChartLegendContent />} />
-        <Line type="monotone" dataKey="inBps" name="RX" stroke="var(--color-inBps)" strokeWidth={2} dot={false} isAnimationActive={false} />
-        <Line type="monotone" dataKey="outBps" name="TX" stroke="var(--color-outBps)" strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="inBps" name="RX" stroke="var(--color-inBps)" strokeWidth={2} dot={false} isAnimationActive />
+        <Line type="monotone" dataKey="outBps" name="TX" stroke="var(--color-outBps)" strokeWidth={2} dot={false} isAnimationActive />
       </LineChart>
     </ChartContainer>
   );
@@ -1208,8 +1406,8 @@ function DiskIoLineChart({ data }: { data: MetricPoint[] }) {
         <YAxis tickLine={false} axisLine={false} width={62} tickFormatter={(value) => formatBytesPerSecond(Number(value)).replace(' ', '')} />
         <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatBytesPerSecond(Number(value))} />} />
         <ChartLegend content={<ChartLegendContent />} />
-        <Line type="monotone" dataKey="readBps" name="Read" stroke="var(--color-readBps)" strokeWidth={2} dot={false} isAnimationActive={false} />
-        <Line type="monotone" dataKey="writeBps" name="Write" stroke="var(--color-writeBps)" strokeWidth={2} dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="readBps" name="Read" stroke="var(--color-readBps)" strokeWidth={2} dot={false} isAnimationActive />
+        <Line type="monotone" dataKey="writeBps" name="Write" stroke="var(--color-writeBps)" strokeWidth={2} dot={false} isAnimationActive />
       </LineChart>
     </ChartContainer>
   );
@@ -1305,6 +1503,54 @@ function securitySignalLabel(security?: AssetMetricSummary['security']) {
     return '신호 없음';
   }
   return `${total} signals`;
+}
+
+function filterAssetLogs(logs: AgentLogEvent[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return logs;
+  }
+  return logs.filter((log) => [
+    log.assetUid,
+    log.sourceId,
+    log.eventType,
+    log.eventCategory,
+    log.severity,
+    log.sourceName,
+    log.channel,
+    log.program,
+    log.provider,
+    log.actor,
+    log.action,
+    log.outcome,
+    log.message
+  ].some((value) => value?.toLowerCase().includes(normalizedQuery)));
+}
+
+function summarizeAssetLogs(logs: AgentLogEvent[]) {
+  return {
+    warningOrHigher: logs.filter((log) => ['WARNING', 'ERROR', 'CRITICAL'].includes((log.severity ?? '').toUpperCase())).length,
+    auth: logs.filter((log) => (log.eventCategory ?? log.eventType ?? '').toLowerCase().includes('auth')).length,
+    lastObserved: formatDate(logs[0]?.observedAt)
+  };
+}
+
+function agentLogSeverityBadgeVariant(severity?: string) {
+  switch ((severity ?? '').toUpperCase()) {
+    case 'CRITICAL':
+    case 'ERROR':
+      return 'critical' as const;
+    case 'WARNING':
+      return 'warning' as const;
+    case 'INFO':
+      return 'secondary' as const;
+    default:
+      return 'muted' as const;
+  }
+}
+
+function rangeLabel(range: RangeOption) {
+  return rangeOptions.find((option) => option.value === range)?.label ?? range;
 }
 
 function chartData(data: MetricPoint[]) {

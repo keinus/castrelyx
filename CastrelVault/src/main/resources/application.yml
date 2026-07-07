@@ -1,0 +1,30 @@
+server:
+  port: ${CASTRELVAULT_PORT:8781}
+  ssl:
+    enabled: ${CASTRELVAULT_TLS_ENABLED:false}
+    client-auth: want
+    key-store: ${CASTRELVAULT_TLS_KEYSTORE_PATH:}
+    key-store-password: ${CASTRELVAULT_TLS_KEYSTORE_PASSWORD:}
+    trust-store: ${CASTRELVAULT_TLS_TRUSTSTORE_PATH:}
+    trust-store-password: ${CASTRELVAULT_TLS_TRUSTSTORE_PASSWORD:}
+
+spring:
+  application:
+    name: CastrelVault
+
+castrelvault:
+  data-dir: ${CASTRELVAULT_DATA_DIR:/var/lib/castrelvault}
+  master-keys: ${CASTRELVAULT_MASTER_KEYS:}
+  active-master-key-id: ${CASTRELVAULT_ACTIVE_MASTER_KEY_ID:}
+  bootstrap-admin-username: ${CASTRELVAULT_BOOTSTRAP_ADMIN_USERNAME:}
+  bootstrap-admin-password: ${CASTRELVAULT_BOOTSTRAP_ADMIN_PASSWORD:}
+  session-ttl-seconds: ${CASTRELVAULT_SESSION_TTL_SECONDS:3600}
+  castrelsign-base-url: ${CASTRELVAULT_CASTRELSIGN_BASE_URL:}
+  castrelsign-admin-token: ${CASTRELVAULT_CASTRELSIGN_ADMIN_TOKEN:}
+  castrelsign-ca-cert-path: ${CASTRELVAULT_CASTRELSIGN_CA_CERT_PATH:}
+  manager-base-url: ${CASTRELVAULT_MANAGER_BASE_URL:}
+  manager-migration-token: ${CASTRELVAULT_MANAGER_MIGRATION_TOKEN:}
+  tls-key-store-path: ${CASTRELVAULT_TLS_KEYSTORE_PATH:}
+  tls-key-store-password: ${CASTRELVAULT_TLS_KEYSTORE_PASSWORD:}
+  tls-trust-store-path: ${CASTRELVAULT_TLS_TRUSTSTORE_PATH:}
+  tls-trust-store-password: ${CASTRELVAULT_TLS_TRUSTSTORE_PASSWORD:}

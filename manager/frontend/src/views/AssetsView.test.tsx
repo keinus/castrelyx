@@ -20,7 +20,8 @@ describe('AssetsView', () => {
   it('renders a fleet scan first and loads selected asset detail on demand', async () => {
     const fetchMock = mockFetch({
       '/api/metrics/assets?range=1h': { body: overview },
-      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail }
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail },
+      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas': { body: assetLogs }
     });
 
     render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
@@ -46,6 +47,10 @@ describe('AssetsView', () => {
       '/api/metrics/assets/nas?range=1h&bucket=auto',
       expect.objectContaining({ credentials: 'include' })
     ));
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas',
+      expect.objectContaining({ credentials: 'include' })
+    );
     expect(await screen.findByRole('heading', { name: 'nas' })).toBeInTheDocument();
     expect(screen.getAllByText('CPU Usage').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Memory Usage').length).toBeGreaterThan(0);
@@ -68,6 +73,19 @@ describe('AssetsView', () => {
     expect(screen.getAllByText('0.0.0.0:22').length).toBeGreaterThan(0);
     expect(screen.queryByText('Failed password for invalid user')).not.toBeInTheDocument();
     expect(screen.queryByText(/auth\.login\.failure/)).not.toBeInTheDocument();
+    activateTab('로그');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas',
+      expect.objectContaining({ credentials: 'include' })
+    ));
+    expect(await screen.findByText('자산 로그')).toBeInTheDocument();
+    expect(screen.getByText(/Failed password for invalid user alice/)).toBeInTheDocument();
+    expect(screen.getByText(/auth\.login\.failure/)).toBeInTheDocument();
+    expect(screen.queryByText('edge-router link down')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('자산 로그 검색'), { target: { value: 'alice' } });
+    expect(screen.getByText(/Failed password for invalid user alice/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('자산 로그 검색'), { target: { value: 'nomatch' } });
+    expect(screen.getByText('해당 조건의 자산 로그가 없습니다.')).toBeInTheDocument();
     activateTab('프로세스');
     expect(await screen.findByText('Process/socket map')).toBeInTheDocument();
     expect(screen.getAllByText('sshd').length).toBeGreaterThan(0);
@@ -147,6 +165,64 @@ describe('AssetsView', () => {
       location: 'Seoul HQ / Rack B',
       description: 'Primary NAS'
     }));
+  });
+
+  it('opens the asset file manager tab and renders remote file entries', async () => {
+    const fetchMock = mockFetch({
+      '/api/metrics/assets?range=1h': { body: overview },
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail },
+      '/api/assets/nas/files/commands': {
+        body: {
+          commandId: 'cmd-root',
+          agentId: 'nas',
+          operation: 'ROOTS',
+          status: 'SUCCEEDED',
+          responseJson: JSON.stringify({
+            path: '',
+            roots: [{ name: '/', path: '/' }],
+            entries: [
+              {
+                name: 'etc',
+                path: '/etc',
+                type: 'directory',
+                directory: true,
+                size_bytes: 4096,
+                modified_at: '2026-06-11T13:30:00Z',
+                read_only: false,
+                hidden: false
+              },
+              {
+                name: 'agent.log',
+                path: '/var/log/agent.log',
+                type: 'file',
+                directory: false,
+                size_bytes: 2048,
+                modified_at: '2026-06-11T13:31:00Z',
+                read_only: false,
+                hidden: false,
+                extension: 'log'
+              }
+            ]
+          })
+        }
+      }
+    });
+
+    render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
+
+    await screen.findByRole('heading', { name: '자산 관리' });
+    fireEvent.click(screen.getByRole('button', { name: /nas/ }));
+    await screen.findByRole('heading', { name: 'nas' });
+    activateTab('파일');
+
+    expect(await screen.findByLabelText('파일 경로')).toBeInTheDocument();
+    expect(await screen.findByText('etc')).toBeInTheDocument();
+    expect(screen.getByText('agent.log')).toBeInTheDocument();
+    expect(screen.getByText('2.00 KB')).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/assets/nas/files/commands',
+      expect.objectContaining({ credentials: 'include' })
+    ));
   });
 
   it('keeps viewer in read-only mode', async () => {
@@ -313,6 +389,24 @@ const detail: AssetMetricDetail = {
   },
   collectors: [{ name: 'metric', sampleCount: 10, lastSeenAt: '2026-06-11T13:34:00Z' }]
 };
+
+const assetLogs = [
+  {
+    assetUid: 'nas',
+    sourceId: 'nas-agent',
+    eventType: 'auth.login.failure',
+    eventCategory: 'auth',
+    severity: 'WARNING',
+    sourceName: 'sshd',
+    program: 'sshd',
+    actor: 'alice',
+    action: 'login',
+    outcome: 'failure',
+    message: 'Failed password for invalid user alice',
+    observedAt: '2026-06-11T13:36:00Z',
+    dedupKey: 'nas-auth-failed-alice'
+  }
+];
 
 type MockResponse = {
   body: unknown;

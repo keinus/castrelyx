@@ -1,11 +1,14 @@
 package org.castrelyx.manager.integration;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.LinkedMultiValueMap;
@@ -151,6 +154,93 @@ public class CastrelSignClient {
         .body(Map.class);
   }
 
+  public Map<?, ?> createAgentRemoteTask(String agentId, String type, Map<String, Object> payload, long ttlSeconds) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agents/" + path(agentId) + "/tasks"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .body(Map.of(
+            "type", type,
+            "payload", payload == null ? Map.of() : payload,
+            "ttlSeconds", ttlSeconds))
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> getAgentRemoteTask(String taskId) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.get()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agent-tasks/" + path(taskId)))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> createAgentFileCommand(String agentId, String operation, Map<String, Object> request, long ttlSeconds) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/file-manager/agents/" + path(agentId) + "/commands"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .body(Map.of(
+            "operation", operation,
+            "request", request == null ? Map.of() : request,
+            "ttl_seconds", ttlSeconds))
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> createAgentFileUpload(String agentId, String targetPath, boolean overwrite, byte[] content,
+      String filename, String contentType, long ttlSeconds) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+    body.add("path", targetPath);
+    body.add("overwrite", String.valueOf(overwrite));
+    body.add("ttl_seconds", String.valueOf(ttlSeconds));
+    body.add("file", new ByteArrayResource(content == null ? new byte[0] : content) {
+      @Override
+      public String getFilename() {
+        return filename == null || filename.isBlank() ? "upload.bin" : filename;
+      }
+    });
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/file-manager/agents/" + path(agentId) + "/uploads"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .contentType(MediaType.MULTIPART_FORM_DATA)
+        .body(body)
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> createAgentFileDownload(String agentId, String filePath, long ttlSeconds) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/file-manager/agents/" + path(agentId) + "/downloads"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .body(Map.of(
+            "path", filePath,
+            "ttl_seconds", ttlSeconds))
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public Map<?, ?> getAgentFileCommand(String commandId) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.get()
+        .uri(URI.create(config.baseUrl() + "/api/admin/file-manager/commands/" + path(commandId)))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .body(Map.class);
+  }
+
+  public ResponseEntity<byte[]> downloadAgentFileCommand(String commandId) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.get()
+        .uri(URI.create(config.baseUrl() + "/api/admin/file-manager/commands/" + path(commandId) + "/download"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .retrieve()
+        .toEntity(byte[].class);
+  }
+
   private List<?> getList(String path) {
     IntegrationConfig config = integrationService.get("castrelsign");
     return restClient.get()
@@ -193,5 +283,9 @@ public class CastrelSignClient {
       return fallback;
     }
     return String.valueOf(value);
+  }
+
+  private static String path(String value) {
+    return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
   }
 }

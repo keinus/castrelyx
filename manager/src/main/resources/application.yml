@@ -7,6 +7,23 @@ manager:
     username: ${MANAGER_CLICKHOUSE_USER:default}
     password: ${MANAGER_CLICKHOUSE_PASSWORD:}
     raw-table: ${MANAGER_CLICKHOUSE_RAW_TABLE:castrelyx_agent_events}
+  vault:
+    enabled: ${MANAGER_VAULT_ENABLED:false}
+    base-url: ${MANAGER_VAULT_BASE_URL:http://castrelvault:8781}
+    admin-session-token: ${MANAGER_VAULT_ADMIN_SESSION_TOKEN:}
+    key-store-path: ${MANAGER_VAULT_KEYSTORE_PATH:}
+    key-store-password: ${MANAGER_VAULT_KEYSTORE_PASSWORD:}
+    trust-store-path: ${MANAGER_VAULT_TRUSTSTORE_PATH:}
+    trust-store-password: ${MANAGER_VAULT_TRUSTSTORE_PASSWORD:}
+    migration-token: ${MANAGER_VAULT_MIGRATION_TOKEN:}
+  remote-access:
+    enabled: ${MANAGER_REMOTE_ACCESS_ENABLED:true}
+    default-ssh-user: ${MANAGER_REMOTE_ACCESS_DEFAULT_SSH_USER:keinus}
+    default-port: ${MANAGER_REMOTE_ACCESS_DEFAULT_PORT:22}
+    key-ttl-seconds: ${MANAGER_REMOTE_ACCESS_KEY_TTL_SECONDS:600}
+    session-ttl-seconds: ${MANAGER_REMOTE_ACCESS_SESSION_TTL_SECONDS:7200}
+    authorization-timeout-seconds: ${MANAGER_REMOTE_ACCESS_AUTH_TIMEOUT_SECONDS:45}
+    allow-unknown-host-keys: ${MANAGER_REMOTE_ACCESS_ALLOW_UNKNOWN_HOST_KEYS:true}
 
 server:
   port: ${MANAGER_PORT:8780}

@@ -79,6 +79,9 @@ public class AssetMetricsQueryService {
         .toList());
     response.put("processes", selected.processRows());
     response.put("sockets", selected.socketRows());
+    response.put("services", selected.services);
+    response.put("firewalls", selected.firewalls);
+    response.put("interfaceStates", selected.interfaceStates);
     response.put("security", selected.securityRow());
     response.put("collectors", selected.collectors);
     return response;
@@ -113,6 +116,9 @@ public class AssetMetricsQueryService {
     }
     for (Map<String, Object> firewall : listOfMaps(states.get("firewalls"))) {
       builder(builders, firstText(firewall.get("assetUid"), firewall.get("asset_uid"))).firewalls.add(firewall);
+    }
+    for (Map<String, Object> interfaceState : listOfMaps(states.get("interfaces"))) {
+      builder(builders, firstText(interfaceState.get("assetUid"), interfaceState.get("asset_uid"))).interfaceStates.add(interfaceState);
     }
     for (Map<String, Object> process : listOfMaps(states.get("processes"))) {
       builder(builders, firstText(process.get("assetUid"), process.get("asset_uid"))).processes.add(process);
@@ -492,6 +498,7 @@ public class AssetMetricsQueryService {
     private final List<Map<String, Object>> sockets = new ArrayList<>();
     private final List<Map<String, Object>> services = new ArrayList<>();
     private final List<Map<String, Object>> firewalls = new ArrayList<>();
+    private final List<Map<String, Object>> interfaceStates = new ArrayList<>();
     private final List<Map<String, Object>> processes = new ArrayList<>();
     private final List<Map<String, Object>> events = new ArrayList<>();
     private final List<Map<String, Object>> collectors = new ArrayList<>();
@@ -518,7 +525,8 @@ public class AssetMetricsQueryService {
     private Map<String, Object> toOverviewRow() {
       Map<String, Object> row = new LinkedHashMap<>();
       Map<String, Object> metrics = metricsRow();
-      String health = health(metrics);
+      Map<String, Object> signals = signalsRow(metrics);
+      String health = health(signals);
       row.put("id", asset == null ? null : asset.id());
       row.put("assetUid", assetUid);
       row.put("name", asset == null ? assetUid : asset.name());
@@ -533,6 +541,7 @@ public class AssetMetricsQueryService {
       row.put("sources", sourcesRow());
       row.put("metrics", metrics);
       row.put("security", securityRow());
+      row.put("signals", signals);
       return row;
     }
 
@@ -564,6 +573,11 @@ public class AssetMetricsQueryService {
       if (normalizedLoad == null && load1 != null && cpuCount != null && cpuCount > 0) {
         normalizedLoad = load1 / cpuCount * 100;
       }
+      Double temperature = samples.stream()
+          .filter(sample -> "host.temperature.celsius".equals(sample.metricName()))
+          .map(MetricSample::value)
+          .max(Double::compareTo)
+          .orElse(null);
       double inBps = interfaces.stream().mapToDouble(InterfaceTraffic::inBps).sum();
       double outBps = interfaces.stream().mapToDouble(InterfaceTraffic::outBps).sum();
       long interfaceErrors = interfaces.stream().mapToLong(row -> row.errors() + row.discards()).sum();
@@ -586,6 +600,7 @@ public class AssetMetricsQueryService {
       metrics.put("load15", load15);
       metrics.put("normalizedLoadPct", normalizedLoad);
       metrics.put("cpuCount", cpuCount);
+      metrics.put("temperatureCelsius", temperature);
       metrics.put("networkInBps", inBps);
       metrics.put("networkOutBps", outBps);
       metrics.put("interfaceErrorCount", interfaceErrors);
@@ -604,7 +619,8 @@ public class AssetMetricsQueryService {
       sources.put("snmp", samples.stream().anyMatch(sample -> "SNMP".equalsIgnoreCase(sample.sourceType())));
       sources.put("traffic", !interfaces.isEmpty());
       sources.put("diskIo", !diskIos.isEmpty());
-      sources.put("security", !sockets.isEmpty() || !services.isEmpty() || !firewalls.isEmpty() || !events.isEmpty());
+      sources.put("security", !sockets.isEmpty() || !services.isEmpty() || !firewalls.isEmpty() || !interfaceStates.isEmpty()
+          || !events.isEmpty());
       sources.put("observed", Boolean.TRUE.equals(sources.get("agent")) || Boolean.TRUE.equals(sources.get("traffic"))
           || Boolean.TRUE.equals(sources.get("diskIo")) || Boolean.TRUE.equals(sources.get("security")) || !samples.isEmpty());
       return sources;
@@ -615,9 +631,86 @@ public class AssetMetricsQueryService {
       security.put("openPorts", sockets.stream().filter(AssetMetricsQueryService::isListeningSocket).count());
       security.put("failedServices", services.stream().filter(AssetMetricsQueryService::isProblemService).count());
       security.put("firewallDisabled", firewalls.stream().filter(AssetMetricsQueryService::isFirewallDisabled).count());
+      security.put("interfacesDown", interfaceStates.stream().filter(AssetMetricsQueryService::isInterfaceDown).count());
       security.put("securityEvents", events.size());
       security.put("events", events);
       return security;
+    }
+
+    private Map<String, Object> signalsRow(Map<String, Object> metrics) {
+      List<Map<String, Object>> reasons = new ArrayList<>();
+      addThresholdReason(reasons, "cpu", "CPU", metricNumber(metrics, "cpuUsagePct"), 80, 90, "%");
+      addThresholdReason(reasons, "memory", "Memory", metricNumber(metrics, "memoryUsagePct"), 80, 90, "%");
+      addThresholdReason(reasons, "disk", "Disk", metricNumber(metrics, "diskUsagePct"), 80, 90, "%");
+      addThresholdReason(reasons, "disk_io", "Disk I/O", metricNumber(metrics, "diskIoUtilizationPct"), 80, 90, "%");
+      addThresholdReason(reasons, "load", "Load", metricNumber(metrics, "normalizedLoadPct"), 100, 150, "%");
+      addThresholdReason(reasons, "temperature", "Temperature", metricNumber(metrics, "temperatureCelsius"), 80, 90, "C");
+      if (isStale()) {
+        reasons.add(reason("stale", "수집 지연", "warning", lastSeenAt == null ? null : lastSeenAt.toString()));
+      }
+      if (number(metrics.get("interfaceErrorCount")) > 0) {
+        reasons.add(reason("interface_error", "인터페이스 오류", "warning", formatWhole(number(metrics.get("interfaceErrorCount"))) + " errors"));
+      }
+      long failedServices = services.stream().filter(AssetMetricsQueryService::isProblemService).count();
+      if (failedServices > 0) {
+        reasons.add(reason("failed_service", "서비스 이상", "critical", failedServices + " failed"));
+      }
+      long firewallDisabled = firewalls.stream().filter(AssetMetricsQueryService::isFirewallDisabled).count();
+      if (firewallDisabled > 0) {
+        reasons.add(reason("firewall_disabled", "방화벽 비활성", "warning", firewallDisabled + " disabled"));
+      }
+      long interfacesDown = interfaceStates.stream().filter(AssetMetricsQueryService::isInterfaceDown).count();
+      if (interfacesDown > 0) {
+        reasons.add(reason("interface_down", "인터페이스 다운", "warning", interfacesDown + " down"));
+      }
+
+      Map<String, Long> eventCounts = eventCounts();
+      Long criticalEvents = eventCounts.getOrDefault("CRITICAL", 0L) + eventCounts.getOrDefault("ERROR", 0L);
+      if (criticalEvents > 0) {
+        reasons.add(reason("event_critical", "중요 이벤트", "critical", criticalEvents + " events"));
+      } else if (eventCounts.getOrDefault("WARNING", 0L) > 0) {
+        reasons.add(reason("event_warning", "경고 이벤트", "warning", eventCounts.get("WARNING") + " events"));
+      }
+
+      Map<String, Object> signals = new LinkedHashMap<>();
+      signals.put("reasons", reasons);
+      signals.put("interfacesDown", interfacesDown);
+      signals.put("eventCounts", eventCounts);
+      signals.put("lastEventAt", lastEventAt());
+      signals.put("collectorFreshness", collectorFreshness());
+      return signals;
+    }
+
+    private Map<String, Long> eventCounts() {
+      Map<String, Long> counts = new LinkedHashMap<>();
+      for (Map<String, Object> event : events) {
+        String severity = firstText(event.get("severity"));
+        if (severity == null) {
+          continue;
+        }
+        String key = severity.trim().toUpperCase();
+        counts.put(key, counts.getOrDefault(key, 0L) + 1);
+      }
+      return counts;
+    }
+
+    private String lastEventAt() {
+      return events.stream()
+          .map(event -> parseInstant(firstText(event.get("observedAt"), event.get("observed_at"), event.get("eventTime"), event.get("event_time"))))
+          .filter(timestamp -> timestamp != null)
+          .max(Instant::compareTo)
+          .map(Instant::toString)
+          .orElse(null);
+    }
+
+    private Map<String, Object> collectorFreshness() {
+      Map<String, Object> freshness = new LinkedHashMap<>();
+      freshness.put("stale", isStale());
+      freshness.put("lastSeenAt", lastSeenAt == null ? null : lastSeenAt.toString());
+      if (lastSeenAt != null) {
+        freshness.put("ageSeconds", Math.max(0, Duration.between(lastSeenAt, Instant.now()).toSeconds()));
+      }
+      return freshness;
     }
 
     private List<Map<String, Object>> diskRows() {
@@ -705,27 +798,17 @@ public class AssetMetricsQueryService {
           .toList();
     }
 
-    private String health(Map<String, Object> metrics) {
-      double cpu = number(metrics.get("cpuUsagePct"));
-      double memory = number(metrics.get("memoryUsagePct"));
-      double disk = number(metrics.get("diskUsagePct"));
-      double diskIo = number(metrics.get("diskIoUtilizationPct"));
-      double normalizedLoad = number(metrics.get("normalizedLoadPct"));
-      double interfaceErrors = number(metrics.get("interfaceErrorCount"));
-      if (cpu >= 90 || memory >= 90 || disk >= 90 || diskIo >= 90 || normalizedLoad >= 150 || hasCriticalEvent()) {
+    private String health(Map<String, Object> signals) {
+      if (hasReasonSeverity(signals, "critical")) {
         return "critical";
       }
-      if (cpu >= 80 || memory >= 80 || disk >= 80 || diskIo >= 80 || normalizedLoad >= 100 || interfaceErrors > 0 || isStale()) {
+      if (hasReasonSeverity(signals, "warning")) {
         return "warning";
       }
       if (!samples.isEmpty() || agentSeen || !interfaces.isEmpty() || !diskIos.isEmpty()) {
         return "healthy";
       }
       return "unknown";
-    }
-
-    private boolean hasCriticalEvent() {
-      return events.stream().anyMatch(event -> "CRITICAL".equalsIgnoreCase(firstText(event.get("severity"))));
     }
 
     private boolean isStale() {
@@ -774,6 +857,76 @@ public class AssetMetricsQueryService {
       return !bool;
     }
     return "false".equalsIgnoreCase(firstText(enabled));
+  }
+
+  private static boolean isInterfaceDown(Map<String, Object> row) {
+    String status = firstText(row.get("operStatus"), row.get("oper_status"), row.get("status"));
+    if (status == null || status.isBlank()) {
+      return false;
+    }
+    String normalized = status.trim().toLowerCase();
+    return !"up".equals(normalized) && !"unknown".equals(normalized);
+  }
+
+  private static void addThresholdReason(
+      List<Map<String, Object>> reasons,
+      String code,
+      String label,
+      Double value,
+      double warningThreshold,
+      double criticalThreshold,
+      String unit) {
+    if (value == null) {
+      return;
+    }
+    if (value >= criticalThreshold) {
+      reasons.add(reason(code, label, "critical", formatSignalValue(value, unit)));
+    } else if (value >= warningThreshold) {
+      reasons.add(reason(code, label, "warning", formatSignalValue(value, unit)));
+    }
+  }
+
+  private static Map<String, Object> reason(String code, String label, String severity, String detail) {
+    Map<String, Object> reason = new LinkedHashMap<>();
+    reason.put("code", code);
+    reason.put("label", label);
+    reason.put("severity", severity);
+    reason.put("detail", detail);
+    return reason;
+  }
+
+  private static Double metricNumber(Map<String, Object> metrics, String key) {
+    Object value = metrics.get(key);
+    return value instanceof Number number ? number.doubleValue() : null;
+  }
+
+  private static boolean hasReasonSeverity(Map<String, Object> signals, String severity) {
+    Object reasonsObject = signals.get("reasons");
+    if (!(reasonsObject instanceof List<?> reasons)) {
+      return false;
+    }
+    for (Object reason : reasons) {
+      if (reason instanceof Map<?, ?> map && severity.equalsIgnoreCase(firstText(map.get("severity")))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String formatSignalValue(double value, String unit) {
+    return formatOneDecimal(value) + unit;
+  }
+
+  private static String formatWhole(double value) {
+    return String.valueOf(Math.round(value));
+  }
+
+  private static String formatOneDecimal(double value) {
+    double rounded = Math.round(value * 10.0) / 10.0;
+    if (rounded == Math.rint(rounded)) {
+      return String.valueOf((long) rounded);
+    }
+    return String.valueOf(rounded);
   }
 
   private static String readLabel(MetricSample sample, String key) {

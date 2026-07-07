@@ -24,12 +24,19 @@ update_channel: canary
 update_check_interval: 10m
 update_dir: ./updates
 update_public_key_path: ./update_public_key.pem
+file_manager_enabled: true
+file_manager_allow_delete: false
+file_manager_max_transfer_bytes: 10mb
+file_manager_poll_interval: 3s
 log_cursor_path: ./log-cursors.json
 log_message_max_bytes: 512
 collectors:
   - identity
   - metric
   - log_tailer
+file_manager_roots:
+  - ./managed
+  - ./other-managed
 `)
 
 	if err := os.WriteFile(path, input, 0o600); err != nil {
@@ -97,6 +104,21 @@ collectors:
 	}
 	if got := cfg.EnabledCollectors; len(got) != 3 || got[0] != "identity" || got[2] != "log_tailer" {
 		t.Fatalf("EnabledCollectors = %#v", got)
+	}
+	if !cfg.FileManagerEnabled {
+		t.Fatal("FileManagerEnabled = false")
+	}
+	if cfg.FileManagerAllowDelete {
+		t.Fatal("FileManagerAllowDelete = true")
+	}
+	if cfg.FileManagerMaxTransferBytes != 10*1024*1024 {
+		t.Fatalf("FileManagerMaxTransferBytes = %d", cfg.FileManagerMaxTransferBytes)
+	}
+	if cfg.FileManagerPollInterval != 3*time.Second {
+		t.Fatalf("FileManagerPollInterval = %s", cfg.FileManagerPollInterval)
+	}
+	if got := cfg.FileManagerRoots; len(got) != 2 || got[0] != filepath.Join(dir, "managed") || got[1] != filepath.Join(dir, "other-managed") {
+		t.Fatalf("FileManagerRoots = %#v", got)
 	}
 	if cfg.IngestTransport != "https" {
 		t.Fatalf("IngestTransport = %q", cfg.IngestTransport)

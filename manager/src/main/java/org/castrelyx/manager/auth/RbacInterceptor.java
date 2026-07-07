@@ -27,6 +27,9 @@ public class RbacInterceptor implements HandlerInterceptor {
     if (user.role() == Role.ADMIN) {
       return true;
     }
+    if (isAssetFilePath(path) && user.role() == Role.VIEWER) {
+      throw new ForbiddenException("viewer role cannot access asset files");
+    }
     if (requiresAdmin(path, request.getMethod())) {
       throw new ForbiddenException("admin role is required");
     }
@@ -41,7 +44,8 @@ public class RbacInterceptor implements HandlerInterceptor {
         || path.equals("/api/setup/admin")
         || path.equals("/api/auth/login")
         || path.equals("/api/auth/logout")
-        || path.equals("/api/auth/session");
+        || path.equals("/api/auth/session")
+        || path.startsWith("/api/vault-migration/");
   }
 
   private static boolean requiresAdmin(String path, String method) {
@@ -51,6 +55,10 @@ public class RbacInterceptor implements HandlerInterceptor {
     return path.startsWith("/api/integrations/")
         || path.startsWith("/api/settings")
         || path.startsWith("/api/users");
+  }
+
+  private static boolean isAssetFilePath(String path) {
+    return path.startsWith("/api/assets/") && path.contains("/files");
   }
 
   private static String sessionCookie(HttpServletRequest request) {

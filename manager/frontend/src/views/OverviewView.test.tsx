@@ -1,178 +1,225 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentDashboard, AlertRow, DashboardSummary, SnmpDashboard } from '../lib/types';
+import type { AlertRow, Asset, AssetMetricDetail, AssetMetricsOverview, DashboardSummary } from '../lib/types';
 import { OverviewView } from './OverviewView';
 
 describe('OverviewView', () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('renders the integrated NMS and security operations home', async () => {
+  it('renders an asset-first operations overview', async () => {
     mockFetch({
-      '/api/dashboards/agent': {
-        body: {
-          heartbeat: { healthy: 2, stale: 1, lastSeenAt: '2026-06-11T13:34:00Z' },
-          securityPosture: { exposedPorts: 1, failedServices: 1, firewallDisabled: 1 },
-          collectors: [{ name: 'socket', sampleCount: 12, lastSeenAt: '2026-06-11T13:34:00Z' }],
-          states: {
-            sockets: [{
-              assetUid: 'nas',
-              localAddress: '0.0.0.0',
-              localPort: 22,
-              direction: 'listening',
-              processName: 'sshd'
-            }],
-            services: [{ assetUid: 'nas', name: 'ssh.service', status: 'failed' }],
-            firewalls: [{ assetUid: 'nas', backend: 'ufw', enabled: false }]
+      '/api/metrics/assets?range=1h': { body: assetMetrics },
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: nasDetail },
+      '/api/agent/logs?range=24h&severity=ALL&limit=20&assetUid=nas': {
+        body: [
+          {
+            assetUid: 'nas',
+            eventType: 'filesystem',
+            severity: 'ERROR',
+            message: 'Root filesystem full',
+            observedAt: '2026-07-06T11:58:00Z'
+          },
+          {
+            assetUid: 'nas',
+            eventType: 'kernel',
+            severity: 'WARNING',
+            message: 'Thermal zone warning',
+            observedAt: '2026-07-06T11:57:00Z'
+          },
+          {
+            assetUid: 'nas',
+            eventType: 'collector',
+            severity: 'INFO',
+            message: 'Collector heartbeat',
+            observedAt: '2026-07-06T11:56:00Z'
           }
-        } satisfies AgentDashboard
-      },
-      '/api/dashboards/snmp': {
-        body: {
-          polls: { success: 4, failure: 1 },
-          targets: ['edge-router'],
-          interfaces: [{
-            assetUid: 'edge-router',
-            interfaceName: 'wan0',
-            inBps: 2400000,
-            outBps: 1800000,
-            utilizationPct: 42.5,
-            errors: 2,
-            discards: 1,
-            status: 'up'
-          }]
-        } satisfies SnmpDashboard
-      },
-      '/api/agent/logs?range=1h&severity=ALL&limit=8': {
-        body: [{
-          assetUid: 'nas',
-          eventType: 'auth',
-          severity: 'WARNING',
-          message: 'SSH login failed for alice',
-          observedAt: '2026-06-11T13:33:00Z'
-        }]
-      },
-      '/api/traffic/interfaces?range=1h': {
-        body: [{
-          assetUid: 'nas',
-          interfaceName: 'enp2s0',
-          inBps: 4621.02,
-          outBps: 11663.97,
-          utilizationPct: 0,
-          errors: 0,
-          discards: 0,
-          status: 'up'
-        }]
-      },
-      '/api/metrics/assets?range=1h': {
-        body: assetMetrics
+        ]
       }
     });
 
     render(<OverviewView summary={summary} alerts={alerts} />);
 
     expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
-    expect(screen.getByText('상위 트래픽')).toBeInTheDocument();
-    expect(screen.getByText('보안/상태 신호')).toBeInTheDocument();
-    expect(screen.getByText('대응 큐')).toBeInTheDocument();
-    expect(screen.getByText('enp2s0')).toBeInTheDocument();
-    expect(screen.getByText('11.66 Kbps')).toBeInTheDocument();
-    expect(screen.getByText('0.0.0.0:22')).toBeInTheDocument();
-    expect(screen.getByText('ssh.service')).toBeInTheDocument();
-    expect(screen.getAllByText('SSH login failed for alice').length).toBeGreaterThan(0);
-    expect(screen.queryByText('로그 이벤트')).not.toBeInTheDocument();
-    expect(screen.getByText('CPU threshold exceeded')).toBeInTheDocument();
-    expect(screen.getByText('자산 리소스 Top')).toBeInTheDocument();
-    expect(screen.getByText('Disk I/O')).toBeInTheDocument();
+    expect(screen.getByText('지금 확인해야 할 장비와 그 이유를 먼저 보여줍니다.')).toBeInTheDocument();
+    expect(screen.getByText('전체 장비')).toBeInTheDocument();
+    expect(screen.getByText('문제 장비')).toBeInTheDocument();
+    expect(screen.getAllByText('수집 지연').length).toBeGreaterThan(0);
+    expect(screen.getByText('최근 수집')).toBeInTheDocument();
 
-    const criticalCard = screen.getByText('장애/경고').closest('section');
-    expect(criticalCard).not.toBeNull();
-    expect(within(criticalCard as HTMLElement).getByText('1/1')).toBeInTheDocument();
+    const board = screen.getByRole('heading', { name: '장비 상태 보드' }).closest('[data-slot="card"]');
+    expect(board).not.toBeNull();
+    expect(within(board as HTMLElement).getByText('상태')).toBeInTheDocument();
+    expect(within(board as HTMLElement).getByText('장비')).toBeInTheDocument();
+    expect(within(board as HTMLElement).getByText('마지막 수집')).toBeInTheDocument();
+    expect(within(board as HTMLElement).getByText('문제 근거')).toBeInTheDocument();
+    expect(within(board as HTMLElement).getByText('CPU/MEM/DISK/TEMP')).toBeInTheDocument();
+    expect(within(board as HTMLElement).getByText('RX/TX')).toBeInTheDocument();
+    expect(within(board as HTMLElement).queryByText('노출/서비스')).not.toBeInTheDocument();
+    expect(screen.getAllByText('nas').length).toBeGreaterThan(0);
+    expect(screen.getByText('x86host')).toBeInTheDocument();
+    expect(screen.getByText('security')).toBeInTheDocument();
+    expect(screen.getAllByText(/CPU 92\.1%/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/방화벽 비활성/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('TEMP').length).toBeGreaterThan(0);
+
+    expect(await screen.findByText('Root filesystem full')).toBeInTheDocument();
+    expect(screen.getByText('Thermal zone warning')).toBeInTheDocument();
+    expect(screen.getByText('ERROR')).toBeInTheDocument();
+    expect(screen.getByText('WARNING')).toBeInTheDocument();
+    expect(screen.queryByText('Collector heartbeat')).not.toBeInTheDocument();
+    expect(screen.queryByText('Listening ports')).not.toBeInTheDocument();
+    expect(screen.queryByText('sshd')).not.toBeInTheDocument();
+    expect(screen.getByText('Failed services')).toBeInTheDocument();
+    expect(screen.getByText('nginx.service')).toBeInTheDocument();
+    expect(screen.getByText('Firewall')).toBeInTheDocument();
+    expect(screen.getByText('ufw')).toBeInTheDocument();
+    expect(screen.getByText('Interfaces down')).toBeInTheDocument();
+    expect(screen.getByText('eth1')).toBeInTheDocument();
+
+    expect(screen.queryByText('운영 부하')).not.toBeInTheDocument();
+    expect(screen.queryByText('서비스 헬스')).not.toBeInTheDocument();
+    expect(screen.queryByText('장비별 노출 포트')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent 현황')).not.toBeInTheDocument();
+    expect(screen.queryByText('자산 리소스 Top')).not.toBeInTheDocument();
+    expect(screen.queryByText('최근 Critical 로그')).not.toBeInTheDocument();
   });
 
-  it('shows available traffic when a detail dashboard request stalls', async () => {
-    vi.useFakeTimers();
-    mockFetch({
-      '/api/dashboards/agent': { pending: true },
-      '/api/dashboards/snmp': {
-        body: {
-          polls: { success: 4, failure: 0 },
-          targets: ['edge-router'],
-          interfaces: []
-        } satisfies SnmpDashboard
-      },
-      '/api/agent/logs?range=1h&severity=ALL&limit=8': { body: [] },
-      '/api/traffic/interfaces?range=1h': {
-        body: [{
-          assetUid: 'nas',
-          interfaceName: 'enp2s0',
-          inBps: 1000,
-          outBps: 2000,
-          utilizationPct: 0,
-          errors: 0,
-          discards: 0,
-          status: 'up'
-        }]
-      },
-      '/api/metrics/assets?range=1h': {
-        body: assetMetrics
+  it('refreshes overview and selected resource series on the collection cadence', async () => {
+    let intervalHandler: TimerHandler | undefined;
+    const originalSetInterval = window.setInterval.bind(window);
+    vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
+      if (timeout === 30_000) {
+        intervalHandler = handler;
+        return 1 as unknown as NodeJS.Timeout;
+      }
+      return originalSetInterval(handler, timeout) as unknown as NodeJS.Timeout;
+    });
+
+    const refreshedAssetMetrics: AssetMetricsOverview = {
+      ...assetMetrics,
+      assets: assetMetrics.assets.map((asset) => asset.assetUid === 'nas'
+        ? {
+            ...asset,
+            lastSeenAt: '2026-07-06T12:00:30Z',
+            metrics: { ...asset.metrics, cpuUsagePct: 45 }
+          }
+        : asset)
+    };
+    const refreshedNasDetail: AssetMetricDetail = {
+      ...nasDetail,
+      asset: refreshedAssetMetrics.assets[0],
+      series: {
+        ...nasDetail.series,
+        cpu: [...(nasDetail.series.cpu ?? []), { timestamp: '2026-07-06T12:00:30Z', value: 45 }]
+      }
+    };
+
+    let overviewCalls = 0;
+    let detailCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/metrics/assets?range=1h') {
+        overviewCalls += 1;
+        return mockJsonResponse(overviewCalls === 1 ? assetMetrics : refreshedAssetMetrics);
+      }
+      if (path === '/api/metrics/assets/nas?range=1h&bucket=auto') {
+        detailCalls += 1;
+        return mockJsonResponse(detailCalls === 1 ? nasDetail : refreshedNasDetail);
+      }
+      if (path === '/api/agent/logs?range=24h&severity=ALL&limit=20&assetUid=nas') {
+        return mockJsonResponse([]);
+      }
+      return mockJsonResponse({}, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<OverviewView summary={summary} alerts={alerts} />);
+
+    expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
+    await waitFor(() => expect(detailCalls).toBe(1));
+    expect(intervalHandler).toEqual(expect.any(Function));
+
+    await act(async () => {
+      if (typeof intervalHandler === 'function') {
+        intervalHandler();
       }
     });
 
-    render(<OverviewView summary={{ ...summary, trafficTopInterfaces: [] }} alerts={[]} />);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5100);
-    });
-
-    expect(screen.getByText('enp2s0')).toBeInTheDocument();
-    expect(screen.getByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 개요를 표시합니다.')).toBeInTheDocument();
-    expect(screen.queryByText('관제 상세 정보를 갱신하는 중입니다.')).not.toBeInTheDocument();
+    await waitFor(() => expect(overviewCalls).toBe(2));
+    await waitFor(() => expect(detailCalls).toBe(2));
+    await waitFor(() => expect(screen.getAllByText('45.0%').length).toBeGreaterThan(0));
   });
 
-  it('keeps the overview usable when detail dashboards fail', async () => {
+  it('renders zero-valued CPU samples as a collected series', async () => {
+    const zeroCpuDetail: AssetMetricDetail = {
+      ...nasDetail,
+      asset: {
+        ...nasDetail.asset,
+        metrics: { ...nasDetail.asset.metrics, cpuUsagePct: 0 }
+      },
+      series: {
+        ...nasDetail.series,
+        cpu: [
+          { timestamp: '2026-07-06T11:50:00Z', value: 0 },
+          { timestamp: '2026-07-06T12:00:00Z', value: 0 }
+        ]
+      }
+    };
     mockFetch({
-      '/api/dashboards/agent': { status: 500, body: {} },
-      '/api/agent/logs?range=1h&severity=ALL&limit=8': { status: 500, body: {} },
-      '/api/dashboards/snmp': { status: 500, body: {} },
-      '/api/traffic/interfaces?range=1h': { status: 500, body: {} },
-      '/api/metrics/assets?range=1h': { status: 500, body: {} }
+      '/api/metrics/assets?range=1h': { body: assetMetrics },
+      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: zeroCpuDetail },
+      '/api/agent/logs?range=24h&severity=ALL&limit=20&assetUid=nas': { body: [] }
     });
 
-    render(<OverviewView summary={{ ...summary, trafficTopInterfaces: [] }} alerts={[]} />);
+    render(<OverviewView summary={summary} alerts={alerts} />);
 
-    expect(await screen.findByText('일부 관제 정보를 불러오지 못했습니다. 수집된 기본 신호로 개요를 표시합니다.')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '관리 장비' })).toBeInTheDocument();
-    expect(screen.getByText('트래픽 신호 대기')).toBeInTheDocument();
-    expect(screen.getByText('대응 대기 없음')).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'CPU 시계열' })).toBeInTheDocument();
+    expect(screen.queryByText('series 대기')).not.toBeInTheDocument();
+  });
+
+  it('falls back to registered assets when asset metrics fail', async () => {
+    mockFetch({
+      '/api/metrics/assets?range=1h': { status: 500, body: {} },
+      '/api/metrics/assets/registered-only?range=1h&bucket=auto': { status: 500, body: {} },
+      '/api/agent/logs?range=24h&severity=ALL&limit=20&assetUid=registered-only': { status: 500, body: {} }
+    });
+
+    render(<OverviewView summary={summary} alerts={[]} assets={[registeredAsset]} />);
+
+    expect(await screen.findByText('장비 상태 정보를 불러오지 못했습니다. 등록 자산 기준으로 표시합니다.')).toBeInTheDocument();
+    expect(screen.getAllByText('registered-only').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('수집 지연').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('수집 데이터 없음').length).toBeGreaterThan(0);
+    expect(screen.getByText('선택 장비의 일부 진단 정보를 불러오지 못했습니다.')).toBeInTheDocument();
   });
 });
 
 const summary: DashboardSummary = {
-  activeAssets: 7,
-  criticalAlerts: 3,
-  agentHealth: { healthy: 1, stale: 1 },
-  snmpPollHealth: { success: 2, failure: 1 },
+  activeAssets: 3,
+  criticalAlerts: 1,
+  agentHealth: { healthy: 2, stale: 1 },
+  snmpPollHealth: { success: 0, failure: 0 },
   trafficTopInterfaces: []
 };
 
 const alerts: AlertRow[] = [
   { id: 1, severity: 'CRITICAL', status: 'ACTIVE', title: 'CPU threshold exceeded' },
-  { id: 2, severity: 'WARNING', status: 'ACTIVE', title: 'Interface error spike' },
-  { id: 3, severity: 'CRITICAL', status: 'RESOLVED', title: 'Resolved critical' }
+  { id: 2, severity: 'WARNING', status: 'ACTIVE', title: 'Interface down' }
 ];
 
-const assetMetrics = {
+const assetMetrics: AssetMetricsOverview = {
   range: '1h',
   summary: {
-    totalAssets: 2,
-    observedAssets: 2,
-    staleAssets: 0,
+    totalAssets: 3,
+    observedAssets: 3,
+    staleAssets: 1,
     criticalAssets: 1,
-    warningAssets: 0
+    warningAssets: 1,
+    totalNetworkInBps: 23500,
+    totalNetworkOutBps: 15200
   },
   assets: [
     {
@@ -180,43 +227,142 @@ const assetMetrics = {
       name: 'nas',
       assetType: 'LINUX_SERVER',
       managementIp: '192.168.50.21',
-      location: 'Seoul HQ',
+      location: 'rack-a',
       status: 'active',
+      lastSeenAt: '2026-07-06T12:00:00Z',
+      stale: false,
       health: 'critical',
-      sources: { registered: true, agent: true, traffic: true, diskIo: true, observed: true },
+      sources: { registered: true, agent: true, traffic: true, diskIo: true, security: true, observed: true },
       metrics: {
-        cpuUsagePct: 91.2,
-        memoryUsagePct: 67.8,
-        diskUsagePct: 72.4,
-        diskIoUtilizationPct: 87.5,
-        networkInBps: 4621.02,
-        networkOutBps: 11663.97
+        cpuUsagePct: 92.1,
+        memoryUsagePct: 71.4,
+        diskUsagePct: 86.2,
+        diskIoUtilizationPct: 88.8,
+        temperatureCelsius: 82.4,
+        networkInBps: 12000,
+        networkOutBps: 9000
+      },
+      security: {
+        openPorts: 21,
+        failedServices: 1,
+        firewallDisabled: 1,
+        interfacesDown: 1,
+        securityEvents: 3
+      },
+      signals: {
+        reasons: [
+          { code: 'cpu_usage', label: 'CPU', severity: 'critical', detail: '92.1%' },
+          { code: 'firewall_disabled', label: '방화벽 비활성', severity: 'warning', detail: '1 disabled' },
+          { code: 'event_error', label: 'ERROR 이벤트', severity: 'critical', detail: '2 events' }
+        ],
+        interfacesDown: 1,
+        eventCounts: { ERROR: 2, WARNING: 1 },
+        lastEventAt: '2026-07-06T11:58:00Z',
+        collectorFreshness: { stale: false, lastSeenAt: '2026-07-06T12:00:00Z', ageSeconds: 12 }
       }
     },
     {
-      assetUid: 'edge-router',
-      name: 'edge-router',
-      assetType: 'ROUTER',
-      managementIp: '10.0.0.1',
-      location: 'Seoul HQ',
+      assetUid: 'x86host',
+      name: 'x86host',
+      assetType: 'LINUX_SERVER',
+      managementIp: '192.168.50.22',
+      location: 'rack-b',
       status: 'active',
+      lastSeenAt: '2026-07-06T11:42:00Z',
+      stale: true,
       health: 'warning',
-      sources: { registered: true, traffic: true, observed: true },
+      sources: { registered: true, agent: true, traffic: true, observed: true },
       metrics: {
-        cpuUsagePct: 42.1,
-        memoryUsagePct: 55.4,
-        diskUsagePct: 68.2,
-        diskIoUtilizationPct: 42.5,
-        networkInBps: 1200000,
-        networkOutBps: 900000
+        cpuUsagePct: 14.2,
+        memoryUsagePct: 33.1,
+        diskUsagePct: 52.0,
+        temperatureCelsius: 63.0,
+        networkInBps: 10000,
+        networkOutBps: 5000
+      },
+      security: { openPorts: 20, failedServices: 0, firewallDisabled: 0, interfacesDown: 2 },
+      signals: {
+        reasons: [{ code: 'stale', label: '수집 지연', severity: 'warning', detail: '18m' }],
+        interfacesDown: 2,
+        eventCounts: { WARNING: 1 },
+        lastEventAt: '2026-07-06T11:30:00Z',
+        collectorFreshness: { stale: true, lastSeenAt: '2026-07-06T11:42:00Z', ageSeconds: 1080 }
+      }
+    },
+    {
+      assetUid: 'security',
+      name: 'security',
+      assetType: 'LINUX_SERVER',
+      managementIp: '192.168.50.25',
+      location: 'rack-c',
+      status: 'active',
+      lastSeenAt: '2026-07-06T12:01:00Z',
+      stale: false,
+      health: 'healthy',
+      sources: { registered: true, agent: true, traffic: true, observed: true },
+      metrics: {
+        cpuUsagePct: 2.5,
+        memoryUsagePct: 5.3,
+        diskUsagePct: 45,
+        temperatureCelsius: 46.9,
+        networkInBps: 1500,
+        networkOutBps: 1200
+      },
+      security: { openPorts: 10, failedServices: 0, firewallDisabled: 0, interfacesDown: 0 },
+      signals: {
+        reasons: [],
+        interfacesDown: 0,
+        eventCounts: {},
+        lastEventAt: null,
+        collectorFreshness: { stale: false, lastSeenAt: '2026-07-06T12:01:00Z', ageSeconds: 8 }
       }
     }
   ]
 };
 
+const nasDetail: AssetMetricDetail = {
+  range: '1h',
+  bucket: 'auto',
+  asset: assetMetrics.assets[0],
+  series: {
+    cpu: [
+      { timestamp: '2026-07-06T11:50:00Z', value: 81 },
+      { timestamp: '2026-07-06T12:00:00Z', value: 92.1 }
+    ],
+    memory: [
+      { timestamp: '2026-07-06T11:50:00Z', value: 66 },
+      { timestamp: '2026-07-06T12:00:00Z', value: 71.4 }
+    ],
+    disk: [
+      { timestamp: '2026-07-06T11:50:00Z', value: 84 },
+      { timestamp: '2026-07-06T12:00:00Z', value: 86.2 }
+    ],
+    network: [
+      { timestamp: '2026-07-06T11:50:00Z', inBps: 9000, outBps: 7000 },
+      { timestamp: '2026-07-06T12:00:00Z', inBps: 12000, outBps: 9000 }
+    ]
+  },
+  sockets: [
+    { assetUid: 'nas', protocol: 'tcp', localAddress: '0.0.0.0', localPort: 22, direction: 'listening', processName: 'sshd' }
+  ],
+  services: [{ assetUid: 'nas', name: 'nginx.service', status: 'failed' }],
+  firewalls: [{ assetUid: 'nas', backend: 'ufw', enabled: false, ruleCount: 0 }],
+  interfaceStates: [{ assetUid: 'nas', name: 'eth1', operStatus: 'down' }],
+  processes: [{ assetUid: 'nas', pid: 991, name: 'clickhouse', memoryBytes: 536870912, listeningSocketCount: 1, connectedSocketCount: 2 }]
+};
+
+const registeredAsset: Asset = {
+  id: 99,
+  assetUid: 'registered-only',
+  name: 'registered-only',
+  assetType: 'LINUX_SERVER',
+  managementIp: '192.168.50.99',
+  location: 'lab',
+  status: 'active'
+};
+
 type MockResponse = {
   body?: unknown;
-  pending?: boolean;
   status?: number;
 };
 
@@ -224,17 +370,18 @@ function mockFetch(responses: Record<string, MockResponse>) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
     const response = responses[path] ?? { status: 404, body: {} };
-    if (response.pending) {
-      return new Promise(() => undefined);
-    }
     const status = response.status ?? 200;
-    return {
-      ok: status < 400,
-      status,
-      statusText: status < 400 ? 'OK' : 'Error',
-      json: async () => response.body
-    };
+    return mockJsonResponse(response.body, status);
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
+}
+
+function mockJsonResponse(body: unknown, status = 200) {
+  return {
+    ok: status < 400,
+    status,
+    statusText: status < 400 ? 'OK' : 'Error',
+    json: async () => body
+  };
 }

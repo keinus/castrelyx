@@ -105,11 +105,31 @@ export type AssetMetricSummary = {
     diskReadIops?: number | null;
     diskWriteIops?: number | null;
     diskIoUtilizationPct?: number | null;
+    temperatureCelsius?: number | null;
   };
   security?: {
     openPorts?: number;
     failedServices?: number;
     firewallDisabled?: number;
+    interfacesDown?: number;
+    securityEvents?: number;
+    events?: AgentEventSummary[];
+  };
+  signals?: {
+    reasons?: Array<{
+      code?: string;
+      label?: string;
+      severity?: 'warning' | 'critical' | string;
+      detail?: string | null;
+    }>;
+    interfacesDown?: number;
+    eventCounts?: Record<string, number>;
+    lastEventAt?: string | null;
+    collectorFreshness?: {
+      stale?: boolean;
+      lastSeenAt?: string | null;
+      ageSeconds?: number;
+    };
   };
 };
 
@@ -169,6 +189,9 @@ export type AssetMetricDetail = {
   interfaces?: InterfaceTraffic[];
   processes?: AgentProcessState[];
   sockets?: AgentSocketState[];
+  services?: AgentServiceState[];
+  firewalls?: AgentFirewallState[];
+  interfaceStates?: AgentInterfaceState[];
   security?: AssetMetricSummary['security'];
   collectors?: AgentCollectorSummary[];
 };
@@ -196,6 +219,7 @@ export type AgentDashboard = {
     sockets?: AgentSocketState[];
     services?: AgentServiceState[];
     firewalls?: AgentFirewallState[];
+    interfaces?: AgentInterfaceState[];
     processes?: AgentProcessState[];
     packages?: AgentPackageState[];
   };
@@ -250,6 +274,64 @@ export type AgentEventSummary = {
 
 export type AgentLogEvent = AgentEventSummary;
 
+export type AssetFileRoot = {
+  name: string;
+  path: string;
+};
+
+export type AssetFileEntry = {
+  name: string;
+  path: string;
+  type: 'directory' | 'file' | 'symlink' | string;
+  directory: boolean;
+  sizeBytes: number;
+  modifiedAt?: string;
+  readOnly: boolean;
+  hidden: boolean;
+  extension?: string;
+};
+
+export type AssetFileListResponse = {
+  path: string;
+  roots: AssetFileRoot[];
+  entries: AssetFileEntry[];
+};
+
+export type AssetFileCommand = {
+  commandId: string;
+  agentId: string;
+  operation: string;
+  requestJson?: string;
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string;
+  responseJson?: string;
+  errorMessage?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  expiresAt?: string;
+  claimedAt?: string;
+  completedAt?: string;
+};
+
+export type RemoteAccessSession = {
+  id: string;
+  assetId?: number | null;
+  assetUid?: string | null;
+  agentId: string;
+  sshUser: string;
+  targetHost: string;
+  targetPort: number;
+  status: string;
+  publicKeyFingerprint: string;
+  authorizationTaskId?: string | null;
+  revokeTaskId?: string | null;
+  createdAt: string;
+  expiresAt: string;
+  connectedAt?: string | null;
+  closedAt?: string | null;
+  closeReason?: string | null;
+  lastError?: string | null;
+};
+
 export type AgentSocketState = {
   assetUid?: string;
   sourceId?: string;
@@ -282,6 +364,18 @@ export type AgentFirewallState = {
   profile?: string;
   enabled?: boolean;
   ruleCount?: number;
+  observedAt?: string;
+};
+
+export type AgentInterfaceState = {
+  assetUid?: string;
+  name?: string;
+  operStatus?: string;
+  status?: string;
+  flags?: string;
+  macAddress?: string;
+  mtu?: number;
+  addresses?: string[];
   observedAt?: string;
 };
 

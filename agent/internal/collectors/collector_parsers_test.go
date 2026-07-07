@@ -256,11 +256,113 @@ func TestBuildLogEventItemCreatesPlatformLogEvent(t *testing.T) {
 	}
 }
 
+func TestLinuxFileLogSourcesIncludeSuricataAndZeek(t *testing.T) {
+	sources := linuxFileLogSources()
+	if !containsString(sources, "/var/log/suricata/eve.json") {
+		t.Fatalf("suricata eve source missing from %#v", sources)
+	}
+	if !containsString(sources, "/var/log/zeek/current/notice.log") {
+		t.Fatalf("zeek notice source missing from %#v", sources)
+	}
+	if !containsString(sources, "/opt/zeek/logs/current/conn.log") {
+		t.Fatalf("opt zeek conn source missing from %#v", sources)
+	}
+}
+
+func TestSuricataEveLogBuildsSecurityEvent(t *testing.T) {
+	item := buildLinuxLogEventItem(
+		"/var/log/suricata/eve.json",
+		`{"timestamp":"2026-06-27T01:02:03.123456+0000","flow_id":12345,"event_type":"alert","src_ip":"10.0.0.5","src_port":51515,"dest_ip":"10.0.0.10","dest_port":443,"proto":"TCP","alert":{"signature_id":2024218,"signature":"ET MALWARE Example C2","category":"A Network Trojan was detected","severity":1}}`,
+		1024,
+	)
+
+	payload := item.Payload.(map[string]any)
+	if payload["event_type"] != "suricata.alert" || payload["event_category"] != "security" || payload["severity"] != "ERROR" {
+		t.Fatalf("unexpected suricata payload: %#v", payload)
+	}
+	if payload["provider"] != "suricata" || payload["signature"] != "ET MALWARE Example C2" || payload["src_ip"] != "10.0.0.5" {
+		t.Fatalf("suricata fields not preserved: %#v", payload)
+	}
+	if !strings.Contains(payload["message"].(string), "ET MALWARE Example C2") {
+		t.Fatalf("suricata message missing signature: %#v", payload)
+	}
+}
+
+func TestZeekNoticeLogBuildsSecurityEvent(t *testing.T) {
+	line := strings.Join([]string{
+		"1790000000.123456",
+		"CNtice1",
+		"10.0.0.5",
+		"51515",
+		"10.0.0.10",
+		"443",
+		"tcp",
+		"SSL::Invalid_Server_Cert",
+		"SSL certificate validation failed",
+		"CN=example",
+		"10.0.0.5",
+		"10.0.0.10",
+		"443",
+		"-",
+		"worker-1",
+		"Notice::ACTION_LOG",
+		"3600.000000",
+		"F",
+	}, "\t")
+
+	item := buildLinuxLogEventItem("/var/log/zeek/current/notice.log", line, 1024)
+
+	payload := item.Payload.(map[string]any)
+	if payload["event_type"] != "zeek.notice" || payload["event_category"] != "security" || payload["severity"] != "WARNING" {
+		t.Fatalf("unexpected zeek payload: %#v", payload)
+	}
+	if payload["provider"] != "zeek" || payload["uid"] != "CNtice1" || payload["note"] != "SSL::Invalid_Server_Cert" {
+		t.Fatalf("zeek fields not preserved: %#v", payload)
+	}
+	if payload["src_ip"] != "10.0.0.5" || payload["dest_port"] != 443 {
+		t.Fatalf("zeek endpoint fields not parsed: %#v", payload)
+	}
+}
+
+func TestZeekHeaderLinesAreSkippedByFileTailer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zeek", "current", "conn.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		"#separator \\x09",
+		"#fields\tts\tuid\tid.orig_h\tid.orig_p\tid.resp_h\tid.resp_p\tproto\tservice\tduration\torig_bytes\tresp_bytes\tconn_state",
+		"1790000000.123456\tCConn1\t10.0.0.5\t51515\t10.0.0.10\t443\ttcp\tssl\t1.1\t42\t100\tSF",
+		"",
+	}, "\n")
+	writeTestFile(t, path, content)
+
+	items := collectLinuxFileLogSource(path, Options{LogMessageMaxBytes: 1024}, newLogCursorState())
+
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1: %#v", len(items), items)
+	}
+	payload := items[0].Payload.(map[string]any)
+	if payload["event_type"] != "zeek.conn" || payload["connection_state"] != "SF" {
+		t.Fatalf("unexpected zeek conn payload: %#v", payload)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLinuxLogTailerUsesCursorForIncrementalFileReads(t *testing.T) {

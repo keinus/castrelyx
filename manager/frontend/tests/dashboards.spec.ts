@@ -6,8 +6,12 @@ test('renders overview, traffic, agent, and snmp dashboards', async ({ page }) =
 
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Traffic' })).toBeVisible();
-  await expect(page.getByText('CPU threshold exceeded')).toBeVisible();
+  await expect(page.getByText('장애/경고')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '장비별 트래픽' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '장비별 노출 포트' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '최근 Critical 로그' })).toBeVisible();
   await expect(page.getByText('11.66 Kbps', { exact: true })).toBeVisible();
+  await expect(page.getByText('enp2s0')).not.toBeVisible();
 
   await page.getByRole('button', { name: 'Traffic' }).click();
   await expect(page.getByRole('heading', { name: 'Traffic', exact: true })).toBeVisible();
@@ -34,7 +38,8 @@ test('overview dashboard stacks cleanly on a narrow viewport', async ({ page }) 
   await page.goto('/');
 
   await expect(page.getByRole('button', { name: 'Traffic' })).toBeVisible();
-  await expect(page.locator('.overview-panel').filter({ hasText: '상위 트래픽' })).toBeVisible();
-  await expect(page.locator('.overview-panel').filter({ hasText: '대응 큐' })).toBeVisible();
-  await expect(page.getByText('enp2s0')).toBeVisible();
+  await expect(page.locator('.overview-panel').filter({ hasText: '장비별 트래픽' })).toBeVisible();
+  await expect(page.locator('.overview-panel').filter({ hasText: '장비별 노출 포트' })).toBeVisible();
+  await expect(page.getByText('Agent 현황')).toBeVisible();
+  await expect(page.getByText('enp2s0')).not.toBeVisible();
 });

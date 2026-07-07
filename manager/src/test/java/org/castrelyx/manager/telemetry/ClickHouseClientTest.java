@@ -37,6 +37,16 @@ class ClickHouseClientTest {
   }
 
   @Test
+  void assetMetricFiltersIncludeTemperatureTelemetry() {
+    assertThat(ClickHouseClient.assetMetricCanonicalFilter())
+        .contains("metric_name IN")
+        .contains("'host.temperature.celsius'");
+    assertThat(ClickHouseClient.assetMetricRawFilter())
+        .contains("item_key IN")
+        .contains("'host.temperature.celsius'");
+  }
+
+  @Test
   void hidesInternalTrafficInterfaces() {
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("eth0")).isTrue();
     assertThat(TrafficInterfaceFilter.isVisibleTrafficInterface("wan0")).isTrue();
@@ -93,5 +103,32 @@ class ClickHouseClientTest {
         .containsEntry("direction", "listening")
         .containsEntry("processName", "sshd");
     assertThat(row.get("observedAt")).isEqualTo("2026-06-11T13:34:00Z");
+  }
+
+  @Test
+  void extractsInterfaceStatePayloadForDashboardStateRows() {
+    Map<String, Object> row = ClickHouseClient.rawStateRow(Map.of(
+        "source_id", "security",
+        "asset_uid", "security",
+        "state_type", "interface",
+        "state_key", "eth1",
+        "observed_at", "2026-07-06 12:00:00",
+        "event_json", """
+            {
+              "payload": {
+                "name": "eth1",
+                "oper_status": "down",
+                "mac_address": "02:00:00:00:00:01"
+              }
+            }
+            """));
+
+    assertThat(row)
+        .containsEntry("assetUid", "security")
+        .containsEntry("stateType", "interface")
+        .containsEntry("name", "eth1")
+        .containsEntry("operStatus", "down")
+        .containsEntry("macAddress", "02:00:00:00:00:01");
+    assertThat(row.get("observedAt")).isEqualTo("2026-07-06T12:00:00Z");
   }
 }

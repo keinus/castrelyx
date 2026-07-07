@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -31,7 +33,7 @@ const (
 )
 
 var (
-	syslogLinePattern = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d{1,2}\s+\d\d:\d\d:\d\d)\s+(\S+)\s+([^:\[]+)(?:\[(\d+)\])?:\s?(.*)$`)
+	syslogLinePattern       = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d{1,2}\s+\d\d:\d\d:\d\d)\s+(\S+)\s+([^:\[]+)(?:\[(\d+)\])?:\s?(.*)$`)
 	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|api[_-]?key|authorization|secret|credential)\b\s*[:=]\s*[^,\s;]+`)
 	bearerTokenPattern      = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
 	userForPattern          = regexp.MustCompile(`\bfor (?:invalid user )?([A-Za-z0-9._@+-]+)`)
@@ -71,6 +73,7 @@ type normalizedLogEvent struct {
 	Outcome       string
 	Message       string
 	RecordRef     string
+	Fields        map[string]any
 }
 
 type linuxLogLine struct {
@@ -112,18 +115,44 @@ func collectPlatformLogEvents(options Options, state *logCursorState) []envelope
 }
 
 func collectLinuxLogEvents(options Options, state *logCursorState) []envelope.Item {
+	items := []envelope.Item{}
+	for _, source := range linuxFileLogSources() {
+		items = append(items, collectLinuxFileLogSource(source, options, state)...)
+	}
+	items = append(items, collectLinuxJournalEvents(options, state)...)
+	return items
+}
+
+func linuxFileLogSources() []string {
 	sources := []string{
 		"/var/log/auth.log",
 		"/var/log/secure",
 		"/var/log/syslog",
 		"/var/log/messages",
+		"/var/log/suricata/eve.json",
+		"/var/log/suricata/fast.log",
+		"/var/log/suricata/suricata.log",
 	}
-	items := []envelope.Item{}
-	for _, source := range sources {
-		items = append(items, collectLinuxFileLogSource(source, options, state)...)
+	zeekDirs := []string{
+		"/var/log/zeek/current",
+		"/opt/zeek/logs/current",
+		"/usr/local/zeek/logs/current",
+		"/var/log/bro/current",
 	}
-	items = append(items, collectLinuxJournalEvents(options, state)...)
-	return items
+	zeekLogs := []string{
+		"conn.log",
+		"notice.log",
+		"dns.log",
+		"http.log",
+		"ssl.log",
+		"weird.log",
+	}
+	for _, dir := range zeekDirs {
+		for _, name := range zeekLogs {
+			sources = append(sources, slashpath.Join(dir, name))
+		}
+	}
+	return dedupeStrings(sources)
 }
 
 func collectLinuxFileLogSource(path string, options Options, state *logCursorState) []envelope.Item {
@@ -173,7 +202,7 @@ func collectLinuxFileLogSource(path string, options Options, state *logCursorSta
 	items := make([]envelope.Item, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || shouldSkipLinuxFileLogLine(path, line) {
 			continue
 		}
 		items = append(items, buildLinuxLogEventItem(path, line, options.LogMessageMaxBytes))
@@ -329,7 +358,9 @@ func buildLinuxLogEventItem(sourceName, line string, maxMessageBytes int) envelo
 	if event.Message == "" {
 		event.Message = line
 	}
-	classifyLinuxLog(&event)
+	if !classifySuricataLog(&event, line) && !classifyZeekLog(&event, line) {
+		classifyLinuxLog(&event)
+	}
 	return buildNormalizedLogEventItem(event, maxMessageBytes)
 }
 
@@ -396,6 +427,15 @@ func buildNormalizedLogEventItem(event normalizedLogEvent, maxMessageBytes int) 
 	}
 	if event.RecordID != 0 {
 		payload["record_id"] = event.RecordID
+	}
+	for key, value := range event.Fields {
+		if key == "" || value == nil {
+			continue
+		}
+		if _, exists := payload[key]; exists {
+			continue
+		}
+		payload[key] = value
 	}
 	return envelope.Item{
 		Kind:    "event",
@@ -478,6 +518,111 @@ func classifyLinuxLog(event *normalizedLogEvent) {
 	}
 }
 
+func classifySuricataLog(event *normalizedLogEvent, line string) bool {
+	if !isSuricataLogSource(event.SourceName) {
+		return false
+	}
+	event.Channel = "suricata"
+	event.Provider = "suricata"
+	event.Program = firstNonBlank(event.Program, "suricata")
+	event.EventCategory = "security"
+	event.EventType = "suricata.event"
+	event.Action = "observe"
+	event.Outcome = "unknown"
+	event.Severity = firstNonBlank(event.Severity, "INFO")
+	event.Fields = mergeFields(event.Fields, map[string]any{
+		"sensor":     "suricata",
+		"log_family": "ids",
+	})
+
+	row := map[string]any{}
+	if strings.HasSuffix(strings.ToLower(filepath.Base(event.SourceName)), ".json") && json.Unmarshal([]byte(line), &row) == nil {
+		eventType := jsonString(row, "event_type")
+		event.EventType = "suricata." + firstNonBlank(eventType, "event")
+		event.EventTime = firstNonBlank(jsonString(row, "timestamp"), event.EventTime)
+		event.RecordRef = firstNonBlank(jsonString(row, "flow_id"), event.RecordRef)
+		fields := map[string]any{
+			"suricata_event_type": eventType,
+			"src_ip":              jsonString(row, "src_ip"),
+			"src_port":            jsonNumberValue(row, "src_port"),
+			"dest_ip":             jsonString(row, "dest_ip"),
+			"dest_port":           jsonNumberValue(row, "dest_port"),
+			"proto":               jsonString(row, "proto"),
+			"flow_id":             jsonString(row, "flow_id"),
+			"app_proto":           jsonString(row, "app_proto"),
+		}
+		if alert, ok := jsonObject(row, "alert"); ok {
+			signature := jsonString(alert, "signature")
+			severityValue := jsonNumberValue(alert, "severity")
+			event.EventType = "suricata.alert"
+			event.Action = "detect"
+			event.Outcome = "detected"
+			event.Severity = suricataSeverity(severityValue)
+			event.Message = suricataMessage(row, signature)
+			fields["signature"] = signature
+			fields["signature_id"] = jsonNumberValue(alert, "signature_id")
+			fields["signature_category"] = jsonString(alert, "category")
+			fields["signature_severity"] = severityValue
+		} else if event.Message == "" || event.Message == line {
+			event.Message = suricataMessage(row, eventType)
+		}
+		event.Fields = mergeFields(event.Fields, fields)
+		return true
+	}
+
+	base := strings.ToLower(filepath.Base(event.SourceName))
+	if strings.Contains(base, "fast") {
+		event.EventType = "suricata.alert"
+		event.Action = "detect"
+		event.Outcome = "detected"
+		event.Severity = "WARNING"
+	} else {
+		event.EventType = "suricata.log"
+	}
+	event.Message = line
+	return true
+}
+
+func classifyZeekLog(event *normalizedLogEvent, line string) bool {
+	if !isZeekLogSource(event.SourceName) {
+		return false
+	}
+	event.Channel = "zeek"
+	event.Provider = "zeek"
+	event.Program = firstNonBlank(event.Program, "zeek")
+	event.EventCategory = "security"
+	event.EventType = "zeek.event"
+	event.Action = "observe"
+	event.Outcome = "observed"
+	event.Severity = "INFO"
+
+	logType := zeekLogType(event.SourceName)
+	fields := parseZeekLogFields(logType, line)
+	if len(fields) == 0 {
+		event.EventType = "zeek." + firstNonBlank(logType, "log")
+		event.Message = limitStringBytes(line, defaultLogMessageMaxBytes)
+		event.Fields = mergeFields(event.Fields, map[string]any{
+			"sensor":        "zeek",
+			"log_family":    "network-security",
+			"zeek_log_type": logType,
+		})
+		return true
+	}
+
+	event.EventType = "zeek." + logType
+	event.EventTime = zeekTimestamp(fields["ts"])
+	event.RecordRef = firstNonBlank(fields["uid"], event.RecordRef)
+	event.Message = zeekMessage(logType, fields)
+	if logType == "notice" || logType == "weird" {
+		event.Severity = "WARNING"
+	}
+	if logType == "notice" {
+		event.Action = "notice"
+	}
+	event.Fields = mergeFields(event.Fields, zeekPayloadFields(logType, fields))
+	return true
+}
+
 func classifyWindowsLog(event *normalizedLogEvent) {
 	channel := strings.ToLower(event.Channel)
 	switch event.EventID {
@@ -538,6 +683,329 @@ func classifyWindowsLog(event *normalizedLogEvent) {
 	if event.Actor == "" {
 		event.Actor = extractActor(event.Message)
 	}
+}
+
+func shouldSkipLinuxFileLogLine(sourceName, line string) bool {
+	return isZeekLogSource(sourceName) && strings.HasPrefix(line, "#")
+}
+
+func isSuricataLogSource(sourceName string) bool {
+	normalized := strings.ToLower(filepath.ToSlash(sourceName))
+	return strings.Contains(normalized, "/suricata/")
+}
+
+func isZeekLogSource(sourceName string) bool {
+	normalized := strings.ToLower(filepath.ToSlash(sourceName))
+	return strings.Contains(normalized, "/zeek/logs/current/") ||
+		strings.Contains(normalized, "/zeek/current/") ||
+		strings.Contains(normalized, "/bro/current/")
+}
+
+func suricataSeverity(value any) string {
+	switch v := value.(type) {
+	case float64:
+		return suricataSeverityNumber(int(v))
+	case int:
+		return suricataSeverityNumber(v)
+	case int64:
+		return suricataSeverityNumber(int(v))
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil {
+			return suricataSeverityNumber(n)
+		}
+	}
+	return "INFO"
+}
+
+func suricataSeverityNumber(value int) string {
+	switch {
+	case value <= 0:
+		return "INFO"
+	case value == 1:
+		return "ERROR"
+	case value == 2:
+		return "WARNING"
+	default:
+		return "INFO"
+	}
+}
+
+func suricataMessage(row map[string]any, fallback string) string {
+	eventType := firstNonBlank(jsonString(row, "event_type"), fallback, "event")
+	signature := ""
+	if alert, ok := jsonObject(row, "alert"); ok {
+		signature = jsonString(alert, "signature")
+	}
+	left := endpointLabel(jsonString(row, "src_ip"), jsonNumberValue(row, "src_port"))
+	right := endpointLabel(jsonString(row, "dest_ip"), jsonNumberValue(row, "dest_port"))
+	proto := jsonString(row, "proto")
+	parts := []string{"suricata", eventType}
+	if signature != "" {
+		parts = append(parts, signature)
+	}
+	if left != "" || right != "" {
+		flow := strings.TrimSpace(left + " -> " + right)
+		if proto != "" {
+			flow += " (" + proto + ")"
+		}
+		parts = append(parts, flow)
+	}
+	return strings.Join(nonEmptyStrings(parts), " ")
+}
+
+func zeekLogType(sourceName string) string {
+	base := strings.ToLower(filepath.Base(sourceName))
+	return strings.TrimSuffix(base, ".log")
+}
+
+func parseZeekLogFields(logType, line string) map[string]string {
+	names := zeekKnownFields(logType)
+	if len(names) == 0 {
+		return nil
+	}
+	parts := strings.Split(line, "\t")
+	if len(parts) < len(names) {
+		spaceParts := strings.Fields(line)
+		if len(spaceParts) >= len(names) {
+			parts = spaceParts
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	fields := make(map[string]string, len(names))
+	for i, name := range names {
+		if i >= len(parts) {
+			break
+		}
+		value := strings.TrimSpace(parts[i])
+		if value == "-" || value == "(empty)" {
+			value = ""
+		}
+		fields[name] = value
+	}
+	return fields
+}
+
+func zeekKnownFields(logType string) []string {
+	switch logType {
+	case "conn":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto", "service", "duration", "orig_bytes", "resp_bytes", "conn_state"}
+	case "notice":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto", "note", "msg", "sub", "src", "dst", "p", "n", "peer_descr", "actions", "suppress_for", "dropped"}
+	case "dns":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto", "trans_id", "rtt", "query", "qclass", "qclass_name", "qtype", "qtype_name", "rcode", "rcode_name"}
+	case "http":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "trans_depth", "method", "host", "uri", "referrer", "version", "user_agent", "origin", "request_body_len", "response_body_len", "status_code", "status_msg"}
+	case "ssl":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "version", "cipher", "curve", "server_name", "resumed", "last_alert", "next_protocol", "established", "cert_chain_fuids", "client_cert_chain_fuids", "subject", "issuer", "client_subject", "client_issuer", "validation_status"}
+	case "weird":
+		return []string{"ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "name", "addl", "notice", "peer"}
+	default:
+		return nil
+	}
+}
+
+func zeekTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return ""
+	}
+	whole, frac := math.Modf(seconds)
+	return time.Unix(int64(whole), int64(frac*1_000_000_000)).UTC().Format(time.RFC3339Nano)
+}
+
+func zeekMessage(logType string, fields map[string]string) string {
+	src := endpointLabel(fields["id.orig_h"], fields["id.orig_p"])
+	dst := endpointLabel(fields["id.resp_h"], fields["id.resp_p"])
+	switch logType {
+	case "conn":
+		return strings.TrimSpace(fmt.Sprintf("zeek conn %s %s -> %s service=%s state=%s",
+			fields["proto"], src, dst, fields["service"], fields["conn_state"]))
+	case "notice":
+		return strings.TrimSpace(fmt.Sprintf("zeek notice %s %s", fields["note"], firstNonBlank(fields["msg"], fields["sub"])))
+	case "dns":
+		return strings.TrimSpace(fmt.Sprintf("zeek dns %s rcode=%s %s -> %s",
+			fields["query"], fields["rcode_name"], src, dst))
+	case "http":
+		return strings.TrimSpace(fmt.Sprintf("zeek http %s %s%s status=%s",
+			fields["method"], fields["host"], fields["uri"], fields["status_code"]))
+	case "ssl":
+		return strings.TrimSpace(fmt.Sprintf("zeek ssl %s version=%s validation=%s %s -> %s",
+			fields["server_name"], fields["version"], fields["validation_status"], src, dst))
+	case "weird":
+		return strings.TrimSpace(fmt.Sprintf("zeek weird %s %s", fields["name"], fields["addl"]))
+	default:
+		return strings.TrimSpace("zeek " + logType + " " + strings.Join(nonEmptyStrings([]string{src, "->", dst}), " "))
+	}
+}
+
+func zeekPayloadFields(logType string, fields map[string]string) map[string]any {
+	payload := map[string]any{
+		"sensor":        "zeek",
+		"log_family":    "network-security",
+		"zeek_log_type": logType,
+		"uid":           fields["uid"],
+		"src_ip":        fields["id.orig_h"],
+		"src_port":      parseZeekInt(fields["id.orig_p"]),
+		"dest_ip":       fields["id.resp_h"],
+		"dest_port":     parseZeekInt(fields["id.resp_p"]),
+		"proto":         fields["proto"],
+	}
+	switch logType {
+	case "conn":
+		payload["service"] = fields["service"]
+		payload["connection_state"] = fields["conn_state"]
+	case "notice":
+		payload["note"] = fields["note"]
+		payload["sub"] = fields["sub"]
+	case "dns":
+		payload["query"] = fields["query"]
+		payload["qtype"] = fields["qtype_name"]
+		payload["rcode"] = fields["rcode_name"]
+	case "http":
+		payload["method"] = fields["method"]
+		payload["host"] = fields["host"]
+		payload["uri"] = fields["uri"]
+		payload["status_code"] = parseZeekInt(fields["status_code"])
+	case "ssl":
+		payload["server_name"] = fields["server_name"]
+		payload["tls_version"] = fields["version"]
+		payload["validation_status"] = fields["validation_status"]
+	case "weird":
+		payload["weird_name"] = fields["name"]
+		payload["addl"] = fields["addl"]
+	}
+	return payload
+}
+
+func parseZeekInt(value string) any {
+	if value == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return value
+	}
+	return n
+}
+
+func endpointLabel(host string, port any) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	portText := ""
+	switch v := port.(type) {
+	case string:
+		portText = strings.TrimSpace(v)
+	case int:
+		if v > 0 {
+			portText = strconv.Itoa(v)
+		}
+	case int64:
+		if v > 0 {
+			portText = strconv.FormatInt(v, 10)
+		}
+	case float64:
+		if v > 0 {
+			portText = strconv.FormatInt(int64(v), 10)
+		}
+	}
+	if portText == "" {
+		return host
+	}
+	return host + ":" + portText
+}
+
+func jsonObject(row map[string]any, key string) (map[string]any, bool) {
+	value, ok := row[key]
+	if !ok || value == nil {
+		return nil, false
+	}
+	object, ok := value.(map[string]any)
+	return object, ok
+}
+
+func jsonNumberValue(row map[string]any, key string) any {
+	value, ok := row[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch v := value.(type) {
+	case float64:
+		if v == float64(int64(v)) {
+			return int64(v)
+		}
+		return v
+	case int, int64, uint64:
+		return v
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+		return v
+	default:
+		return v
+	}
+}
+
+func mergeFields(base map[string]any, updates map[string]any) map[string]any {
+	if base == nil {
+		base = map[string]any{}
+	}
+	for key, value := range updates {
+		if key == "" || isEmptyFieldValue(value) {
+			continue
+		}
+		base[key] = value
+	}
+	return base
+}
+
+func isEmptyFieldValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(v) == ""
+	default:
+		return false
+	}
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func parseLinuxLogLine(line string) linuxLogLine {

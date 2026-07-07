@@ -1,21 +1,26 @@
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Terminal } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { MetricCards } from '../components/MetricCards';
 import { ViewFrame } from '../components/ViewFrame';
+import { WebSshTerminal } from '../components/WebSshTerminal';
 import { api } from '../lib/api';
 import type {
   AgentDashboard,
+  AgentDashboardAgent,
   AgentFirewallState,
   AgentMetricSummary,
   AgentServiceState,
-  AgentSocketState
+  AgentSocketState,
+  RemoteAccessSession
 } from '../lib/types';
 
 export function AgentDashboardView() {
   const [dashboard, setDashboard] = useState<AgentDashboard>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [sshError, setSshError] = useState('');
+  const [sshSession, setSshSession] = useState<RemoteAccessSession | null>(null);
 
   async function load() {
     setLoading(true);
@@ -32,6 +37,19 @@ export function AgentDashboardView() {
   useEffect(() => {
     void load();
   }, []);
+
+  async function openSsh(agent: AgentDashboardAgent) {
+    setSshError('');
+    try {
+      const session = await api.createRemoteSshSession({
+        assetUid: agent.assetUid,
+        agentId: agent.sourceId
+      });
+      setSshSession(session);
+    } catch {
+      setSshError('SSH 세션을 만들지 못했습니다.');
+    }
+  }
 
   const agents = dashboard.agents ?? [];
   const collectors = dashboard.collectors ?? [];
@@ -54,7 +72,10 @@ export function AgentDashboardView() {
       )}
     >
       {error && <div className="notice error">{error}</div>}
+      {sshError && <div className="notice error">{sshError}</div>}
       {loading && <div className="notice">Agent telemetry를 갱신하는 중입니다.</div>}
+
+      {sshSession && <WebSshTerminal session={sshSession} onClose={() => setSshSession(null)} />}
 
       <MetricCards
         items={[
@@ -79,6 +100,7 @@ export function AgentDashboardView() {
                   <th>Source</th>
                   <th>Status</th>
                   <th>Last seen</th>
+                  <th>SSH</th>
                 </tr>
               </thead>
               <tbody>
@@ -88,9 +110,14 @@ export function AgentDashboardView() {
                     <td>{agent.sourceId ?? '-'}</td>
                     <td><span className={`status-pill ${isStale(agent.lastSeenAt) ? 'pending' : 'active'}`}>{isStale(agent.lastSeenAt) ? 'STALE' : 'HEALTHY'}</span></td>
                     <td>{formatDate(agent.lastSeenAt)}</td>
+                    <td>
+                      <button className="icon-button" aria-label={`Open SSH for ${agent.assetUid ?? agent.sourceId ?? 'agent'}`} onClick={() => void openSsh(agent)} type="button">
+                        <Terminal size={16} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
-                {agents.length === 0 && <tr><td colSpan={4}>수집된 agent 없음</td></tr>}
+                {agents.length === 0 && <tr><td colSpan={5}>수집된 agent 없음</td></tr>}
               </tbody>
             </table>
           </div>

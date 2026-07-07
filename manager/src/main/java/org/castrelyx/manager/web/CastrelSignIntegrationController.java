@@ -310,6 +310,14 @@ public class CastrelSignIntegrationController {
         update_channel: stable
         update_check_interval: 6h
         update_public_key_path: ./update_public_key.pem
+        remote_tasks_enabled: true
+        remote_task_interval: 10s
+        file_manager_enabled: true
+        file_manager_allow_delete: true
+        file_manager_max_transfer_bytes: 256mb
+        file_manager_poll_interval: 5s
+        file_manager_roots:
+          - /
         batch_interval: 30s
         collectors:
           - identity
