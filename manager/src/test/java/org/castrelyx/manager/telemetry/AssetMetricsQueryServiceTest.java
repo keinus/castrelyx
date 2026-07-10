@@ -109,7 +109,7 @@ class AssetMetricsQueryServiceTest {
         .containsEntry("ioUtilizationPct", 87.5);
     assertThat(map(list(detail.get("diskIo")).get(0))).containsEntry("device", "sdb");
     assertThat(list(detail.get("services"))).singleElement()
-        .satisfies(service -> assertThat(map(service)).containsEntry("name", "nginx.service"));
+        .satisfies(serviceRow -> assertThat(map(serviceRow)).containsEntry("name", "nginx.service"));
     assertThat(list(detail.get("firewalls"))).singleElement()
         .satisfies(firewall -> assertThat(map(firewall)).containsEntry("enabled", false));
     assertThat(list(detail.get("interfaceStates"))).singleElement()
@@ -188,7 +188,8 @@ class AssetMetricsQueryServiceTest {
           sample("host.disk.write_bps", 2048.0, "Bps", null),
           sample("host.disk.read_iops", 10.0, "ops/s", null),
           sample("host.disk.write_iops", 20.0, "ops/s", null),
-          sample("host.disk.io_utilization_pct", 87.5, "percent", null));
+          sample("host.disk.io_utilization_pct", 87.5, "percent", null),
+          sample("host.temperature.celsius", 82.5, "celsius", null));
     }
 
     @Override

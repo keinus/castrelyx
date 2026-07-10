@@ -30,6 +30,9 @@ public class ClickHouseClient {
   private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_OUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
       .withZone(ZoneOffset.UTC);
   private static final String RECENT_TRANSFORMED_DASHBOARD_FILTER = "AND observed_at >= now() - INTERVAL 1 HOUR";
+  private static final String STATE_DASHBOARD_FILTER = "AND observed_at >= now() - INTERVAL 30 DAY";
+  private static final List<String> DASHBOARD_STATE_TYPES = List.of(
+      "socket", "service", "firewall", "interface", "process", "package");
 
   private final ManagerProperties properties;
   private final RestClient restClient;
@@ -793,12 +796,14 @@ public class ClickHouseClient {
         .limit(24)
         .map(ClickHouseClient::canonicalMetricRow)
         .toList();
-    List<Map<String, Object>> sockets = queryDashboardStateRows(stateTable, assetFilter, "socket", stateTypeLimit);
-    List<Map<String, Object>> services = queryDashboardStateRows(stateTable, assetFilter, "service", stateTypeLimit);
-    List<Map<String, Object>> firewalls = queryDashboardStateRows(stateTable, assetFilter, "firewall", stateTypeLimit);
-    List<Map<String, Object>> interfaces = queryDashboardStateRows(stateTable, assetFilter, "interface", stateTypeLimit);
-    List<Map<String, Object>> processes = queryDashboardStateRows(stateTable, assetFilter, "process", stateTypeLimit);
-    List<Map<String, Object>> packages = queryDashboardStateRows(stateTable, assetFilter, "package", packageLimit);
+    Map<String, List<Map<String, Object>>> statesByType = queryDashboardStateRowsByType(
+        stateTable, assetFilter, stateTypeLimit, packageLimit);
+    List<Map<String, Object>> sockets = statesByType.get("socket");
+    List<Map<String, Object>> services = statesByType.get("service");
+    List<Map<String, Object>> firewalls = statesByType.get("firewall");
+    List<Map<String, Object>> interfaces = statesByType.get("interface");
+    List<Map<String, Object>> processes = statesByType.get("process");
+    List<Map<String, Object>> packages = statesByType.get("package");
     List<Map<String, Object>> events = queryJsonRows("""
         SELECT
           asset_uid,
@@ -843,12 +848,66 @@ public class ClickHouseClient {
         "events", events.stream().map(ClickHouseClient::normalizeDashboardKeys).toList());
   }
 
-  private List<Map<String, Object>> queryDashboardStateRows(
+  private Map<String, List<Map<String, Object>>> queryDashboardStateRowsByType(
       String stateTable,
       String assetFilter,
-      String stateType,
-      int limit) {
-    return queryJsonRows("""
+      int stateTypeLimit,
+      int packageLimit) {
+    List<Map<String, Object>> rows = queryJsonRows("""
+        WITH
+          scoped_states AS (
+            SELECT asset_uid, source_id, state_type, state_key, state_json, observed_at
+            FROM %s
+            WHERE asset_uid != ''
+              AND state_type IN ('socket', 'service', 'firewall', 'interface', 'process', 'package')
+              %s
+              %s
+          ),
+          complete_full_snapshots AS (
+            SELECT
+              asset_uid,
+              source_id,
+              state_type,
+              JSONExtractString(state_json, 'snapshot_id') AS snapshot_id,
+              max(observed_at) AS full_at
+            FROM scoped_states
+            WHERE JSONExtractBool(state_json, 'snapshot_full')
+              AND JSONExtractString(state_json, 'snapshot_id') != ''
+            GROUP BY asset_uid, source_id, state_type, snapshot_id
+            HAVING uniqExact(state_key) >= max(JSONExtractUInt(state_json, 'snapshot_item_count'))
+          ),
+          latest_full AS (
+            SELECT asset_uid, source_id, state_type, max(full_at) AS latest_full_at
+            FROM complete_full_snapshots
+            GROUP BY asset_uid, source_id, state_type
+          ),
+          current_states AS (
+            SELECT
+              asset_uid,
+              source_id,
+              state_type,
+              state_key,
+              argMax(state_json, observed_at) AS state_json,
+              max(observed_at) AS latest_observed_at
+            FROM (
+              SELECT
+                scoped_states.*
+              FROM scoped_states
+              LEFT JOIN latest_full USING (asset_uid, source_id, state_type)
+              WHERE observed_at >= coalesce(latest_full_at, toDateTime64(0, 3))
+            )
+            GROUP BY asset_uid, source_id, state_type, state_key
+          ),
+          ranked_states AS (
+            SELECT
+              *,
+              row_number() OVER (
+                PARTITION BY state_type
+                ORDER BY latest_observed_at DESC
+              ) AS state_rank
+            FROM current_states
+            WHERE NOT JSONExtractBool(state_json, 'deleted')
+          )
         SELECT
           asset_uid,
           source_id,
@@ -856,27 +915,25 @@ public class ClickHouseClient {
           state_key,
           state_json,
           latest_observed_at AS observed_at
-        FROM (
-          SELECT
-            asset_uid,
-            source_id,
-            state_type,
-            state_key,
-            argMax(state_json, observed_at) AS state_json,
-            max(observed_at) AS latest_observed_at
-          FROM %s
-          WHERE asset_uid != ''
-            AND state_type = %s
-            %s
-            %s
-          GROUP BY asset_uid, source_id, state_type, state_key
-        )
+        FROM ranked_states
+        WHERE state_rank <= if(state_type = 'package', %d, %d)
         ORDER BY latest_observed_at DESC
-        LIMIT %d
         FORMAT JSONEachRow
-        """.formatted(stateTable, sqlString(stateType), RECENT_TRANSFORMED_DASHBOARD_FILTER, assetFilter, limit)).stream()
+        """.formatted(stateTable, STATE_DASHBOARD_FILTER, assetFilter, packageLimit, stateTypeLimit)).stream()
         .map(ClickHouseClient::canonicalStateRow)
         .toList();
+
+    Map<String, List<Map<String, Object>>> rowsByType = new LinkedHashMap<>();
+    DASHBOARD_STATE_TYPES.forEach(stateType -> rowsByType.put(stateType, new ArrayList<>()));
+    for (Map<String, Object> row : rows) {
+      String stateType = stringValue(row.get("stateType"));
+      List<Map<String, Object>> typedRows = rowsByType.get(stateType);
+      int limit = "package".equals(stateType) ? packageLimit : stateTypeLimit;
+      if (typedRows != null && typedRows.size() < limit) {
+        typedRows.add(row);
+      }
+    }
+    return rowsByType;
   }
 
   public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit) {

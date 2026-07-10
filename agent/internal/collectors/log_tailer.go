@@ -2,12 +2,15 @@ package collectors
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	slashpath "path"
 	"path/filepath"
 	"reflect"
@@ -16,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"castrelyx/agent/internal/envelope"
@@ -30,6 +34,9 @@ const (
 	incrementalJournalTailMaxEvents = 200
 	incrementalWindowsChannelEvents = 100
 	tailReadWindowBytes             = 64 * 1024
+	maxBufferedLogLineBytes         = 64 * 1024
+	maxLogCursorFileBytes           = 4 * 1024 * 1024
+	fileCursorCheckpointBytes       = 128
 )
 
 var (
@@ -38,21 +45,40 @@ var (
 	bearerTokenPattern      = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
 	userForPattern          = regexp.MustCompile(`\bfor (?:invalid user )?([A-Za-z0-9._@+-]+)`)
 	userFieldPattern        = regexp.MustCompile(`\bUSER=([A-Za-z0-9._@+-]+)`)
+	errJournalCursorInvalid = errors.New("journald cursor is no longer valid")
 )
 
 type logTailerCollector struct {
-	options Options
+	options   Options
+	collectFn platformLogCollectFunc
+
+	mu        sync.Mutex
+	loaded    bool
+	committed *logCursorState
+	pending   *logCursorState
 }
 
+type platformLogCollectFunc func(context.Context, Options, *logCursorState) ([]envelope.Item, error)
+
+type linuxJournalCollectFunc func(context.Context, Options, *logCursorState) ([]envelope.Item, bool, error)
+
+type linuxFileCollectFunc func(context.Context, string, Options, *logCursorState) ([]envelope.Item, error)
+
+type logPowerShellRunFunc func(context.Context, string) (string, error)
+
 type logCursorState struct {
-	Files          map[string]fileLogCursor `json:"files,omitempty"`
-	JournaldCursor string                   `json:"journald_cursor,omitempty"`
-	Windows        map[string]uint64        `json:"windows,omitempty"`
+	Files            map[string]fileLogCursor `json:"files,omitempty"`
+	JournaldCursor   string                   `json:"journald_cursor,omitempty"`
+	JournaldFallback bool                     `json:"journald_fallback,omitempty"`
+	Windows          map[string]uint64        `json:"windows,omitempty"`
 }
 
 type fileLogCursor struct {
-	FileID string `json:"file_id"`
-	Offset int64  `json:"offset"`
+	FileID           string `json:"file_id"`
+	Offset           int64  `json:"offset"`
+	Checkpoint       string `json:"checkpoint,omitempty"`
+	Pending          string `json:"pending,omitempty"`
+	PendingTruncated bool   `json:"pending_truncated,omitempty"`
 }
 
 type normalizedLogEvent struct {
@@ -84,54 +110,158 @@ type linuxLogLine struct {
 	Message   string
 }
 
-func newLogTailerCollector(options Options) logTailerCollector {
+func newLogTailerCollector(options Options) *logTailerCollector {
 	if options.LogMessageMaxBytes <= 0 {
 		options.LogMessageMaxBytes = defaultLogMessageMaxBytes
 	}
-	return logTailerCollector{options: options}
+	return &logTailerCollector{options: options, collectFn: collectPlatformLogEvents}
 }
 
-func (logTailerCollector) Name() string { return "log_tailer" }
+func (*logTailerCollector) Name() string { return "log_tailer" }
 
-func (c logTailerCollector) Collect(context.Context) ([]envelope.Item, error) {
-	state := loadLogCursorState(c.options.LogCursorPath)
-	items := collectPlatformLogEvents(c.options, state)
-	_ = saveLogCursorState(c.options.LogCursorPath, state)
+func (c *logTailerCollector) Collect(ctx context.Context) ([]envelope.Item, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// A pending state belongs only to the immediately preceding collection.
+	// If its durable-enqueue commit hook was not called, discard it and replay
+	// from the last committed cursor rather than risking a gap.
+	c.pending = nil
+	if !c.loaded {
+		state, err := loadLogCursorState(c.options.LogCursorPath)
+		if err != nil {
+			return nil, fmt.Errorf("load log cursor: %w", err)
+		}
+		c.committed = state
+		c.loaded = true
+	}
+
+	working := cloneLogCursorState(c.committed)
+	collectFn := c.collectFn
+	if collectFn == nil {
+		collectFn = collectPlatformLogEvents
+	}
+	items, err := collectFn(ctx, c.options, working)
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(working, c.committed) {
+		c.pending = working
+	}
 	return items, nil
 }
 
-func collectPlatformLogEvents(options Options, state *logCursorState) []envelope.Item {
+// CommitPendingCursor persists the state produced by the most recent Collect.
+// The runtime calls this only after every chunk from the collection has been
+// durably enqueued. If it is not called, the next collection replays from the
+// last committed cursor and favors duplicates over data loss.
+func (c *logTailerCollector) CommitPendingCursor() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.commitPendingCursorLocked()
+}
+
+func (c *logTailerCollector) commitPendingCursorLocked() error {
+	if c.pending == nil {
+		return nil
+	}
+	if err := saveLogCursorState(c.options.LogCursorPath, c.pending); err != nil {
+		return err
+	}
+	c.committed = cloneLogCursorState(c.pending)
+	c.pending = nil
+	c.loaded = true
+	return nil
+}
+
+func collectPlatformLogEvents(ctx context.Context, options Options, state *logCursorState) ([]envelope.Item, error) {
 	if state == nil {
 		state = newLogCursorState()
 	}
 	switch runtime.GOOS {
 	case "linux":
-		return collectLinuxLogEvents(options, state)
+		return collectLinuxLogEvents(ctx, options, state)
 	case "windows":
-		return collectWindowsLogEvents(options, state)
+		return collectWindowsLogEvents(ctx, options, state)
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
-func collectLinuxLogEvents(options Options, state *logCursorState) []envelope.Item {
+func collectLinuxLogEvents(ctx context.Context, options Options, state *logCursorState) ([]envelope.Item, error) {
+	return collectLinuxLogEventsWith(ctx, options, state, collectLinuxJournalEvents, collectLinuxFileLogSource)
+}
+
+func collectLinuxLogEventsWith(
+	ctx context.Context,
+	options Options,
+	state *logCursorState,
+	journalCollect linuxJournalCollectFunc,
+	fileCollect linuxFileCollectFunc,
+) ([]envelope.Item, error) {
 	items := []envelope.Item{}
-	for _, source := range linuxFileLogSources() {
-		items = append(items, collectLinuxFileLogSource(source, options, state)...)
+	wasJournalFallback := state.JournaldFallback
+	journalState := cloneLogCursorState(state)
+	journalItems, journalAvailable, journalErr := journalCollect(ctx, options, journalState)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	items = append(items, collectLinuxJournalEvents(options, state)...)
-	return items
+	if journalErr == nil && journalAvailable {
+		state.JournaldCursor = journalState.JournaldCursor
+		items = append(items, journalItems...)
+	} else if journalErr != nil && !wasJournalFallback {
+		items = append(items, buildLogCollectorErrorItem("journald", journalErr))
+	}
+
+	// A successful command with neither an existing nor a newly observed
+	// cursor does not prove that journald covers the host's rsyslog stream.
+	// Keep the file mirrors enabled on such hosts to avoid silent log loss.
+	journalCovered := journalErr == nil && journalAvailable && journalState.JournaldCursor != ""
+	state.JournaldFallback = !journalCovered
+	includeJournalMirrors := !journalCovered
+	for _, source := range linuxFileLogSources(includeJournalMirrors) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sourceItems, err := fileCollect(ctx, source, options, state)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			items = append(items, buildLogCollectorErrorItem(source, err))
+			continue
+		}
+		items = append(items, sourceItems...)
+	}
+	return dedupeCrossSourceLogItems(items), nil
 }
 
-func linuxFileLogSources() []string {
+func buildLogCollectorErrorItem(source string, err error) envelope.Item {
+	return envelope.Item{
+		Kind: "event",
+		Type: "collector_error",
+		Key:  "log_tailer:" + source,
+		Payload: map[string]any{
+			"collector": "log_tailer",
+			"source":    source,
+			"error":     limitStringBytes(err.Error(), defaultLogMessageMaxBytes),
+		},
+	}
+}
+
+func linuxFileLogSources(includeJournalMirrors bool) []string {
 	sources := []string{
-		"/var/log/auth.log",
-		"/var/log/secure",
-		"/var/log/syslog",
-		"/var/log/messages",
 		"/var/log/suricata/eve.json",
 		"/var/log/suricata/fast.log",
 		"/var/log/suricata/suricata.log",
+	}
+	if includeJournalMirrors {
+		sources = append([]string{
+			"/var/log/auth.log",
+			"/var/log/secure",
+			"/var/log/syslog",
+			"/var/log/messages",
+		}, sources...)
 	}
 	zeekDirs := []string{
 		"/var/log/zeek/current",
@@ -155,87 +285,327 @@ func linuxFileLogSources() []string {
 	return dedupeStrings(sources)
 }
 
-func collectLinuxFileLogSource(path string, options Options, state *logCursorState) []envelope.Item {
+func collectLinuxFileLogSource(ctx context.Context, path string, options Options, state *logCursorState) ([]envelope.Item, error) {
 	if state.Files == nil {
 		state.Files = map[string]fileLogCursor{}
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	defer file.Close()
 	stat, err := file.Stat()
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	if !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("source is not a regular file")
 	}
 
 	cursor := state.Files[path]
 	fileID := fileIdentity(stat)
-	startOffset := cursor.Offset
-	initialTail := cursor.FileID == "" || cursor.FileID != fileID || cursor.Offset > stat.Size()
-	if initialTail {
-		startOffset = stat.Size() - tailReadWindowBytes
-		if startOffset < 0 {
-			startOffset = 0
+	firstObservation := cursor.FileID == ""
+	rotatedOrTruncated := !firstObservation && (cursor.FileID != fileID || cursor.Offset > stat.Size())
+	if !firstObservation && !rotatedOrTruncated && cursor.Checkpoint != "" {
+		checkpoint, err := fileCursorCheckpoint(file, cursor.Offset)
+		if err != nil {
+			return nil, err
 		}
+		rotatedOrTruncated = checkpoint != cursor.Checkpoint
 	}
-	if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
-		return nil
+	if firstObservation {
+		items, nextCursor, err := collectInitialFileTail(ctx, file, stat, path, options)
+		if err != nil {
+			return nil, err
+		}
+		state.Files[path] = nextCursor
+		return items, nil
 	}
-	data, err := io.ReadAll(file)
+	if rotatedOrTruncated {
+		cursor = fileLogCursor{FileID: fileID}
+	}
+	cursor.FileID = fileID
+	items, err := collectIncrementalFilePage(ctx, file, stat.Size(), path, options, &cursor)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-
-	lines := splitLogLines(string(data))
-	if startOffset > 0 && initialTail && len(lines) > 0 {
-		lines = lines[1:]
+	cursor.Checkpoint, err = fileCursorCheckpoint(file, cursor.Offset)
+	if err != nil {
+		return nil, err
 	}
-	if initialTail && len(lines) > initialFileTailLines {
-		lines = lines[len(lines)-initialFileTailLines:]
-	}
-	if !initialTail && len(lines) > incrementalFileTailMaxLines {
-		lines = lines[len(lines)-incrementalFileTailMaxLines:]
-	}
-
-	state.Files[path] = fileLogCursor{FileID: fileID, Offset: stat.Size()}
-	items := make([]envelope.Item, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || shouldSkipLinuxFileLogLine(path, line) {
-			continue
-		}
-		items = append(items, buildLinuxLogEventItem(path, line, options.LogMessageMaxBytes))
-	}
-	return items
+	state.Files[path] = cursor
+	return items, nil
 }
 
-func collectLinuxJournalEvents(options Options, state *logCursorState) []envelope.Item {
-	args := []string{"--no-pager", "--output", "json"}
-	if state.JournaldCursor == "" {
-		args = append(args, "-n", strconv.Itoa(initialJournalTailLines))
-	} else {
-		args = append(args, "--after-cursor", state.JournaldCursor, "-n", strconv.Itoa(incrementalJournalTailMaxEvents))
+func collectInitialFileTail(ctx context.Context, file *os.File, stat os.FileInfo, sourceName string, options Options) ([]envelope.Item, fileLogCursor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fileLogCursor{}, err
 	}
-	out, err := runCommand("journalctl", args...)
-	if err != nil || strings.TrimSpace(out) == "" {
-		return nil
+	startOffset := stat.Size() - tailReadWindowBytes
+	if startOffset < 0 {
+		startOffset = 0
+	}
+	readLength := stat.Size() - startOffset
+	data, err := io.ReadAll(io.NewSectionReader(file, startOffset, readLength))
+	if err != nil {
+		return nil, fileLogCursor{}, err
 	}
 
+	cursor := fileLogCursor{FileID: fileIdentity(stat), Offset: startOffset + int64(len(data))}
+	window := data
+	if startOffset > 0 {
+		newline := bytes.IndexByte(window, '\n')
+		if newline < 0 {
+			appendPendingLogFragment(&cursor, window)
+			cursor.PendingTruncated = true
+			checkpoint, err := fileCursorCheckpoint(file, cursor.Offset)
+			cursor.Checkpoint = checkpoint
+			return nil, cursor, err
+		}
+		window = window[newline+1:]
+	}
+
+	lastNewline := bytes.LastIndexByte(window, '\n')
+	if lastNewline < 0 {
+		appendPendingLogFragment(&cursor, window)
+		checkpoint, err := fileCursorCheckpoint(file, cursor.Offset)
+		cursor.Checkpoint = checkpoint
+		return nil, cursor, err
+	}
+	complete := window[:lastNewline]
+	appendPendingLogFragment(&cursor, window[lastNewline+1:])
+	lines := strings.Split(string(complete), "\n")
+	if len(lines) > initialFileTailLines {
+		lines = lines[len(lines)-initialFileTailLines:]
+	}
+	items := make([]envelope.Item, 0, len(lines))
+	for _, line := range lines {
+		if err := ctx.Err(); err != nil {
+			return nil, fileLogCursor{}, err
+		}
+		if item, ok := buildLinuxFileLogLineItem(sourceName, line, options.LogMessageMaxBytes, false); ok {
+			items = append(items, item)
+		}
+	}
+	cursor.Checkpoint, err = fileCursorCheckpoint(file, cursor.Offset)
+	return items, cursor, err
+}
+
+func fileCursorCheckpoint(file *os.File, offset int64) (string, error) {
+	if offset <= 0 {
+		return "", nil
+	}
+	start := offset - fileCursorCheckpointBytes
+	if start < 0 {
+		start = 0
+	}
+	data, err := io.ReadAll(io.NewSectionReader(file, start, offset-start))
+	if err != nil {
+		return "", err
+	}
+	return hashText(string(data)), nil
+}
+
+func collectIncrementalFilePage(ctx context.Context, file *os.File, size int64, sourceName string, options Options, cursor *fileLogCursor) ([]envelope.Item, error) {
+	if cursor.Offset < 0 {
+		return nil, fmt.Errorf("negative file cursor offset %d", cursor.Offset)
+	}
+	if cursor.Offset >= size {
+		return nil, nil
+	}
+	readLength := size - cursor.Offset
+	if readLength > tailReadWindowBytes {
+		readLength = tailReadWindowBytes
+	}
+	data, err := io.ReadAll(io.NewSectionReader(file, cursor.Offset, readLength))
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]envelope.Item, 0, incrementalFileTailMaxLines)
+	consumed := 0
+	completedLines := 0
+	for completedLines < incrementalFileTailMaxLines {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		relativeNewline := bytes.IndexByte(data[consumed:], '\n')
+		if relativeNewline < 0 {
+			appendPendingLogFragment(cursor, data[consumed:])
+			cursor.Offset += int64(len(data) - consumed)
+			return items, nil
+		}
+		newline := consumed + relativeNewline
+		appendPendingLogFragment(cursor, data[consumed:newline])
+		cursor.Offset += int64(newline - consumed + 1)
+		consumed = newline + 1
+		completedLines++
+
+		if item, ok := buildLinuxFileLogLineItem(sourceName, cursor.Pending, options.LogMessageMaxBytes, cursor.PendingTruncated); ok {
+			items = append(items, item)
+		}
+		cursor.Pending = ""
+		cursor.PendingTruncated = false
+		if consumed >= len(data) {
+			return items, nil
+		}
+	}
+	return items, nil
+}
+
+func appendPendingLogFragment(cursor *fileLogCursor, fragment []byte) {
+	if len(fragment) == 0 {
+		return
+	}
+	remaining := maxBufferedLogLineBytes - len(cursor.Pending)
+	if remaining <= 0 {
+		cursor.PendingTruncated = true
+		return
+	}
+	if len(fragment) > remaining {
+		fragment = fragment[:remaining]
+		cursor.PendingTruncated = true
+	}
+	cursor.Pending += string(fragment)
+}
+
+func buildLinuxFileLogLineItem(sourceName, line string, maxMessageBytes int, truncated bool) (envelope.Item, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || shouldSkipLinuxFileLogLine(sourceName, line) {
+		return envelope.Item{}, false
+	}
+	item := buildLinuxLogEventItem(sourceName, line, maxMessageBytes)
+	if truncated {
+		if payload, ok := item.Payload.(map[string]any); ok {
+			payload["line_truncated"] = true
+		}
+	}
+	return item, true
+}
+
+func collectLinuxJournalEvents(ctx context.Context, options Options, state *logCursorState) ([]envelope.Item, bool, error) {
+	return collectLinuxJournalEventsWithAttempt(ctx, options, state, collectLinuxJournalEventsOnce)
+}
+
+func collectLinuxJournalEventsWithAttempt(
+	ctx context.Context,
+	options Options,
+	state *logCursorState,
+	attempt linuxJournalCollectFunc,
+) ([]envelope.Item, bool, error) {
+	originalCursor := state.JournaldCursor
+	attemptState := cloneLogCursorState(state)
+	items, available, err := attempt(ctx, options, attemptState)
+	if err == nil {
+		state.JournaldCursor = attemptState.JournaldCursor
+		return items, available, nil
+	}
+	if originalCursor == "" || ctx.Err() != nil || !errors.Is(err, errJournalCursorInvalid) {
+		return nil, available, err
+	}
+
+	// journal vacuum/reset can invalidate a persisted cursor forever. Retry a
+	// bounded initial tail once and commit only that successful replacement.
+	retryState := cloneLogCursorState(state)
+	retryState.JournaldCursor = ""
+	retryItems, retryAvailable, retryErr := attempt(ctx, options, retryState)
+	if retryErr == nil && retryAvailable {
+		state.JournaldCursor = retryState.JournaldCursor
+		return retryItems, true, nil
+	}
+	if retryErr == nil {
+		return nil, available, err
+	}
+	return nil, available || retryAvailable, errors.Join(
+		fmt.Errorf("journal cursor read failed: %w", err),
+		fmt.Errorf("journal reset retry failed: %w", retryErr),
+	)
+}
+
+func collectLinuxJournalEventsOnce(ctx context.Context, options Options, state *logCursorState) ([]envelope.Item, bool, error) {
+	args := []string{"--no-pager", "--output", "json"}
+	maxEvents := incrementalJournalTailMaxEvents
+	if state.JournaldCursor == "" {
+		args = append(args, "-n", strconv.Itoa(initialJournalTailLines))
+		maxEvents = initialJournalTailLines
+	} else {
+		args = append(args, "--after-cursor", state.JournaldCursor)
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, "journalctl", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, false, fmt.Errorf("open journalctl stdout: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("start journalctl: %w", err)
+	}
+
+	items, reachedLimit, scanErr := parseJournalEvents(commandCtx, stdout, options, state, maxEvents)
+	if scanErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, true, scanErr
+	}
+	if reachedLimit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return items, true, nil
+	}
+	if err := cmd.Wait(); err != nil {
+		if commandCtx.Err() != nil {
+			return nil, true, commandCtx.Err()
+		}
+		message := strings.TrimSpace(stderr.String())
+		failure := fmt.Errorf("journalctl failed: %w: %s", err, message)
+		if state.JournaldCursor != "" && isInvalidJournalCursorMessage(message) {
+			return nil, true, errors.Join(errJournalCursorInvalid, failure)
+		}
+		return nil, true, failure
+	}
+	return items, true, nil
+}
+
+func isInvalidJournalCursorMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "failed to seek to cursor") ||
+		strings.Contains(message, "cursor not found") ||
+		strings.Contains(message, "invalid cursor")
+}
+
+func parseJournalEvents(ctx context.Context, reader io.Reader, options Options, state *logCursorState, maxEvents int) ([]envelope.Item, bool, error) {
 	items := []envelope.Item{}
-	scanner := bufio.NewScanner(strings.NewReader(out))
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	processed := 0
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		row := map[string]any{}
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			continue
+			return nil, false, fmt.Errorf("decode journal event %d: %w", processed+1, err)
 		}
+		processed++
 		message := jsonString(row, "MESSAGE")
 		cursor := jsonString(row, "__CURSOR")
 		if cursor != "" {
 			state.JournaldCursor = cursor
 		}
 		if strings.TrimSpace(message) == "" {
+			if maxEvents > 0 && processed >= maxEvents {
+				return items, true, nil
+			}
 			continue
 		}
 		event := normalizedLogEvent{
@@ -254,11 +624,17 @@ func collectLinuxJournalEvents(options Options, state *logCursorState) []envelop
 		}
 		classifyLinuxLog(&event)
 		items = append(items, buildNormalizedLogEventItem(event, options.LogMessageMaxBytes))
+		if maxEvents > 0 && processed >= maxEvents {
+			return items, true, nil
+		}
 	}
-	return items
+	if err := scanner.Err(); err != nil {
+		return nil, false, fmt.Errorf("scan journal events: %w", err)
+	}
+	return items, false, nil
 }
 
-func collectWindowsLogEvents(options Options, state *logCursorState) []envelope.Item {
+func collectWindowsLogEvents(ctx context.Context, options Options, state *logCursorState) ([]envelope.Item, error) {
 	channels := []string{
 		"Security",
 		"System",
@@ -273,34 +649,83 @@ func collectWindowsLogEvents(options Options, state *logCursorState) []envelope.
 		state.Windows = map[string]uint64{}
 	}
 	for _, channel := range channels {
-		items = append(items, collectWindowsChannelEvents(channel, options, state)...)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		channelItems, err := collectWindowsChannelEvents(ctx, channel, options, state)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			items = append(items, buildLogCollectorErrorItem("windows:"+channel, err))
+			continue
+		}
+		items = append(items, channelItems...)
 	}
-	return items
+	return dedupeCrossSourceLogItems(items), nil
 }
 
-func collectWindowsChannelEvents(channel string, options Options, state *logCursorState) []envelope.Item {
+func collectWindowsChannelEvents(ctx context.Context, channel string, options Options, state *logCursorState) ([]envelope.Item, error) {
+	return collectWindowsChannelEventsWith(ctx, channel, options, state, runLogPowerShell, true)
+}
+
+func collectWindowsChannelEventsWith(
+	ctx context.Context,
+	channel string,
+	options Options,
+	state *logCursorState,
+	run logPowerShellRunFunc,
+	allowReset bool,
+) ([]envelope.Item, error) {
 	lastRecordID := state.Windows[channel]
 	maxEvents := initialWindowsChannelEvents
 	if lastRecordID > 0 {
 		maxEvents = incrementalWindowsChannelEvents
 	}
-	command := fmt.Sprintf(
-		`Get-WinEvent -LogName %s -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message | ConvertTo-Json -Compress`,
-		powerShellString(channel),
-		maxEvents,
-	)
-	out, err := runPowerShell(command)
-	if err != nil || strings.TrimSpace(out) == "" {
-		return nil
+	command := windowsLogChannelCommand(channel, lastRecordID, maxEvents)
+	out, err := run(ctx, command)
+	if err != nil {
+		return nil, err
 	}
-	rows := decodeJSONObjects(out)
+	if strings.TrimSpace(out) == "" {
+		// A cleared empty channel has no latest record with which to compare.
+		// Reset once so the next newly created low RecordId is not filtered out.
+		if allowReset && lastRecordID > 0 {
+			state.Windows[channel] = 0
+		}
+		return nil, nil
+	}
+	rows, err := decodeLogJSONObjects(out)
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(rows, func(i, j int) bool {
 		return jsonUint64(rows[i], "RecordId") < jsonUint64(rows[j], "RecordId")
 	})
+	if allowReset && lastRecordID > 0 {
+		latestObserved := uint64(0)
+		hasNewer := false
+		for _, row := range rows {
+			recordID := jsonUint64(row, "RecordId")
+			if recordID > latestObserved {
+				latestObserved = recordID
+			}
+			if recordID > lastRecordID {
+				hasNewer = true
+			}
+		}
+		if !hasNewer && latestObserved > 0 && latestObserved < lastRecordID {
+			state.Windows[channel] = 0
+			return collectWindowsChannelEventsWith(ctx, channel, options, state, run, false)
+		}
+	}
 
 	items := []envelope.Item{}
 	maxRecordID := lastRecordID
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		recordID := jsonUint64(row, "RecordId")
 		if recordID > 0 && recordID <= lastRecordID {
 			continue
@@ -321,7 +746,62 @@ func collectWindowsChannelEvents(channel string, options Options, state *logCurs
 	if maxRecordID > lastRecordID {
 		state.Windows[channel] = maxRecordID
 	}
-	return items
+	return items, nil
+}
+
+func windowsLogChannelCommand(channel string, lastRecordID uint64, maxEvents int) string {
+	if lastRecordID > 0 {
+		filter := fmt.Sprintf("*[System[(EventRecordID > %d)]]", lastRecordID)
+		return fmt.Sprintf(
+			`$events = @(Get-WinEvent -LogName %s -FilterXPath %s -Oldest -MaxEvents %d -ErrorAction SilentlyContinue); if ($events.Count -eq 0) { $events = @(Get-WinEvent -LogName %s -MaxEvents 1 -ErrorAction SilentlyContinue) }; $events | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message | ConvertTo-Json -Compress`,
+			powerShellString(channel),
+			powerShellString(filter),
+			maxEvents,
+			powerShellString(channel),
+		)
+	}
+	return fmt.Sprintf(
+		`Get-WinEvent -LogName %s -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message | ConvertTo-Json -Compress`,
+		powerShellString(channel),
+		maxEvents,
+	)
+}
+
+func runLogPowerShell(ctx context.Context, command string) (string, error) {
+	shell := "powershell.exe"
+	if _, err := exec.LookPath(shell); err != nil {
+		shell = "powershell"
+	}
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, shell, "-NoProfile", "-NonInteractive", "-Command", command)
+	out, err := cmd.Output()
+	if err != nil {
+		if commandCtx.Err() != nil {
+			return "", commandCtx.Err()
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
+func decodeLogJSONObjects(raw string) ([]map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(raw, "[") {
+		rows := []map[string]any{}
+		if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+			return nil, fmt.Errorf("decode Windows event array: %w", err)
+		}
+		return rows, nil
+	}
+	row := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &row); err != nil {
+		return nil, fmt.Errorf("decode Windows event: %w", err)
+	}
+	return []map[string]any{row}, nil
 }
 
 func buildLogEventItem(platform, sourceName, message string) envelope.Item {
@@ -1008,6 +1488,42 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
+func dedupeCrossSourceLogItems(items []envelope.Item) []envelope.Item {
+	seen := map[string]string{}
+	out := make([]envelope.Item, 0, len(items))
+	for _, item := range items {
+		payload, ok := item.Payload.(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		sourceName := strings.TrimSpace(fmt.Sprint(payload["source_name"]))
+		eventTime := strings.TrimSpace(fmt.Sprint(payload["event_time"]))
+		message := strings.TrimSpace(fmt.Sprint(payload["message"]))
+		if sourceName == "" || sourceName == "<nil>" || eventTime == "" || eventTime == "<nil>" || message == "" || message == "<nil>" || strings.HasSuffix(message, "...") || payload["line_truncated"] == true {
+			out = append(out, item)
+			continue
+		}
+		key := strings.Join([]string{
+			fmt.Sprint(payload["platform"]),
+			eventTime,
+			fmt.Sprint(payload["event_type"]),
+			fmt.Sprint(payload["program"]),
+			fmt.Sprint(payload["provider"]),
+			fmt.Sprint(payload["pid"]),
+			fmt.Sprint(payload["event_id"]),
+			fmt.Sprint(payload["record_id"]),
+			message,
+		}, "\x00")
+		if previousSource, exists := seen[key]; exists && previousSource != sourceName {
+			continue
+		}
+		seen[key] = sourceName
+		out = append(out, item)
+	}
+	return out
+}
+
 func parseLinuxLogLine(line string) linuxLogLine {
 	matches := syslogLinePattern.FindStringSubmatch(line)
 	if len(matches) == 6 {
@@ -1141,17 +1657,28 @@ func newLogCursorState() *logCursorState {
 	}
 }
 
-func loadLogCursorState(path string) *logCursorState {
+func loadLogCursorState(path string) (*logCursorState, error) {
 	state := newLogCursorState()
 	if path == "" {
-		return state
+		return state, nil
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
 	if err != nil {
-		return state
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxLogCursorFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxLogCursorFileBytes {
+		return nil, fmt.Errorf("cursor file exceeds %d bytes", maxLogCursorFileBytes)
 	}
 	if err := json.Unmarshal(data, state); err != nil {
-		return newLogCursorState()
+		return nil, err
 	}
 	if state.Files == nil {
 		state.Files = map[string]fileLogCursor{}
@@ -1159,7 +1686,15 @@ func loadLogCursorState(path string) *logCursorState {
 	if state.Windows == nil {
 		state.Windows = map[string]uint64{}
 	}
-	return state
+	for source, cursor := range state.Files {
+		if cursor.Offset < 0 {
+			return nil, fmt.Errorf("cursor for %s has negative offset %d", source, cursor.Offset)
+		}
+		if len(cursor.Pending) > maxBufferedLogLineBytes {
+			return nil, fmt.Errorf("cursor for %s has oversized pending line", source)
+		}
+	}
+	return state, nil
 }
 
 func saveLogCursorState(path string, state *logCursorState) error {
@@ -1173,11 +1708,34 @@ func saveLogCursorState(path string, state *logCursorState) error {
 	if err != nil {
 		return err
 	}
+	if len(encoded) > maxLogCursorFileBytes {
+		return fmt.Errorf("cursor state exceeds %d bytes", maxLogCursorFileBytes)
+	}
 	tmpPath := path + ".tmp"
+	defer os.Remove(tmpPath)
 	if err := os.WriteFile(tmpPath, encoded, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func cloneLogCursorState(state *logCursorState) *logCursorState {
+	if state == nil {
+		return newLogCursorState()
+	}
+	clone := &logCursorState{
+		Files:            make(map[string]fileLogCursor, len(state.Files)),
+		JournaldCursor:   state.JournaldCursor,
+		JournaldFallback: state.JournaldFallback,
+		Windows:          make(map[string]uint64, len(state.Windows)),
+	}
+	for source, cursor := range state.Files {
+		clone.Files[source] = cursor
+	}
+	for channel, recordID := range state.Windows {
+		clone.Windows[channel] = recordID
+	}
+	return clone
 }
 
 func fileIdentity(info os.FileInfo) string {

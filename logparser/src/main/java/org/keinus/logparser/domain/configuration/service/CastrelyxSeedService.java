@@ -1,5 +1,8 @@
 package org.keinus.logparser.domain.configuration.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.List;
 
 import lombok.RequiredArgsConstructor;
@@ -15,26 +18,33 @@ import org.keinus.logparser.infrastructure.persistence.repository.InputAdapterRe
 import org.keinus.logparser.infrastructure.persistence.repository.MappingRepository;
 import org.keinus.logparser.infrastructure.persistence.repository.OutputAdapterRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class CastrelyxSeedService {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final String SEED_MARKER_KEY = "castrelyx.seed.castrelyx-agent-clickhouse.version";
     public static final String MAPPING_SEED_MARKER_KEY = "castrelyx.seed.castrelyx-agent-mapping.version";
-    private static final String SEED_MARKER_VALUE = "2";
+    private static final String SEED_MARKER_VALUE = "4";
     private static final String MAPPING_SEED_MARKER_VALUE = "1";
     private static final String MESSAGE_TYPE = "castrelyx-agent-item";
     private static final String INPUT_TYPE = "TcpMtlsGzipInputAdapter";
     private static final String OUTPUT_TYPE = "ClickHouseOutputAdapter";
-    private static final String LEGACY_OUTPUT_TYPE = "MariaDbOutputAdapter";
 
     private static final String INPUT_CONFIG_PARAMS = """
-            {"keyStorePath":"/var/lib/castrelsign/certs/server.p12","keyStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","trustStorePath":"/var/lib/castrelsign/certs/truststore.p12","trustStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","maxFrameBytes":10485760,"ackMode":"queueAccepted"}
+            {"keyStorePath":"/var/lib/castrelsign/certs/server.p12","keyStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","trustStorePath":"/var/lib/castrelsign/certs/truststore.p12","trustStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","maxFrameBytes":10485760,"maxConnections":32,"tlsReloadIntervalMs":5000,"ackMode":"queueAccepted"}
             """;
 
     private static final String OUTPUT_CONFIG_PARAMS = """
-            {"endpointUrl":"http://clickhouse:8123","database":"castrelyx","usernameEnv":"CLICKHOUSE_USER","passwordEnv":"CLICKHOUSE_PASSWORD","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"autoCreateSchema":true}
+            {"endpointUrl":"http://clickhouse:8123","database":"castrelyx","usernameEnv":"CLICKHOUSE_USER","passwordEnv":"CLICKHOUSE_PASSWORD","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"incompleteGroupTimeoutMs":30000,"maxPendingGroups":2048,"maxPendingItems":50000,"maxPendingBytes":67108864,"incompleteChunkDlqDir":"/root/logparser/data/incomplete-chunks","maxIncompleteChunkDlqBytes":134217728,"maxIncompleteChunkDlqRecords":1000,"autoCreateSchema":true}
+            """;
+    private static final String INPUT_MIGRATION_DEFAULTS = """
+            {"maxConnections":32,"tlsReloadIntervalMs":5000}
+            """;
+    private static final String OUTPUT_MIGRATION_DEFAULTS = """
+            {"maxPendingBytes":67108864,"incompleteChunkDlqDir":"/root/logparser/data/incomplete-chunks","maxIncompleteChunkDlqBytes":134217728,"maxIncompleteChunkDlqRecords":1000}
             """;
 
     private final InputAdapterRepository inputAdapterRepository;
@@ -42,27 +52,28 @@ public class CastrelyxSeedService {
     private final ConfigSettingsRepository configSettingsRepository;
     private final MappingRepository mappingRepository;
 
+    @Transactional
     public void seedDefaults() {
         seedAdapterDefaults();
         seedMappingDefaults();
     }
 
     private void seedAdapterDefaults() {
-        if (configSettingsRepository.findByConfigKey(SEED_MARKER_KEY).isPresent()) {
-            log.debug("Castrelyx seed marker already exists");
+        var existingMarker = configSettingsRepository.findByConfigKey(SEED_MARKER_KEY);
+        if (existingMarker.map(ConfigSettingsEntity::getConfigValue).filter(SEED_MARKER_VALUE::equals).isPresent()) {
+            log.debug("Castrelyx adapter seed is already at version {}", SEED_MARKER_VALUE);
             return;
         }
 
         upsertInputSeedRow();
         upsertOutputSeedRow();
-        disableLegacyMariaDbOutputSeed();
 
-        configSettingsRepository.save(ConfigSettingsEntity.builder()
-                .configKey(SEED_MARKER_KEY)
-                .configValue(SEED_MARKER_VALUE)
-                .dataType("STRING")
-                .description("Castrelyx agent MariaDB seed version")
-                .build());
+        ConfigSettingsEntity marker = existingMarker.orElseGet(ConfigSettingsEntity::new);
+        marker.setConfigKey(SEED_MARKER_KEY);
+        marker.setConfigValue(SEED_MARKER_VALUE);
+        marker.setDataType("STRING");
+        marker.setDescription("Castrelyx agent ClickHouse adapter seed version");
+        configSettingsRepository.save(marker);
     }
 
     private void seedMappingDefaults() {
@@ -84,44 +95,82 @@ public class CastrelyxSeedService {
     }
 
     private void upsertInputSeedRow() {
-        InputAdapterEntity row = inputAdapterRepository.findByType(INPUT_TYPE).stream()
+        InputAdapterEntity existing = inputAdapterRepository.findByType(INPUT_TYPE).stream()
                 .filter(candidate -> MESSAGE_TYPE.equals(candidate.getMessagetype()))
                 .findFirst()
-                .orElseGet(() -> InputAdapterEntity.builder()
-                        .type(INPUT_TYPE)
-                        .messagetype(MESSAGE_TYPE)
-                        .build());
-        row.setHost("0.0.0.0");
-        row.setPort(9443);
-        row.setEnabled(true);
-        row.setConfigParams(INPUT_CONFIG_PARAMS);
-        inputAdapterRepository.save(row);
-        log.info("Seeded enabled Castrelyx TCP/mTLS gzip input adapter");
+                .orElse(null);
+        if (existing == null) {
+            InputAdapterEntity created = InputAdapterEntity.builder()
+                    .type(INPUT_TYPE)
+                    .messagetype(MESSAGE_TYPE)
+                    .host("0.0.0.0")
+                    .port(9443)
+                    .enabled(true)
+                    .configParams(INPUT_CONFIG_PARAMS)
+                    .build();
+            inputAdapterRepository.save(created);
+            log.info("Seeded enabled Castrelyx TCP/mTLS gzip input adapter");
+            return;
+        }
+
+        String merged = mergeMissingConfig(existing.getConfigParams(), INPUT_MIGRATION_DEFAULTS, INPUT_TYPE);
+        if (!merged.equals(existing.getConfigParams())) {
+            existing.setConfigParams(merged);
+            inputAdapterRepository.save(existing);
+            log.info("Added missing Castrelyx TCP/mTLS safety defaults without replacing operator settings");
+        }
     }
 
     private void upsertOutputSeedRow() {
-        OutputAdapterEntity row = outputAdapterRepository.findByType(OUTPUT_TYPE).stream()
+        OutputAdapterEntity existing = outputAdapterRepository.findByType(OUTPUT_TYPE).stream()
                 .filter(candidate -> MESSAGE_TYPE.equals(candidate.getMessagetype()))
                 .findFirst()
-                .orElseGet(() -> OutputAdapterEntity.builder()
-                        .type(OUTPUT_TYPE)
-                        .messagetype(MESSAGE_TYPE)
-                        .build());
-        row.setEnabled(true);
-        row.setConfigParams(OUTPUT_CONFIG_PARAMS);
-        outputAdapterRepository.save(row);
-        log.info("Seeded enabled Castrelyx ClickHouse output adapter");
+                .orElse(null);
+        if (existing == null) {
+            OutputAdapterEntity created = OutputAdapterEntity.builder()
+                    .type(OUTPUT_TYPE)
+                    .messagetype(MESSAGE_TYPE)
+                    .enabled(true)
+                    .configParams(OUTPUT_CONFIG_PARAMS)
+                    .build();
+            outputAdapterRepository.save(created);
+            log.info("Seeded enabled Castrelyx ClickHouse output adapter");
+            return;
+        }
+
+        String merged = mergeMissingConfig(existing.getConfigParams(), OUTPUT_MIGRATION_DEFAULTS, OUTPUT_TYPE);
+        if (!merged.equals(existing.getConfigParams())) {
+            existing.setConfigParams(merged);
+            outputAdapterRepository.save(existing);
+            log.info("Added missing ClickHouse buffering defaults without replacing operator settings");
+        }
     }
 
-    private void disableLegacyMariaDbOutputSeed() {
-        outputAdapterRepository.findByType(LEGACY_OUTPUT_TYPE).stream()
-                .filter(row -> MESSAGE_TYPE.equals(row.getMessagetype()))
-                .filter(row -> Boolean.TRUE.equals(row.getEnabled()))
-                .forEach(row -> {
-                    row.setEnabled(false);
-                    outputAdapterRepository.save(row);
-                    log.info("Disabled legacy Castrelyx MariaDB output adapter");
-                });
+    private String mergeMissingConfig(String currentConfig, String missingDefaults, String adapterType) {
+        if (currentConfig == null || currentConfig.isBlank()) {
+            throw new IllegalStateException(adapterType + " existing configParams is blank; refusing destructive seed replacement");
+        }
+        try {
+            JsonNode parsed = OBJECT_MAPPER.readTree(currentConfig);
+            JsonNode defaults = OBJECT_MAPPER.readTree(missingDefaults);
+            if (!(parsed instanceof ObjectNode current) || !defaults.isObject()) {
+                throw new IllegalStateException(adapterType + " configParams must be a JSON object");
+            }
+            boolean changed = false;
+            var fields = defaults.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                if (!current.has(field.getKey())) {
+                    current.set(field.getKey(), field.getValue());
+                    changed = true;
+                }
+            }
+            return changed ? OBJECT_MAPPER.writeValueAsString(current) : currentConfig;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(adapterType + " configParams is invalid; refusing destructive seed replacement", e);
+        }
     }
 
     private MappingConfiguration defaultAgentMapping() {

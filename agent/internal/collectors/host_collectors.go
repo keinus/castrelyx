@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"castrelyx/agent/internal/envelope"
@@ -25,6 +27,7 @@ const commandTimeout = 5 * time.Second
 var AgentVersion = "unknown"
 
 var UpdateStatusProvider func() (channel string, status string, lastError string)
+var HealthStatusProvider func() map[string]any
 
 type networkInterfaceTraffic struct {
 	Name    string
@@ -125,17 +128,123 @@ type firewallState struct {
 	RuleCount *int
 }
 
-type processCollector struct{}
+type hostSnapshotConsumer uint8
 
-func (processCollector) Name() string { return "process" }
+const (
+	hostSnapshotProcessConsumer hostSnapshotConsumer = iota + 1
+	hostSnapshotPortConsumer
+)
 
-func (processCollector) Collect(context.Context) ([]envelope.Item, error) {
+type hostProcessSocketSnapshot struct {
+	Processes []processState
+	Sockets   []socketState
+}
+
+type hostSnapshotProvider struct {
+	mu              sync.Mutex
+	scan            func() hostProcessSocketSnapshot
+	snapshot        hostProcessSocketSnapshot
+	hasSnapshot     bool
+	processConsumed bool
+	portConsumed    bool
+	cycleStartedAt  time.Time
+}
+
+func (p *hostSnapshotProvider) beginCollectionCycle(startedAt time.Time) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if startedAt.Equal(p.cycleStartedAt) {
+		return
+	}
+	p.snapshot = hostProcessSocketSnapshot{}
+	p.hasSnapshot = false
+	p.processConsumed = false
+	p.portConsumed = false
+	p.cycleStartedAt = startedAt
+}
+
+func newHostSnapshotProvider() *hostSnapshotProvider {
+	return newHostSnapshotProviderWithScanner(collectLinkedHostSnapshot)
+}
+
+func newHostSnapshotProviderWithScanner(scanner func() hostProcessSocketSnapshot) *hostSnapshotProvider {
+	if scanner == nil {
+		scanner = collectLinkedHostSnapshot
+	}
+	return &hostSnapshotProvider{scan: scanner}
+}
+
+func collectLinkedHostSnapshot() hostProcessSocketSnapshot {
 	processes := collectProcessStates()
 	sockets := collectSocketStates()
 	linkSocketsToProcesses(sockets, processes)
+	return hostProcessSocketSnapshot{Processes: processes, Sockets: sockets}
+}
 
-	items := make([]envelope.Item, 0, len(processes))
-	for _, process := range processes {
+// snapshotFor shares exactly one linked process/socket scan between the process
+// and port collectors. A repeated request from the same collector starts a new
+// snapshot, which prevents an incomplete collector set from reusing data in the
+// next agent batch.
+func (p *hostSnapshotProvider) snapshotFor(consumer hostSnapshotConsumer) hostProcessSocketSnapshot {
+	if p == nil {
+		return collectLinkedHostSnapshot()
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	alreadyConsumed := (consumer == hostSnapshotProcessConsumer && p.processConsumed) ||
+		(consumer == hostSnapshotPortConsumer && p.portConsumed)
+	if !p.hasSnapshot || alreadyConsumed {
+		scanner := p.scan
+		if scanner == nil {
+			scanner = collectLinkedHostSnapshot
+		}
+		p.snapshot = scanner()
+		p.hasSnapshot = true
+		p.processConsumed = false
+		p.portConsumed = false
+	}
+
+	switch consumer {
+	case hostSnapshotProcessConsumer:
+		p.processConsumed = true
+	case hostSnapshotPortConsumer:
+		p.portConsumed = true
+	}
+
+	// The snapshot is immutable after linkSocketsToProcesses returns. Returning
+	// its slice headers avoids duplicating the full process/socket inventory for
+	// each consumer while remaining safe after the provider drops its reference.
+	snapshot := p.snapshot
+	if p.processConsumed && p.portConsumed {
+		p.snapshot = hostProcessSocketSnapshot{}
+		p.hasSnapshot = false
+	}
+	return snapshot
+}
+
+type processCollector struct {
+	snapshotProvider *hostSnapshotProvider
+}
+
+func (processCollector) Name() string { return "process" }
+
+func (c processCollector) BeginCollectionCycle(startedAt time.Time) {
+	c.snapshotProvider.beginCollectionCycle(startedAt)
+}
+
+func (c processCollector) Collect(context.Context) ([]envelope.Item, error) {
+	snapshot := c.snapshotProvider.snapshotFor(hostSnapshotProcessConsumer)
+	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(snapshot.Processes) == 0 {
+		return nil, errors.New("process inventory returned no records")
+	}
+
+	items := make([]envelope.Item, 0, len(snapshot.Processes))
+	for _, process := range snapshot.Processes {
 		items = append(items, process.Item())
 	}
 	return items, nil
@@ -147,6 +256,9 @@ func (serviceCollector) Name() string { return "service" }
 
 func (serviceCollector) Collect(context.Context) ([]envelope.Item, error) {
 	services := collectServiceStates()
+	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(services) == 0 {
+		return nil, errors.New("service inventory returned no records")
+	}
 	items := make([]envelope.Item, 0, len(services))
 	for _, service := range services {
 		items = append(items, service.Item())
@@ -160,6 +272,9 @@ func (packageCollector) Name() string { return "package" }
 
 func (packageCollector) Collect(context.Context) ([]envelope.Item, error) {
 	packages := collectPackageStates()
+	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && len(packages) == 0 {
+		return nil, errors.New("package inventory returned no records")
+	}
 	items := make([]envelope.Item, 0, len(packages))
 	for _, pkg := range packages {
 		items = append(items, pkg.Item())
@@ -173,6 +288,10 @@ func (firewallCollector) Name() string { return "firewall" }
 
 func (firewallCollector) Collect(context.Context) ([]envelope.Item, error) {
 	firewalls := collectFirewallStates()
+	if len(firewalls) == 0 && (runtime.GOOS == "linux" || runtime.GOOS == "windows") {
+		disabled := false
+		firewalls = []firewallState{{Backend: "none", Enabled: &disabled}}
+	}
 	items := make([]envelope.Item, 0, len(firewalls))
 	for _, firewall := range firewalls {
 		items = append(items, firewall.Item())
@@ -191,23 +310,32 @@ func (agentHealthCollector) Collect(context.Context) ([]envelope.Item, error) {
 	if UpdateStatusProvider != nil {
 		updateChannel, updateStatus, updateLastError = UpdateStatusProvider()
 	}
+	payload := map[string]any{
+		"status":            "ok",
+		"collector":         "agent_health",
+		"agent_version":     AgentVersion,
+		"go_version":        runtime.Version(),
+		"os":                runtime.GOOS,
+		"architecture":      runtime.GOARCH,
+		"process_id":        os.Getpid(),
+		"update_channel":    updateChannel,
+		"update_status":     updateStatus,
+		"update_last_error": nullIfEmpty(updateLastError),
+		"observed_at":       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if HealthStatusProvider != nil {
+		for key, value := range HealthStatusProvider() {
+			payload[key] = value
+		}
+		if payload["last_delivery_error"] != nil {
+			payload["status"] = "degraded"
+		}
+	}
 	return []envelope.Item{{
-		Kind: "event",
-		Type: "health",
-		Key:  "heartbeat",
-		Payload: map[string]any{
-			"status":            "ok",
-			"collector":         "agent_health",
-			"agent_version":     AgentVersion,
-			"go_version":        runtime.Version(),
-			"os":                runtime.GOOS,
-			"architecture":      runtime.GOARCH,
-			"process_id":        os.Getpid(),
-			"update_channel":    updateChannel,
-			"update_status":     updateStatus,
-			"update_last_error": nullIfEmpty(updateLastError),
-			"observed_at":       time.Now().UTC().Format(time.RFC3339Nano),
-		},
+		Kind:    "event",
+		Type:    "health",
+		Key:     "heartbeat",
+		Payload: payload,
 	}}, nil
 }
 
@@ -305,7 +433,7 @@ func collectLinuxTemperatureMetricItems() []envelope.Item {
 	return items
 }
 
-func collectLinuxCPUMetricItems(cpuCount int) []envelope.Item {
+func collectLinuxCPUMetricItems() []envelope.Item {
 	first, ok := readProcStatCPU()
 	if !ok {
 		return nil
@@ -322,7 +450,6 @@ func collectLinuxCPUMetricItems(cpuCount int) []envelope.Item {
 	return []envelope.Item{
 		metricItem("cpu.usage", usage, "percent"),
 		metricItem("host.cpu.usage_percent", usage, "percent"),
-		metricItem("host.cpu.count", cpuCount, "count"),
 	}
 }
 
@@ -347,15 +474,12 @@ func collectLinuxLoadMetricItems(cpuCount int) []envelope.Item {
 	return items
 }
 
-func collectWindowsHostMetricItems(cpuCount int) []envelope.Item {
+func collectWindowsHostMetricItems() []envelope.Item {
 	items := []envelope.Item{}
 	if out, err := runPowerShell(`Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average | Select-Object Average | ConvertTo-Json -Compress`); err == nil {
-		for _, row := range decodeJSONObjects(out) {
-			if usage := jsonFloat(row, "Average"); usage > 0 {
-				items = append(items, metricItem("cpu.usage", usage, "percent"))
-				items = append(items, metricItem("host.cpu.usage_percent", usage, "percent"))
-				break
-			}
+		if usage, ok := parseWindowsCPUUsage(out); ok {
+			items = append(items, metricItem("cpu.usage", usage, "percent"))
+			items = append(items, metricItem("host.cpu.usage_percent", usage, "percent"))
 		}
 	}
 	if out, err := runPowerShell(`Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress`); err == nil {
@@ -372,8 +496,17 @@ func collectWindowsHostMetricItems(cpuCount int) []envelope.Item {
 			}
 		}
 	}
-	items = append(items, metricItem("host.cpu.count", cpuCount, "count"))
 	return items
+}
+
+func parseWindowsCPUUsage(raw string) (float64, bool) {
+	for _, row := range decodeJSONObjects(raw) {
+		usage, ok := jsonFloatValue(row, "Average")
+		if ok && usage >= 0 && usage <= 100 {
+			return usage, true
+		}
+	}
+	return 0, false
 }
 
 func readProcStatCPU() (cpuTimes, bool) {
@@ -634,6 +767,10 @@ func parseProcNetDev(r io.Reader) []networkInterfaceTraffic {
 		if !ok {
 			continue
 		}
+		name := strings.TrimSpace(namePart)
+		if isInternalNetworkInterface(name) {
+			continue
+		}
 		fields := strings.Fields(valuePart)
 		if len(fields) < 16 {
 			continue
@@ -647,7 +784,7 @@ func parseProcNetDev(r io.Reader) []networkInterfaceTraffic {
 			continue
 		}
 		stats = append(stats, networkInterfaceTraffic{
-			Name:    strings.TrimSpace(namePart),
+			Name:    name,
 			RxBytes: rx,
 			TxBytes: tx,
 		})
@@ -698,7 +835,7 @@ func collectDiskIOStats() []diskIOStats {
 			return nil
 		}
 		defer f.Close()
-		return parseProcDiskstats(f)
+		return filterDiskIOBackingDuplicates(parseProcDiskstats(f), "/sys/block")
 	case "windows":
 		return collectWindowsDiskIOStats()
 	default:
@@ -798,21 +935,124 @@ func parseWindowsPhysicalDiskCounterPath(path string) (string, string, bool) {
 }
 
 func isDiskIODevice(device string) bool {
-	if device == "" {
+	if hasAlphabeticSuffix(device, "sd") ||
+		hasAlphabeticSuffix(device, "hd") ||
+		hasAlphabeticSuffix(device, "vd") ||
+		hasAlphabeticSuffix(device, "xvd") ||
+		hasAlphabeticSuffix(device, "dasd") {
+		return true
+	}
+	if hasNumericSuffix(device, "dm-") ||
+		hasNumericSuffix(device, "md") ||
+		hasNumericSuffix(device, "mmcblk") {
+		return true
+	}
+	return isNVMeDiskName(device)
+}
+
+func hasAlphabeticSuffix(value, prefix string) bool {
+	suffix := strings.TrimPrefix(value, prefix)
+	if suffix == value || suffix == "" {
 		return false
 	}
-	excludedPrefixes := []string{"loop", "ram", "sr"}
-	for _, prefix := range excludedPrefixes {
-		if strings.HasPrefix(device, prefix) {
+	for _, r := range suffix {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
 			return false
 		}
 	}
-	return strings.HasPrefix(device, "sd") ||
-		strings.HasPrefix(device, "vd") ||
-		strings.HasPrefix(device, "xvd") ||
-		strings.HasPrefix(device, "nvme") ||
-		strings.HasPrefix(device, "dm-") ||
-		strings.HasPrefix(device, "hd")
+	return true
+}
+
+func hasNumericSuffix(value, prefix string) bool {
+	suffix := strings.TrimPrefix(value, prefix)
+	if suffix == value || suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isNVMeDiskName(device string) bool {
+	if !strings.HasPrefix(device, "nvme") {
+		return false
+	}
+	remainder := strings.TrimPrefix(device, "nvme")
+	controllerEnd := strings.IndexByte(remainder, 'n')
+	if controllerEnd <= 0 || !allDecimal(remainder[:controllerEnd]) {
+		return false
+	}
+	namespace := remainder[controllerEnd+1:]
+	return namespace != "" && allDecimal(namespace)
+}
+
+func allDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func filterDiskIOBackingDuplicates(stats []diskIOStats, sysBlockRoot string) []diskIOStats {
+	present := make(map[string]struct{}, len(stats))
+	for _, stat := range stats {
+		present[stat.Device] = struct{}{}
+	}
+
+	aggregateDevices := map[string]struct{}{}
+	for _, stat := range stats {
+		slaves, err := os.ReadDir(filepath.Join(sysBlockRoot, stat.Device, "slaves"))
+		if err != nil || len(slaves) == 0 {
+			continue
+		}
+		for _, slave := range slaves {
+			backing := rootBlockDeviceName(slave.Name())
+			if backing == "" || backing == stat.Device {
+				continue
+			}
+			if _, ok := present[backing]; ok {
+				// Prefer the leaf/physical device counters. They cover the whole
+				// device, while dm/md counters cover a logical subset and would
+				// otherwise double-count the same I/O.
+				aggregateDevices[stat.Device] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]diskIOStats, 0, len(stats)-len(aggregateDevices))
+	for _, stat := range stats {
+		if _, duplicate := aggregateDevices[stat.Device]; duplicate {
+			continue
+		}
+		filtered = append(filtered, stat)
+	}
+	return filtered
+}
+
+func rootBlockDeviceName(device string) string {
+	for _, prefix := range []string{"xvd", "dasd", "sd", "hd", "vd"} {
+		if strings.HasPrefix(device, prefix) {
+			end := len(device)
+			for end > len(prefix) && device[end-1] >= '0' && device[end-1] <= '9' {
+				end--
+			}
+			return device[:end]
+		}
+	}
+	if strings.HasPrefix(device, "nvme") || strings.HasPrefix(device, "mmcblk") {
+		if partitionAt := strings.LastIndexByte(device, 'p'); partitionAt > 0 && allDecimal(device[partitionAt+1:]) {
+			return device[:partitionAt]
+		}
+	}
+	return device
 }
 
 func parseUintField(value string) (uint64, bool) {
@@ -827,6 +1067,7 @@ func floatPtr(value float64) *float64 {
 func parseDfOutput(r io.Reader) []mountUsage {
 	scanner := bufio.NewScanner(r)
 	mounts := []mountUsage{}
+	seen := map[string]struct{}{}
 	first := true
 	for scanner.Scan() {
 		if first {
@@ -835,6 +1076,15 @@ func parseDfOutput(r io.Reader) []mountUsage {
 		}
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 6 {
+			continue
+		}
+		filesystem := fields[0]
+		mountPoint := fields[5]
+		if isPseudoMount(filesystem, mountPoint) {
+			continue
+		}
+		identity := filesystem + "\x00" + mountPoint
+		if _, duplicate := seen[identity]; duplicate {
 			continue
 		}
 		total, totalErr := strconv.ParseUint(fields[1], 10, 64)
@@ -846,15 +1096,34 @@ func parseDfOutput(r io.Reader) []mountUsage {
 		usedPercentText := strings.TrimSuffix(fields[4], "%")
 		usedPercent, _ := strconv.ParseFloat(usedPercentText, 64)
 		mounts = append(mounts, mountUsage{
-			Filesystem:     fields[0],
-			MountPoint:     fields[5],
+			Filesystem:     filesystem,
+			MountPoint:     mountPoint,
 			TotalBytes:     total,
 			UsedBytes:      used,
 			AvailableBytes: available,
 			UsedPercent:    usedPercent,
 		})
+		seen[identity] = struct{}{}
 	}
 	return mounts
+}
+
+func isPseudoMount(filesystem, mountPoint string) bool {
+	filesystem = strings.ToLower(strings.TrimSpace(filesystem))
+	mountPoint = strings.TrimSpace(mountPoint)
+	switch filesystem {
+	case "tmpfs", "devtmpfs", "overlay", "shm", "udev", "none", "proc", "sysfs", "cgroup", "cgroup2", "nsfs", "tracefs", "debugfs", "securityfs", "pstore", "mqueue", "configfs", "fusectl", "efivarfs":
+		return true
+	}
+	if strings.HasPrefix(filesystem, "/dev/loop") {
+		return true
+	}
+	for _, prefix := range []string{"/proc", "/sys", "/dev", "/run/credentials"} {
+		if mountPoint == prefix || strings.HasPrefix(mountPoint, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func collectSocketStates() []socketState {
@@ -1346,13 +1615,39 @@ func parseApkPackages(r io.Reader) []packageState {
 		if line == "" {
 			continue
 		}
-		name, version, ok := strings.Cut(line, "-")
+		name, version, ok := parseApkPackageLine(line)
 		if !ok {
 			continue
 		}
 		packages = append(packages, packageState{Name: name, Version: version, Source: "apk"})
 	}
 	return packages
+}
+
+func parseApkPackageLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if packageAndVersion, _, hasDescription := strings.Cut(line, " - "); hasDescription {
+		line = strings.TrimSpace(packageAndVersion)
+	}
+
+	revisionAt := strings.LastIndex(line, "-r")
+	if revisionAt <= 0 || !allDecimal(line[revisionAt+2:]) {
+		return "", "", false
+	}
+	versionAt := strings.LastIndex(line[:revisionAt], "-")
+	if versionAt <= 0 || versionAt+1 >= revisionAt {
+		return "", "", false
+	}
+	versionBase := line[versionAt+1 : revisionAt]
+	if versionBase[0] < '0' || versionBase[0] > '9' {
+		return "", "", false
+	}
+	name := strings.TrimSpace(line[:versionAt])
+	version := strings.TrimSpace(line[versionAt+1:])
+	if name == "" || version == "" {
+		return "", "", false
+	}
+	return name, version, true
 }
 
 func (p packageState) Item() envelope.Item {
@@ -1374,9 +1669,12 @@ func (p packageState) Item() envelope.Item {
 func collectServiceStates() []serviceState {
 	switch runtime.GOOS {
 	case "linux":
-		out, err := runCommand("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend")
+		out, err := runCommand("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "--plain")
 		if err != nil {
-			return nil
+			out, err = runCommand("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend")
+			if err != nil {
+				return nil
+			}
 		}
 		return parseSystemctlServices(strings.NewReader(out))
 	case "windows":
@@ -1413,36 +1711,50 @@ func parseSystemctlServices(r io.Reader) []serviceState {
 	services := []serviceState{}
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) < 4 {
+		unitIndex := systemctlUnitFieldIndex(fields)
+		if unitIndex < 0 || len(fields) < unitIndex+4 {
 			continue
 		}
+		name := strings.TrimLeft(fields[unitIndex], "●* ")
+		activeState := fields[unitIndex+2]
+		subState := fields[unitIndex+3]
 		status := "unknown"
-		switch fields[2] {
+		switch activeState {
 		case "active":
-			if fields[3] == "running" {
+			if subState == "running" {
 				status = "running"
 			} else {
-				status = fields[3]
+				status = subState
 			}
 		case "inactive":
 			status = "stopped"
 		case "failed":
 			status = "failed"
 		default:
-			status = fields[2]
+			status = activeState
 		}
 		displayName := ""
-		if len(fields) > 4 {
-			displayName = strings.Join(fields[4:], " ")
+		if len(fields) > unitIndex+4 {
+			displayName = strings.Join(fields[unitIndex+4:], " ")
 		}
 		services = append(services, serviceState{
-			Name:        fields[0],
+			Name:        name,
 			DisplayName: displayName,
 			Status:      status,
 			StartupType: "unknown",
 		})
 	}
 	return services
+}
+
+func systemctlUnitFieldIndex(fields []string) int {
+	for i, field := range fields {
+		unit := strings.TrimLeft(field, "●* ")
+		if strings.HasSuffix(unit, ".service") {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s serviceState) Item() envelope.Item {
@@ -1499,16 +1811,55 @@ func collectLinuxFirewallStates() []firewallState {
 		states = append(states, firewallState{Backend: "firewalld", Enabled: &enabled})
 	}
 	if out, err := runCommand("nft", "list", "ruleset"); err == nil && strings.TrimSpace(out) != "" {
-		enabled := true
 		ruleCount := strings.Count(out, "\n")
-		states = append(states, firewallState{Backend: "nftables", Enabled: &enabled, RuleCount: &ruleCount})
+		states = append(states, firewallState{Backend: "nftables", Enabled: nftablesEnforcementState(out), RuleCount: &ruleCount})
 	}
 	if out, err := runCommand("iptables", "-S"); err == nil && strings.TrimSpace(out) != "" {
-		enabled := true
+		enabled := iptablesEnforcesPolicy(out)
 		ruleCount := countNonHeaderLines(out)
 		states = append(states, firewallState{Backend: "iptables", Enabled: &enabled, RuleCount: &ruleCount})
 	}
 	return states
+}
+
+func nftablesEnforcementState(ruleset string) *bool {
+	replacer := strings.NewReplacer(";", " ", "{", " ", "}", " ", "(", " ", ")", " ")
+	for _, line := range strings.Split(strings.ToLower(ruleset), "\n") {
+		if commentAt := strings.IndexByte(line, '#'); commentAt >= 0 {
+			line = line[:commentAt]
+		}
+		fields := strings.Fields(replacer.Replace(line))
+		for i, field := range fields {
+			if field == "drop" || field == "reject" {
+				return boolPtr(true)
+			}
+			if field == "policy" && i+1 < len(fields) && (fields[i+1] == "drop" || fields[i+1] == "reject") {
+				return boolPtr(true)
+			}
+		}
+	}
+	// A loaded nftables ruleset may only observe or explicitly accept traffic.
+	// In that case the generic "enabled" meaning is unknown, not true.
+	return nil
+}
+
+func iptablesEnforcesPolicy(rules string) bool {
+	for _, line := range strings.Split(rules, "\n") {
+		fields := strings.Fields(strings.ToUpper(strings.TrimSpace(line)))
+		for i, field := range fields {
+			if (field == "-P" || field == "--POLICY") && i+2 < len(fields) && (fields[i+2] == "DROP" || fields[i+2] == "REJECT") {
+				return true
+			}
+			if (field == "-J" || field == "--JUMP" || field == "-G" || field == "--GOTO") && i+1 < len(fields) && (fields[i+1] == "DROP" || fields[i+1] == "REJECT") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func countNonHeaderLines(text string) int {
@@ -1637,22 +1988,27 @@ func jsonUint64(row map[string]any, key string) uint64 {
 }
 
 func jsonFloat(row map[string]any, key string) float64 {
+	value, _ := jsonFloatValue(row, key)
+	return value
+}
+
+func jsonFloatValue(row map[string]any, key string) (float64, bool) {
 	value, ok := row[key]
 	if !ok || value == nil {
-		return 0
+		return 0, false
 	}
 	switch v := value.(type) {
 	case float64:
-		return v
+		return v, true
 	case int:
-		return float64(v)
+		return float64(v), true
 	case uint64:
-		return float64(v)
+		return float64(v), true
 	case string:
-		f, _ := strconv.ParseFloat(v, 64)
-		return f
+		f, err := strconv.ParseFloat(v, 64)
+		return f, err == nil
 	default:
-		return 0
+		return 0, false
 	}
 }
 

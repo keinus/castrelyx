@@ -288,12 +288,27 @@ class ConfigValidationServiceTest {
                 .messagetype("castrelyx-agent-item")
                 .port(9443)
                 .configParams("""
-                        {"keyStorePath":"/app/certs/logparser-server.p12","keyStorePasswordEnv":"LOGPARSER_KEYSTORE_PASSWORD","trustStorePath":"/app/certs/agent-truststore.p12","trustStorePasswordEnv":"LOGPARSER_TRUSTSTORE_PASSWORD","maxFrameBytes":10485760,"ackMode":"queueAccepted"}
+                        {"keyStorePath":"/app/certs/logparser-server.p12","keyStorePasswordEnv":"LOGPARSER_KEYSTORE_PASSWORD","trustStorePath":"/app/certs/agent-truststore.p12","trustStorePasswordEnv":"LOGPARSER_TRUSTSTORE_PASSWORD","maxFrameBytes":10485760,"maxConnections":32,"tlsReloadIntervalMs":5000,"ackMode":"queueAccepted"}
                         """)
                 .enabled(true)
                 .build();
 
         assertTrue(configValidationService.validateInputAdapter(valid).isValid());
+
+        InputAdapterEntity invalidLimits = InputAdapterEntity.builder()
+                .type("TcpMtlsGzipInputAdapter")
+                .messagetype("castrelyx-agent-item")
+                .port(9443)
+                .configParams("""
+                        {"keyStorePath":"/app/server.p12","keyStorePasswordEnv":"KEY_PASSWORD","trustStorePath":"/app/trust.p12","trustStorePasswordEnv":"TRUST_PASSWORD","maxConnections":0,"tlsReloadIntervalMs":0}
+                        """)
+                .enabled(true)
+                .build();
+        ConfigValidationService.ValidationResult invalidLimitsResult =
+                configValidationService.validateInputAdapter(invalidLimits);
+        assertFalse(invalidLimitsResult.isValid());
+        assertTrue(invalidLimitsResult.errors().stream().anyMatch(error -> error.contains("maxConnections")));
+        assertTrue(invalidLimitsResult.errors().stream().anyMatch(error -> error.contains("tlsReloadIntervalMs")));
     }
 
     @Test
@@ -372,5 +387,20 @@ class ConfigValidationServiceTest {
                 .build();
 
         assertTrue(configValidationService.validateOutputAdapter(valid).isValid());
+
+        OutputAdapterEntity invalidSafetyLimits = OutputAdapterEntity.builder()
+                .type("ClickHouseOutputAdapter")
+                .messagetype("castrelyx-agent-item")
+                .configParams("""
+                        {"endpointUrl":"http://clickhouse:8123","database":"default","tableName":"castrelyx_agent_events","maxPendingBytes":0,"incompleteChunkDlqDir":" ","maxIncompleteChunkDlqRecords":0}
+                        """)
+                .enabled(true)
+                .build();
+        ConfigValidationService.ValidationResult invalidSafetyResult =
+                configValidationService.validateOutputAdapter(invalidSafetyLimits);
+        assertFalse(invalidSafetyResult.isValid());
+        assertTrue(invalidSafetyResult.errors().stream().anyMatch(error -> error.contains("maxPendingBytes")));
+        assertTrue(invalidSafetyResult.errors().stream().anyMatch(error -> error.contains("incompleteChunkDlqDir")));
+        assertTrue(invalidSafetyResult.errors().stream().anyMatch(error -> error.contains("maxIncompleteChunkDlqRecords")));
     }
 }

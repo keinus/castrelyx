@@ -9,10 +9,10 @@ Castrelyx Agent는 Linux와 Windows 호스트 내부에서 실행되는 경량 G
 | 영역 | 코드 위치 | 역할 |
 |---|---|---|
 | Agent 실행 파일 | `agent/cmd/castrelyx-agent` | 설정 로드, 인증서 등록/갱신, collector 실행, 전송 반복 |
-| Agent 런타임 | `agent/internal/agent` | pending spool flush, batch 생성, collector 결과 취합, 실패 시 spool 저장 |
+| Agent 런타임 | `agent/internal/agent` | collector별 cadence 적용, delta/full snapshot 생성, batch chunking, durable spool enqueue와 독립 전송 |
 | Collector | `agent/internal/collectors` | Linux/Windows 로컬 데이터 수집 |
 | Envelope | `agent/internal/envelope` | batch/item 스키마와 민감 key redaction |
-| Spool | `agent/internal/spool` | 전송 실패 batch를 로컬 NDJSON 큐에 저장 |
+| Spool | `agent/internal/spool` | batch chunk를 개별 durable record로 저장하고 성공 ACK/DLQ를 관리 |
 | Sender | `agent/internal/sender` | HTTPS gzip ingest 또는 TCP/mTLS gzip ingest 전송 |
 | TLS identity | `agent/internal/tlsidentity` | ECDSA P-256 key, CSR, CA/client cert, TLS 설정 |
 | Enrollment client | `agent/internal/enrollment` | `/api/agent/enroll`, `/api/agent/renew` 호출 |
@@ -31,11 +31,11 @@ Castrelyx Agent는 Linux와 Windows 호스트 내부에서 실행되는 경량 G
 6. CastrelSign은 CA 인증서와 agent client certificate를 발급하고, agent metadata와 인증서 발급 audit을 저장합니다.
 7. Agent는 `ca.pem`, `client.pem`, `client.key`, `enrollment.json`을 로컬 인증서 디렉터리에 저장합니다.
 8. 이후 batch 전송은 enrollment token이 아니라 client certificate 기반 mTLS로 인증합니다.
-9. Agent는 실행 주기마다 먼저 실패 큐를 flush하고, 그 다음 collector를 실행해 새 batch를 만듭니다.
+9. 상시 실행 Agent는 수집, spool 전송, remote task, updater, file manager를 서로 독립된 control loop로 실행합니다.
 10. HTTPS 모드에서는 gzip JSON batch를 `/api/agent/ingest`로 POST합니다.
 11. TCP/mTLS 모드에서는 gzip JSON batch 앞에 4바이트 big-endian 길이 prefix를 붙여 Logparser TCP ingest 포트로 전송하고, newline JSON ack를 기다립니다.
-12. 전송이 실패하면 JSON batch가 로컬 spool queue에 append-only NDJSON record로 저장됩니다.
-13. 다음 실행 주기에서 spool record를 먼저 재전송하고 성공한 record만 ack 처리합니다.
+12. 수집 결과는 전송 전에 항상 크기 제한에 맞는 chunk로 나뉘어 로컬 segmented spool에 먼저 durable enqueue됩니다.
+13. sender loop는 오래된 spool record부터 최대 25개씩 전송하고, 서버가 성공 응답한 record만 ACK하여 제거합니다. 일시 오류는 재시도하고 영구 오류나 잘못된 record는 dead-letter queue로 옮깁니다.
 14. HTTPS 모드에서는 CastrelSign이 batch와 item을 자체 ingest table에 저장합니다.
 15. TCP/mTLS 모드에서는 Logparser가 item을 `LogEvent`로 변환하고 ClickHouse `castrelyx_agent_events` raw table에 저장합니다.
 16. Manager의 telemetry sync worker는 ClickHouse raw row를 canonical metric/state/event 테이블로 정규화하고, asset binding과 alert 평가에 사용합니다.
@@ -73,16 +73,42 @@ ingest_transport: tcp_mtls
 tcp_ingest_addr: logparser.example.com:9443
 tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
+sender_flush_interval: 2s
 spool_dir: /var/lib/castrelyx-agent/spool
 max_spool_record_bytes: 8mb
+max_spool_bytes: 256mb
+max_spool_records: 10000
+max_spool_age: 168h
+max_batch_items: 1000
+max_batch_bytes: 4mb
+max_item_bytes: 512kb
 log_cursor_path: /var/lib/castrelyx-agent/spool/log-cursors.json
 log_message_max_bytes: 1024
-file_manager_enabled: true
-file_manager_allow_delete: true
+file_manager_enabled: false
+file_manager_allow_delete: false
 file_manager_max_transfer_bytes: 256mb
-file_manager_poll_interval: 5s
+file_manager_poll_interval: 30s
 file_manager_roots:
-  - /
+  - /var/log
+  - /etc/castrelyx
+  - /var/lib/castrelyx-agent
+collector_interval_identity: 1h
+collector_interval_metric: 30s
+collector_interval_network: 5m
+collector_interval_process: 2m
+collector_interval_service: 5m
+collector_interval_port: 2m
+collector_interval_package: 12h
+collector_interval_firewall: 10m
+collector_interval_log_tailer: 30s
+collector_interval_agent_health: 30s
+collector_full_interval_identity: 24h
+collector_full_interval_network: 1h
+collector_full_interval_process: 15m
+collector_full_interval_service: 1h
+collector_full_interval_port: 15m
+collector_full_interval_package: 24h
+collector_full_interval_firewall: 1h
 collectors:
   - identity
   - metric
@@ -104,9 +130,16 @@ collectors:
 | `enrollment_token` | 조건부 | 없음 | client cert가 없거나 만료되어 token enrollment가 필요할 때 필수입니다. |
 | `agent_id` | 선택 | hostname | batch `source_id`, CSR Common Name, 서버 인증 identity로 사용됩니다. |
 | `tenant_id` | 선택 | `default` | batch에 포함되는 tenant 식별자입니다. |
-| `batch_interval` | 선택 | `30s` | 상시 실행 시 collector 실행 주기입니다. Go duration 형식을 사용합니다. |
-| `spool_dir` | 선택 | OS별 기본값 | 실패 batch를 저장하는 로컬 queue 디렉터리입니다. 상대 경로는 config 파일 위치 기준입니다. |
+| `batch_interval` | 선택 | `30s` | collector scheduler의 기본 wake-up 주기입니다. 실제 collector 실행 여부는 collector별 cadence가 결정합니다. |
+| `sender_flush_interval` | 선택 | `2s` | 독립 sender loop의 기본 spool flush 주기입니다. 실패 시 최대 1분까지 exponential backoff합니다. |
+| `spool_dir` | 선택 | OS별 기본값 | 전송 전 batch chunk를 저장하는 segmented queue와 DLQ 디렉터리입니다. 상대 경로는 config 파일 위치 기준입니다. |
 | `max_spool_record_bytes` | 선택 | `8mb` | spool record 하나의 최대 크기입니다. `kb`, `mb` suffix를 지원합니다. |
+| `max_spool_bytes` | 선택 | `256mb` | pending queue와 DLQ record 파일을 합한 총 최대 크기입니다. 공간이 필요하면 가장 오래된 DLQ record부터 정리하며 pending record는 용량 확보 목적으로 버리지 않습니다. |
+| `max_spool_records` | 선택 | `10000` | pending queue와 DLQ를 합한 최대 record 수입니다. |
+| `max_spool_age` | 선택 | `168h` | pending record 보존 시간입니다. 초과 record는 DLQ로 이동하고, 이보다 오래된 DLQ record는 정리됩니다. |
+| `max_batch_items` | 선택 | `1000` | batch chunk 하나에 넣는 최대 item 수입니다. |
+| `max_batch_bytes` | 선택 | `4mb` | JSON encoding 후 batch chunk의 최대 크기입니다. `max_spool_record_bytes` 이하여야 합니다. |
+| `max_item_bytes` | 선택 | `512kb` | JSON encoding 후 item 하나의 최대 크기입니다. `max_batch_bytes` 이하여야 합니다. |
 | `log_cursor_path` | 선택 | `${spool_dir}/log-cursors.json` | log tailer cursor 저장 파일입니다. 상대 경로는 config 파일 위치 기준입니다. |
 | `log_message_max_bytes` | 선택 | `1024` | log tailer가 전송하는 message 최대 byte 길이입니다. |
 | `cert_dir` | 선택 | OS별 기본값 | client key/cert, CA cert, enrollment metadata 저장 디렉터리입니다. |
@@ -117,14 +150,31 @@ collectors:
 | `ingest_transport` | 선택 | `https` | `https` 또는 `tcp_mtls`만 허용합니다. |
 | `tcp_ingest_addr` | 조건부 | 없음 | `ingest_transport: tcp_mtls`일 때 필수입니다. `host:port` 형식입니다. |
 | `tcp_ingest_server_name` | 선택 | `tls_server_name` | TCP/mTLS server certificate 검증용 ServerName입니다. |
-| `file_manager_enabled` | 선택 | `true` | CastrelSign mTLS command channel 기반 파일 관리자 polling을 켜거나 끕니다. |
-| `file_manager_roots` | 선택 | OS별 기본 root | 자산 파일 관리자 화면에서 노출할 허용 root 목록입니다. |
-| `file_manager_allow_delete` | 선택 | `true` | 원격 삭제 명령 허용 여부입니다. |
+| `file_manager_enabled` | 선택 | `false` | CastrelSign mTLS command channel 기반 파일 관리자 polling을 켜거나 끕니다. 명시적으로 활성화해야 합니다. |
+| `file_manager_roots` | 선택 | OS별 기본 root | 허용 root 목록입니다. Linux 기본은 `/var/log`, `/etc/castrelyx`, `/var/lib/castrelyx-agent`이고 Windows 기본은 `%ProgramData%\Castrelyx\files` 하나입니다. |
+| `file_manager_allow_delete` | 선택 | `false` | 삭제뿐 아니라 move와 기존 대상 overwrite를 허용할지 결정합니다. 파일 관리자를 켜도 이 파괴적 동작은 별도로 활성화해야 합니다. |
 | `file_manager_max_transfer_bytes` | 선택 | `256mb` | 업로드/다운로드 단일 파일 최대 크기입니다. |
-| `file_manager_poll_interval` | 선택 | `5s` | 파일 관리자 command polling 주기입니다. |
+| `file_manager_poll_interval` | 선택 | `30s` | 파일 관리자 command polling 주기입니다. |
+| `collector_interval_<name>` | 선택 | 아래 cadence 표 | collector별 실행 주기입니다. 등록된 collector 이름만 허용합니다. |
+| `collector_full_interval_<name>` | 선택 | 아래 cadence 표 | `identity`, `network`, `process`, `service`, `port`, `package`, `firewall`의 full snapshot 주기입니다. |
 | `collectors` | 선택 | 기본 collector 전체 | 활성 collector 목록입니다. 알 수 없는 이름은 설정 오류입니다. |
 
 `manager_url`과 enrollment 응답의 `ingest_url`은 모두 `https`만 허용됩니다. HTTP URL을 넣으면 설정 또는 sender 생성 단계에서 실패합니다.
+
+현재 기본 cadence는 다음과 같습니다. scheduler는 `batch_interval`마다 깨어나지만, 아직 주기가 되지 않은 collector는 실행하지 않습니다.
+
+| Collector | 실행 주기 | Full snapshot 주기 |
+|---|---:|---:|
+| `identity` | 1시간 | 24시간 |
+| `metric` | 30초 | 해당 없음 |
+| `network` | 5분 | 1시간 |
+| `process` | 2분 | 15분 |
+| `service` | 5분 | 1시간 |
+| `port` | 2분 | 15분 |
+| `package` | 12시간 | 24시간 |
+| `firewall` | 10분 | 1시간 |
+| `log_tailer` | 30초 | 해당 없음, cursor 증분 수집 |
+| `agent_health` | 30초 | 해당 없음 |
 
 ## 수집 데이터
 
@@ -132,7 +182,10 @@ Agent batch는 항상 다음 envelope로 전송됩니다.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
+  "batch_id": "5fb34990d93a47ac93fe346bf871d62d",
+  "chunk_index": 0,
+  "chunk_count": 1,
   "source": "agent",
   "source_id": "prod-web-01",
   "tenant_id": "default",
@@ -140,6 +193,8 @@ Agent batch는 항상 다음 envelope로 전송됩니다.
   "sent_at": "2026-06-16T05:00:01Z",
   "items": [
     {
+      "item_id": "5fb34990d93a47ac93fe346bf871d62d:0",
+      "sequence": 0,
       "kind": "metric",
       "type": "host",
       "key": "cpu.usage",
@@ -154,6 +209,21 @@ Agent batch는 항상 다음 envelope로 전송됩니다.
 ```
 
 `kind`는 `asset`, `metric`, `state`, `event` 중 하나입니다. 서버 측 Manager는 `metric`을 metric sample로, `state`와 `asset`을 state snapshot으로, `event`를 event row와 alert 평가 입력으로 사용합니다.
+
+`batch_id`는 collection cycle마다 생성되고, `item_id`는 기본적으로 `<batch_id>:<sequence>`입니다. item 수나 JSON byte 한계를 넘으면 동일한 `batch_id`를 유지한 채 `chunk_index`/`chunk_count`가 다른 여러 batch로 나뉩니다. 이 식별자는 수신 측 중복 억제와 장애 추적을 위한 것이며 exactly-once 전달을 의미하지 않습니다. 서버가 수신한 뒤 ACK가 유실되거나 Agent가 로컬 ACK 전에 종료되면 같은 chunk가 재전송될 수 있습니다.
+
+### Delta와 full snapshot
+
+`identity`, `network`, `process`, `service`, `port`, `package`, `firewall`의 `asset`/`state` item은 매 실행마다 모두 전송하지 않습니다.
+
+- 첫 수집과 `collector_full_interval_<name>` 도래 시 현재 item 전체를 `snapshot_full: true`로 전송합니다. 같은 collector의 item은 `<batch_id>:<collector>` 형식의 동일한 `snapshot_id`와 전체 inventory 크기인 `snapshot_item_count`를 공유합니다.
+- 그 사이에는 새로 생기거나 payload가 바뀐 item만 `snapshot_full: false`로 전송합니다. 이 delta에도 collector별 `snapshot_id`와 현재 inventory의 `snapshot_item_count`가 포함됩니다.
+- 이전에 있던 key가 사라지면 delta/full 모두 같은 kind/type/key에 `deleted: true` tombstone을 전송합니다. 정상적으로 빈 집합이 될 수 있는 socket inventory도 마지막 socket이 닫히면 정확히 제거됩니다.
+- 명령/권한 실패는 collector가 오류를 반환해 state filter를 건너뛰므로 마지막 cache를 보존합니다. 오류 없이 반환된 빈 inventory는 유효한 완전 집합으로 처리하고, full 주기에는 `snapshot_item_count: 0`, `snapshot_full: true` tombstone이 complete watermark를 만듭니다.
+- 상태 hash와 collector별 마지막 full 시각은 `${spool_dir}/state-cache.json`에 `0600` atomic file로 저장됩니다. Linux에서는 rename 뒤 parent directory도 `fsync`하므로 정상 재시작 후에는 변경분만 이어서 보냅니다. 파일이 없거나 손상되면 health의 `state_cache_error`에 드러나며, cache가 없는 collector는 다음 수집을 full로 만들고 성공한 저장으로 손상 파일을 교체합니다.
+- full snapshot은 현재 전체 집합과 이전 집합에서 사라진 key의 tombstone을 함께 보냅니다. Manager는 동일 `snapshot_id`의 고유 key 수가 선언된 `snapshot_item_count` 이상인 full snapshot만 해당 state type의 최신 full watermark로 채택하므로, 일부 chunk만 도착한 full이 이전 상태를 조기에 숨기지 않습니다.
+
+`metric`, `event`, log tailer item은 위 state delta filter를 통과하지 않고 collector 결과 그대로 enqueue됩니다.
 
 ### Identity collector
 
@@ -435,10 +505,8 @@ Collector 이름은 `log_tailer`입니다.
 
 Linux 수집:
 
-- `/var/log/auth.log`
-- `/var/log/secure`
-- `/var/log/syslog`
-- `/var/log/messages`
+- `journald` 우선 수집
+- `journalctl`이 없거나 실행/파싱에 실패하거나 최초 빈 결과로 journal coverage를 증명하지 못할 때 `/var/log/auth.log`, `/var/log/secure`, `/var/log/syslog`, `/var/log/messages`로 자동 폴백
 - `/var/log/suricata/eve.json`
 - `/var/log/suricata/fast.log`
 - `/var/log/suricata/suricata.log`
@@ -446,9 +514,8 @@ Linux 수집:
 - `/opt/zeek/logs/current/{conn,notice,dns,http,ssl,weird}.log`
 - `/usr/local/zeek/logs/current/{conn,notice,dns,http,ssl,weird}.log`
 - `/var/log/bro/current/{conn,notice,dns,http,ssl,weird}.log`
-- `journald`
 
-Linux file log는 cursor 파일에 inode+offset을 저장합니다. 첫 실행이나 rotation/truncation 감지 시에는 최근 tail만 bounded resync하고, 이후 실행부터 새로 추가된 줄만 전송합니다. 존재하지 않는 Suricata/Zeek 경로는 조용히 건너뜁니다. journald는 journal cursor를 저장하고 `--after-cursor` 기반으로 증분 수집합니다.
+Linux file log는 cursor 파일에 file identity, offset, 128-byte checkpoint와 미완성 line fragment를 저장합니다. 첫 실행이나 rotation/truncation 감지 시에는 최대 64 KiB window에서 최근 50줄만 bounded resync하고, 이후에는 실행당 최대 64 KiB와 완성된 200줄을 오래된 순서대로 처리합니다. 줄이 여러 read에 걸치면 최대 64 KiB까지 cursor에 이어 붙이고, 그보다 긴 줄은 `line_truncated: true`로 명시합니다. 존재하지 않는 Suricata/Zeek 경로는 조용히 건너뜁니다. journald는 첫 실행 최근 50개, 이후 `--after-cursor` 기준 최대 200개를 오래된 순서대로 처리합니다. journald가 정상인 동안에는 rsyslog가 복제한 auth/system 파일 4종을 다시 읽지 않아 같은 이벤트의 이중 적재를 막고, Suricata/Zeek 전용 파일은 계속 수집합니다. journald 실패 주기는 journal cursor 변경을 폐기하고 bounded file tail로 폴백합니다. `collector_error` 진단은 fallback 전환 때 한 번만 남기고 정상 복구 후 다시 실패할 때까지 반복하지 않습니다.
 
 Windows 수집:
 
@@ -460,7 +527,9 @@ Windows 수집:
 - `Microsoft-Windows-TerminalServices-LocalSessionManager/Operational` channel
 - `Microsoft-Windows-Windows Defender/Operational` channel
 
-Windows Event Log는 channel별 `RecordId`를 cursor 파일에 저장합니다. 첫 실행은 channel별 최근 20개만 수집하고, 이후 실행부터 마지막 `RecordId` 이후 이벤트를 전송합니다.
+Windows Event Log는 channel별 `RecordId`를 cursor 파일에 저장합니다. 첫 실행은 channel별 최근 20개를 수집하고, 이후에는 `EventRecordID > cursor` 조건과 `-Oldest`로 실행당 최대 100개를 오래된 순서대로 전송합니다. incremental 결과가 없으면 같은 PowerShell 호출에서 최신 1건의 RecordId를 확인하고, channel clear로 최신 ID가 저장 cursor보다 작아졌을 때만 cursor를 초기화해 새 로그를 다시 따라갑니다.
+
+file offset, journald cursor, Windows `RecordId`는 수집 직후 바로 저장하지 않습니다. collection cycle의 모든 batch chunk가 segmented spool에 성공적으로 enqueue된 뒤에만 pending cursor를 temp path와 rename을 거쳐 저장합니다. enqueue 또는 cursor 저장이 실패하면 다음 cycle은 마지막 committed cursor에서 재생하므로 누락보다 중복 가능성을 선택합니다. load/save/scanner 오류도 collector 오류로 노출됩니다.
 
 관련 설정:
 
@@ -604,9 +673,18 @@ TCP/mTLS 전송:
 - truststore는 CastrelSign이 관리하는 CA/truststore를 사용합니다.
 - agent는 TLS handshake 후 gzip JSON batch를 전송합니다.
 - frame 형식은 `4-byte big-endian length` + `gzip JSON payload`입니다.
+- Agent는 gzip에 CPU 비용이 낮은 `BestSpeed`를 사용하고 성공한 TLS connection을 다음 frame에도 재사용합니다. I/O 오류나 영구 NACK 뒤에는 connection을 닫고 다음 시도에서 다시 연결합니다.
+- Agent의 compressed frame 상한은 8 MiB입니다. Logparser 기본 상한은 compressed frame 10 MiB, decompressed JSON 16 MiB, batch item 5,000개입니다.
 - 서버는 frame 길이가 0 이하이거나 `maxFrameBytes`를 넘으면 NACK를 반환합니다.
 - 서버는 client certificate CN과 batch `source_id`가 다르면 NACK를 반환합니다.
-- 서버는 queue에 이벤트를 넣은 뒤 `{"status":"accepted"}` newline ack를 반환합니다.
+- schema `1.1`에서는 nonblank `batch_id`, 유효한 `chunk_index`/`chunk_count`, 배열 `items`, item별 nonblank `item_id`, chunk 안에서 중복되지 않는 0 이상의 정수 `sequence`를 검증합니다.
+- 서버는 batch 전체가 input queue에 들어갈 여유가 있는지 확인한 뒤 한 번에 enqueue하고 `{"status":"accepted"}` newline ACK를 반환합니다. 여유가 없으면 `queue_full` NACK로 전체 chunk를 재시도하게 하여 부분 enqueue를 피합니다.
+- `queue_full`, `busy`, `retry_later` NACK는 transient로 재시도하고 그 밖의 NACK와 oversized frame은 DLQ 대상으로 분류합니다.
+- Logparser는 최근 50,000개의 `source_id:batch_id:chunk_index`를 process memory에서 기억해 같은 process 수명 안의 최근 재전송을 input queue 앞에서 억제합니다.
+- ClickHouse output은 schema `1.1` item을 `source_id`/`batch_id`/`chunk_index` 단위로 모아 `chunk_item_count`개가 모두 도착하면 `item_sequence` 순서로 한 번에 insert합니다. raw와 canonical telemetry table 각각에 chunk identity 기반의 안정적인 dedup token을 사용하므로 재시도에서 `sent_at`이나 body가 달라져도 같은 완성 chunk의 token은 같습니다.
+- 불완전 chunk group은 기본 30초 timeout, 최대 2,048 groups/50,000 items, adapter 종료 시 강제 flush됩니다. 불완전 group에는 완성 chunk용 안정 token을 사용하지 않습니다.
+
+Agent의 로컬 spool 재시도 의미는 at-least-once이지만 TCP ACK는 Logparser의 메모리 input queue 수락을 뜻할 뿐 ClickHouse commit을 뜻하지 않습니다. 따라서 ACK 뒤 Logparser가 저장 전에 종료되면 데이터가 유실될 수 있고, ACK 유실·cache eviction·Logparser 재시작·ClickHouse dedup window 초과 때는 중복이 생길 수 있습니다. 안정 token은 이 범위를 줄이지만 end-to-end exactly-once나 무손실 전달을 보장하지 않습니다.
 
 ### Payload redaction
 
@@ -636,20 +714,33 @@ redaction 값은 `[REDACTED]`입니다.
 
 ### 로컬 spool 보안
 
-전송 실패 batch는 `${spool_dir}/queue.ndjson`에 저장됩니다.
+모든 새 batch chunk는 네트워크 전송 전에 `${spool_dir}/queue/<record-id>.json`에 개별 record로 저장됩니다. 기존 `${spool_dir}/queue.ndjson`이 있으면 시작 시 segmented record로 migration한 뒤 legacy 파일을 제거합니다.
 
 특성:
 
 - spool 디렉터리는 `0700`으로 생성됩니다.
-- queue 파일은 `0600`으로 생성됩니다.
-- record는 append-only NDJSON 형식입니다.
-- 각 record는 random 16바이트가 포함된 id와 생성 시각, JSON payload를 갖습니다.
-- `max_spool_record_bytes`보다 큰 batch는 spool에 저장하지 않고 오류 처리됩니다.
-- 다음 주기에서 최대 25개 record를 먼저 재전송합니다.
-- 성공적으로 전송된 record id만 ack되어 queue 파일에서 제거됩니다.
-- 깨진 JSON record는 ack 대상으로 처리되어 재전송 루프를 막습니다.
+- queue/dead-letter 디렉터리는 `0700`, record 파일은 `0600`으로 생성됩니다.
+- 각 record는 시간순 정렬이 가능한 id, 생성 시각, JSON payload를 갖습니다. temp file에 쓴 뒤 file `Sync`와 rename으로 publish하고, 비-Windows에서는 parent directory도 `fsync`합니다.
+- `max_spool_bytes`와 `max_spool_records`는 pending과 DLQ의 합계를 제한합니다. 새 enqueue 공간이 필요하면 가장 오래된 DLQ를 먼저 지우지만, 아직 ACK되지 않은 pending record를 용량 확보 목적으로 버리지는 않습니다. DLQ를 정리해도 한계를 맞출 수 없으면 collection enqueue가 실패합니다.
+- `max_spool_age`를 넘은 pending record, spool envelope는 유효하지만 batch payload JSON decode가 불가능한 record, 영구 delivery 오류 record는 `${spool_dir}/deadletter`로 옮기고 reason을 기록합니다. age를 넘은 DLQ record와 총량 한계 때문에 밀려난 가장 오래된 DLQ record는 자동 정리됩니다.
+- 손상된 queue record는 원본 파일명과 base64 원문을 담은 진단 record로 DLQ에 격리하고, `Peek`는 다음 정상 record를 계속 처리합니다.
+- 독립 sender loop가 오래된 순서로 한 번에 최대 25개를 전송하고, 성공적으로 전송된 record id만 ACK하여 제거합니다.
+- 일시 오류 record는 queue에 남아 exponential backoff로 재시도합니다.
+- health snapshot은 pending/DLQ/합계 record와 byte, pending oldest age를 노출합니다.
 
-현재 구현은 spool 파일을 별도로 암호화하지 않습니다. 보안은 filesystem permission과 실행 계정 분리로 보호합니다. 디스크 암호화가 필요한 환경에서는 OS 레벨 disk encryption 또는 별도 encrypted volume에 `spool_dir`를 두는 구성이 필요합니다.
+현재 구현은 spool 파일을 별도로 암호화하지 않습니다. 보안은 filesystem permission과 실행 계정 분리로 보호합니다. 디스크 암호화가 필요한 환경에서는 OS 레벨 disk encryption 또는 별도 encrypted volume에 `spool_dir`를 두는 구성이 필요합니다. DLQ는 자동 재전송되지 않으며 총량/age 제한 때문에 오래된 진단 record가 제거될 수 있으므로 외부 보관이 필요하면 운영자가 먼저 추출해야 합니다. 여러 chunk를 넣다가 뒤 chunk 또는 state-cache 저장이 실패하면 이번 cycle에서 이미 넣은 record를 제거해 rollback하지만, 여러 파일을 아우르는 filesystem transaction은 아니므로 process/전원 장애 시점에 따라 일부 chunk가 남을 수 있습니다.
+
+### File manager와 updater의 streaming I/O
+
+File manager는 기본적으로 비활성화되어 있고(`file_manager_enabled: false`), 활성화해도 삭제는 기본적으로 거부합니다(`file_manager_allow_delete: false`). Linux 기본 root는 `/var/log`, `/etc/castrelyx`, `/var/lib/castrelyx-agent`이고 Windows 기본 root는 `%ProgramData%\Castrelyx\files` 하나입니다. 기존 경로와 새 경로의 parent symlink를 resolve한 뒤 허용 root 내부인지 확인합니다. configured root 자체는 rename/delete/move할 수 없고, directory COPY/MOVE는 source와 같은 경로 또는 그 하위 target을 거부합니다. recursive copy는 내부 symlink를 따라가지 않고 오류로 종료해 허용 root 밖 파일의 복제와 재귀 디스크 고갈을 막습니다. `file_manager_allow_delete: false`이면 delete뿐 아니라 move, copy/upload의 기존 대상 overwrite도 거부합니다.
+
+production HTTP transport의 파일 업로드/다운로드는 전체 파일을 memory에 올리지 않습니다. 서버에서 Agent로 받는 파일은 같은 디렉터리의 temp file에 최대 `file_manager_max_transfer_bytes`까지 stream하고 size 확인, file `Sync`, rename 순서로 publish합니다. Agent에서 서버로 보내는 파일도 열린 파일에서 request body로 stream합니다. 기존 `Transport` interface만 구현한 외부 adapter/test double은 호환 경로에서 byte slice buffering을 사용할 수 있습니다.
+
+Updater도 artifact를 최대 128 MiB까지 temp file로 stream하면서 SHA-256을 동시에 계산합니다. Ed25519 manifest signature, manifest/release의 OS·architecture·size와 artifact SHA-256을 검증한 뒤 file `Sync`와 durable replace로 stage하며, 검증 전에 실행 파일을 교체하지 않습니다. `APPLY_INTENT`/`APPLYING`과 `ROLLBACK_INTENT`/`ROLLBACKING`은 source-target hash로 실제 교체 여부를 확인하고 terminal 상태의 staging은 제거합니다.
+
+새 바이너리는 전체 config, spool, enrollment, TLS 초기화 전에 `update_dir`만 관대하게 찾아 startup probation을 시작합니다. 첫 실행에는 1회를 허용하고 첫 collection이 성공하면 원격 상태 보고보다 먼저 `probation_passed`를 durable 저장합니다. 건강 표시 없이 다시 시작되면 이전 바이너리로 rollback하고 재시작하므로 config 호환성이나 초기화 회귀도 restart loop로 남지 않습니다. Windows 설치 스크립트는 SCM failure action을 함께 설정하고, replacement helper는 교체 성공 여부와 서비스 재시작 오류를 main update state에 반영합니다.
+
+이 watchdog은 교체된 실행 파일의 `main`에 진입할 수 있어야 동작합니다. OS loader 실패, 지원하지 않는 CPU instruction, package `init` panic처럼 프로세스가 recovery 코드에 도달하지 못하는 artifact까지 자동 복구하려면 업데이트 대상과 분리된 이전 버전 기반 external launcher가 추가로 필요합니다. 현재 installer는 이 별도 launcher를 설치하지 않습니다.
 
 ## 서버 수신과 저장
 
@@ -681,6 +772,10 @@ TCP ingest는 batch 안의 각 `items[]`를 개별 `LogEvent`로 변환합니다
 추가되는 field 예:
 
 - `schema_version`
+- `batch_id`
+- `chunk_index`
+- `chunk_count`
+- `chunk_item_count`
 - `source`
 - `source_id`
 - `tenant_id`
@@ -689,6 +784,8 @@ TCP ingest는 batch 안의 각 `items[]`를 개별 `LogEvent`로 변환합니다
 - `item_kind`
 - `item_type`
 - `item_key`
+- `item_id`
+- `item_sequence`
 - `payload`
 - `payload_*`
 
@@ -704,17 +801,23 @@ CREATE TABLE IF NOT EXISTS castrelyx.castrelyx_agent_events (
   agent_id String,
   tenant_id Nullable(String),
   source_id String,
+  batch_id String DEFAULT '',
+  chunk_index UInt32 DEFAULT 0,
+  chunk_item_count UInt32 DEFAULT 0,
+  item_sequence UInt32 DEFAULT 0,
+  item_id String DEFAULT '',
   item_kind Nullable(String),
   item_type Nullable(String),
   item_key Nullable(String),
   event_json String
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(received_at)
-ORDER BY (source_id, received_at)
+PARTITION BY toDate(received_at)
+ORDER BY (received_at, source_id, ifNull(item_key, ''))
+TTL toDateTime(received_at) + INTERVAL 7 DAY DELETE
 ```
 
-ClickHouse output adapter는 기본 `batchSize: 100`, `flushIntervalMs: 5000`으로 buffer를 flush합니다. 인증은 `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` 환경변수에서 읽어 Basic Auth header를 구성합니다.
+schema `1.1` chunk는 `batchSize`가 아니라 선언된 `chunk_item_count`가 찰 때 flush됩니다. `batchSize: 100`과 `flushIntervalMs: 5000`은 chunk metadata가 없는 legacy event buffer에 적용됩니다. Chunk group은 기본 `incompleteGroupTimeoutMs: 30000`, `maxPendingGroups: 2048`, `maxPendingItems: 50000`, `maxPendingBytes: 67108864`의 전역 상한을 함께 적용합니다. 시간·개수·byte 상한이나 adapter 종료로 불완전하게 남은 chunk는 canonical table에 쓰지 않고 기본 128 MiB/1,000 records의 durable DLQ로 격리합니다. 인증은 `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` 환경변수에서 읽어 Basic Auth header를 구성합니다.
 
 ### Manager canonical 동기화
 
@@ -949,6 +1052,8 @@ New-Service `
   -BinaryPathName '"C:\ProgramData\Castrelyx\castrelyx-agent.exe" -config "C:\ProgramData\Castrelyx\agent.yaml"' `
   -StartupType Automatic
 
+sc.exe failure CastrelyxAgent reset= 86400 actions= restart/5000/restart/5000/restart/30000
+sc.exe failureflag CastrelyxAgent 1
 Start-Service CastrelyxAgent
 Get-Service CastrelyxAgent
 ```
@@ -969,15 +1074,17 @@ castrelyx-agent -config /etc/castrelyx/agent.yaml -once
 castrelyx-agent -config /etc/castrelyx/agent.yaml
 ```
 
-상시 실행은 다음 루프를 반복합니다.
+상시 실행은 역할별 control loop를 독립적으로 실행합니다.
 
-1. spool에 남아 있는 pending batch를 최대 25개까지 먼저 전송합니다.
-2. collector들을 순서대로 실행합니다.
-3. collector 오류는 전체 실행 실패가 아니라 `collector_error` event item으로 batch에 포함합니다.
-4. item이 하나도 없으면 heartbeat event를 추가합니다.
-5. batch를 전송합니다.
-6. 전송 실패 시 batch를 spool에 저장합니다.
-7. `batch_interval`만큼 기다립니다.
+| Loop | 기본 cadence | 동작 |
+|---|---:|---|
+| Collection | `batch_interval: 30s` ±10% jitter | due collector만 순서대로 실행하고, delta/full filter와 chunking 후 모든 chunk를 spool에 enqueue합니다. collector 오류는 `collector_error` event로 포함하고 item이 없으면 idle heartbeat를 만듭니다. |
+| Sender | `sender_flush_interval: 2s` ±20% jitter | 오래된 pending record부터 최대 25개씩 보냅니다. 실패 시 exponential backoff를 적용하며 최대 1분입니다. |
+| Remote task | `remote_task_interval: 10s` ±20% jitter | 활성화된 경우 command를 poll하고 실행합니다. |
+| Updater | 초기 probation, 이후 시작 약 1초/`update_check_interval: 6h` ±10% jitter | config/TLS 이전 probation과 rollback 복구를 먼저 수행하고, 이후 artifact 확인/검증/적용 및 원격 상태 보고를 collection loop와 분리합니다. |
+| File manager | `file_manager_poll_interval: 30s` | 명시적으로 활성화된 경우 별도 goroutine에서 command를 poll합니다. |
+
+따라서 서버 전송 지연은 host observation을 직접 멈추지 않습니다. 다만 pending spool이 byte/record 한계에 도달하면 새 collection chunk를 durable enqueue할 수 없어 해당 collection cycle은 실패합니다. `-once`는 호환용 단발 경로로 한 번 수집/enqueue한 뒤 pending record를 최대 25개 flush합니다.
 
 ## 운영 확인
 
@@ -1023,8 +1130,12 @@ Manager 쪽에서는 agent dashboard, traffic view, asset list가 raw/canonical 
 - Agent 설정 parser는 완전한 YAML parser가 아니라 단순 key/value와 `collectors`, `file_manager_roots` list만 처리합니다.
 - `manager_url` 이름은 Manager처럼 보이지만 실제 agent API 구현은 CastrelSign에 있습니다.
 - Log tailer cursor는 local JSON 파일 기반이며, Windows는 Event Log bookmark XML이 아니라 channel별 `RecordId`를 저장합니다.
+- Log cursor는 spool enqueue 후 commit되어 누락보다 재생을 선택하지만, cursor commit 실패나 ACK 유실 시 중복 event가 생길 수 있습니다.
 - 일반 payload 자유 텍스트 문자열은 key 기반 redaction만 적용합니다. 단, log tailer message는 pattern scrub과 길이 제한을 적용합니다.
 - Spool은 암호화하지 않습니다.
+- 여러 chunk enqueue와 state-cache 저장은 실패 시 이번 cycle의 이미 쓴 queue record를 제거하지만 하나의 filesystem transaction은 아닙니다. process/전원 장애 경계에서는 일부 chunk가 남아 재전송될 수 있습니다.
+- Agent spool, Logparser 최근 batch cache, ClickHouse dedup token은 중복 가능성을 줄이지만 end-to-end exactly-once를 보장하지 않습니다. 특히 TCP ACK는 메모리 queue 수락 시점이고 ClickHouse commit 시점이 아닙니다.
+- DLQ는 pending과 함께 총량/age 제한을 적용하며 자동 재처리하지 않습니다. 공간 확보 과정에서 오래된 DLQ부터 삭제되므로 장기 증적 보관소로 사용할 수 없습니다.
 - Process command line과 환경변수는 수집하지 않습니다.
 - Linux service startup type, binary path, user, last state change는 대부분 null입니다.
 - Windows 일부 collector는 PowerShell과 CIM cmdlet 사용 가능 여부에 의존합니다.

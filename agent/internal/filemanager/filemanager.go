@@ -111,6 +111,14 @@ type Transport interface {
 	Upload(ctx context.Context, transferID string, name string, contentType string, body []byte) error
 }
 
+// StreamingTransport is an optional extension used by the production client so
+// large transfers do not need to be materialized in memory. Transport remains
+// supported for compatibility with existing callers and test doubles.
+type StreamingTransport interface {
+	DownloadTo(ctx context.Context, transferID string, destination io.Writer, maxBytes int64) (int64, error)
+	UploadFrom(ctx context.Context, transferID string, name string, contentType string, body io.Reader, sizeBytes int64) error
+}
+
 type Executor struct {
 	roots            []Root
 	allowDelete      bool
@@ -172,19 +180,17 @@ func New(config Config) (*Client, error) {
 
 func DefaultRoots() []Root {
 	if runtime.GOOS == "windows" {
-		roots := make([]Root, 0, 3)
-		for drive := 'C'; drive <= 'Z'; drive++ {
-			path := string(drive) + `:\`
-			if _, err := os.Stat(path); err == nil {
-				roots = append(roots, Root{Name: string(drive) + ":", Path: path})
-			}
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			base = `C:\ProgramData`
 		}
-		if len(roots) > 0 {
-			return roots
-		}
-		return []Root{{Name: "ProgramData", Path: filepath.Join(os.Getenv("ProgramData"), "Castrelyx")}}
+		return []Root{{Name: "Castrelyx files", Path: filepath.Join(base, "Castrelyx", "files")}}
 	}
-	return []Root{{Name: "Filesystem", Path: "/"}}
+	return []Root{
+		{Name: "System logs", Path: "/var/log"},
+		{Name: "Castrelyx config", Path: "/etc/castrelyx"},
+		{Name: "Castrelyx state", Path: "/var/lib/castrelyx-agent"},
+	}
 }
 
 func (c *Client) Run(ctx context.Context) {
@@ -214,41 +220,68 @@ func (c *Client) checkAndExecute(ctx context.Context) {
 }
 
 func (c *Client) Download(ctx context.Context, transferID string) ([]byte, error) {
+	// Retain the original Transport contract; Executor uses DownloadTo instead.
+	var body bytes.Buffer
+	if _, err := c.DownloadTo(ctx, transferID, &body, c.executor.maxTransferBytes); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
+}
+
+func (c *Client) DownloadTo(ctx context.Context, transferID string, destination io.Writer, maxBytes int64) (int64, error) {
+	if destination == nil {
+		return 0, errors.New("download destination is required")
+	}
+	if maxBytes <= 0 || maxBytes > c.executor.maxTransferBytes {
+		maxBytes = c.executor.maxTransferBytes
+	}
 	endpoint, err := c.absoluteURL("/api/agent/file-manager/transfers/" + url.PathEscape(transferID) + "/content")
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("download transfer returned status %d", resp.StatusCode)
+		return 0, fmt.Errorf("download transfer returned status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, c.executor.maxTransferBytes+1))
+	if resp.ContentLength > maxBytes {
+		return 0, errors.New("download transfer exceeds max_transfer_bytes")
+	}
+	written, err := copyWithLimit(destination, resp.Body, maxBytes)
 	if err != nil {
-		return nil, err
+		return written, err
 	}
-	if int64(len(body)) > c.executor.maxTransferBytes {
-		return nil, errors.New("download transfer exceeds max_transfer_bytes")
-	}
-	return body, nil
+	return written, nil
 }
 
 func (c *Client) Upload(ctx context.Context, transferID string, name string, contentType string, body []byte) error {
+	// Retain the original Transport contract; Executor uses UploadFrom instead.
+	return c.UploadFrom(ctx, transferID, name, contentType, bytes.NewReader(body), int64(len(body)))
+}
+
+func (c *Client) UploadFrom(ctx context.Context, transferID string, name string, contentType string, body io.Reader, sizeBytes int64) error {
+	if body == nil {
+		return errors.New("upload body is required")
+	}
+	if sizeBytes < 0 || sizeBytes > c.executor.maxTransferBytes {
+		return errors.New("upload transfer exceeds max_transfer_bytes")
+	}
 	endpoint, err := c.absoluteURL("/api/agent/file-manager/transfers/" + url.PathEscape(transferID) + "/content")
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, io.LimitReader(body, sizeBytes))
 	if err != nil {
 		return err
 	}
+	req.ContentLength = sizeBytes
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -260,7 +293,7 @@ func (c *Client) Upload(ctx context.Context, transferID string, name string, con
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("upload transfer returned status %d", resp.StatusCode)
 	}
@@ -285,7 +318,7 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("%s returned status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(payload)))
@@ -419,9 +452,17 @@ func (e *Executor) rename(path string, newName string) (MutationResponse, error)
 	if err != nil {
 		return MutationResponse{}, err
 	}
+	if e.isConfiguredRoot(source) {
+		return MutationResponse{}, errors.New("configured roots cannot be renamed")
+	}
 	target := filepath.Join(filepath.Dir(source), newName)
 	target, err = e.resolveNew(target)
 	if err != nil {
+		return MutationResponse{}, err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return MutationResponse{}, fmt.Errorf("target already exists: %s", target)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return MutationResponse{}, err
 	}
 	if err := os.Rename(source, target); err != nil {
@@ -442,6 +483,9 @@ func (e *Executor) delete(paths []string, recursive bool) (MutationResponse, err
 		resolved, err := e.resolveExisting(path)
 		if err != nil {
 			return MutationResponse{}, err
+		}
+		if e.isConfiguredRoot(resolved) {
+			return MutationResponse{}, errors.New("configured roots cannot be deleted")
 		}
 		info, err := os.Stat(resolved)
 		if err != nil {
@@ -484,6 +528,14 @@ func (e *Executor) copy(paths []string, destinationDir string, overwrite bool) (
 		if err != nil {
 			return MutationResponse{}, err
 		}
+		if err := validateCopyTarget(source, target); err != nil {
+			return MutationResponse{}, err
+		}
+		if _, err := os.Stat(target); err == nil && overwrite && !e.allowDelete {
+			return MutationResponse{}, errors.New("overwrite is disabled when delete is disabled")
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return MutationResponse{}, err
+		}
 		if err := copyPath(source, target, overwrite); err != nil {
 			return MutationResponse{}, err
 		}
@@ -492,7 +544,24 @@ func (e *Executor) copy(paths []string, destinationDir string, overwrite bool) (
 	return MutationResponse{Operation: OperationCopy, Paths: written}, nil
 }
 
+func validateCopyTarget(source, target string) error {
+	if samePath(source, target) {
+		return errors.New("copy target must differ from source")
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() && sameOrChild(target, source) {
+		return errors.New("copy target must not be inside source directory")
+	}
+	return nil
+}
+
 func (e *Executor) move(paths []string, destinationDir string, overwrite bool) (MutationResponse, error) {
+	if !e.allowDelete {
+		return MutationResponse{}, errors.New("move is disabled when delete is disabled")
+	}
 	if len(paths) == 0 {
 		return MutationResponse{}, errors.New("at least one source path is required")
 	}
@@ -506,8 +575,14 @@ func (e *Executor) move(paths []string, destinationDir string, overwrite bool) (
 		if err != nil {
 			return MutationResponse{}, err
 		}
+		if e.isConfiguredRoot(source) {
+			return MutationResponse{}, errors.New("configured roots cannot be moved")
+		}
 		target, err := e.resolveNew(filepath.Join(destination, filepath.Base(source)))
 		if err != nil {
+			return MutationResponse{}, err
+		}
+		if err := validateCopyTarget(source, target); err != nil {
 			return MutationResponse{}, err
 		}
 		if _, err := os.Stat(target); err == nil {
@@ -545,20 +620,78 @@ func (e *Executor) upload(ctx context.Context, request CommandRequest, transport
 	if _, err := os.Stat(target); err == nil && !request.Overwrite {
 		return TransferResponse{}, fmt.Errorf("target already exists: %s", target)
 	}
-	body, err := transport.Download(ctx, request.TransferID)
-	if err != nil {
+	if _, err := os.Stat(target); err == nil && request.Overwrite && !e.allowDelete {
+		return TransferResponse{}, errors.New("overwrite is disabled when delete is disabled")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return TransferResponse{}, err
-	}
-	if int64(len(body)) > e.maxTransferBytes {
-		return TransferResponse{}, errors.New("transfer exceeds max_transfer_bytes")
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return TransferResponse{}, err
 	}
-	if err := os.WriteFile(target, body, 0o644); err != nil {
+	tempFile, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+"-*.tmp")
+	if err != nil {
 		return TransferResponse{}, err
 	}
-	return TransferResponse{TransferID: request.TransferID, Path: target, Name: filepath.Base(target), SizeBytes: int64(len(body))}, nil
+	tempPath := tempFile.Name()
+	committed := false
+	defer func() {
+		_ = tempFile.Close()
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := tempFile.Chmod(0o644); err != nil {
+		return TransferResponse{}, err
+	}
+
+	var sizeBytes int64
+	if streaming, ok := transport.(StreamingTransport); ok {
+		sizeBytes, err = streaming.DownloadTo(ctx, request.TransferID, tempFile, e.maxTransferBytes)
+	} else {
+		// Compatibility path for third-party transports that have not adopted
+		// StreamingTransport. The production Client always takes the branch above.
+		var body []byte
+		body, err = transport.Download(ctx, request.TransferID)
+		if err == nil {
+			sizeBytes = int64(len(body))
+			if sizeBytes > e.maxTransferBytes {
+				err = errors.New("transfer exceeds max_transfer_bytes")
+			} else {
+				_, err = tempFile.Write(body)
+			}
+		}
+	}
+	if err != nil {
+		return TransferResponse{}, err
+	}
+	if sizeBytes < 0 || sizeBytes > e.maxTransferBytes {
+		return TransferResponse{}, errors.New("transfer exceeds max_transfer_bytes")
+	}
+	tempInfo, err := tempFile.Stat()
+	if err != nil {
+		return TransferResponse{}, err
+	}
+	if tempInfo.Size() != sizeBytes {
+		return TransferResponse{}, errors.New("transfer size does not match streamed content")
+	}
+	if err := tempFile.Sync(); err != nil {
+		return TransferResponse{}, err
+	}
+	if err := tempFile.Close(); err != nil {
+		return TransferResponse{}, err
+	}
+	if !request.Overwrite {
+		if _, err := os.Stat(target); err == nil {
+			return TransferResponse{}, fmt.Errorf("target already exists: %s", target)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return TransferResponse{}, err
+		}
+	}
+	if err := os.Rename(tempPath, target); err != nil {
+		return TransferResponse{}, err
+	}
+	committed = true
+	return TransferResponse{TransferID: request.TransferID, Path: target, Name: filepath.Base(target), SizeBytes: sizeBytes}, nil
 }
 
 func (e *Executor) download(ctx context.Context, request CommandRequest, transport Transport) (TransferResponse, error) {
@@ -582,18 +715,54 @@ func (e *Executor) download(ctx context.Context, request CommandRequest, transpo
 	if info.Size() > e.maxTransferBytes {
 		return TransferResponse{}, errors.New("file exceeds max_transfer_bytes")
 	}
-	body, err := os.ReadFile(source)
-	if err != nil {
-		return TransferResponse{}, err
-	}
 	contentType := mime.TypeByExtension(filepath.Ext(source))
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if err := transport.Upload(ctx, request.TransferID, filepath.Base(source), contentType, body); err != nil {
+	file, err := os.Open(source)
+	if err != nil {
+		return TransferResponse{}, err
+	}
+	defer file.Close()
+	if streaming, ok := transport.(StreamingTransport); ok {
+		err = streaming.UploadFrom(ctx, request.TransferID, filepath.Base(source), contentType, io.LimitReader(file, info.Size()), info.Size())
+	} else {
+		// Compatibility path; production uploads stream directly from the file.
+		var body []byte
+		body, err = io.ReadAll(io.LimitReader(file, e.maxTransferBytes+1))
+		if err == nil && int64(len(body)) > e.maxTransferBytes {
+			err = errors.New("file exceeds max_transfer_bytes")
+		}
+		if err == nil {
+			err = transport.Upload(ctx, request.TransferID, filepath.Base(source), contentType, body)
+		}
+	}
+	if err != nil {
 		return TransferResponse{}, err
 	}
 	return TransferResponse{TransferID: request.TransferID, Path: source, Name: filepath.Base(source), SizeBytes: info.Size()}, nil
+}
+
+func copyWithLimit(destination io.Writer, source io.Reader, maxBytes int64) (int64, error) {
+	if maxBytes <= 0 {
+		return 0, errors.New("max transfer size must be positive")
+	}
+	written, err := io.Copy(destination, io.LimitReader(source, maxBytes+1))
+	if err != nil {
+		return written, err
+	}
+	if written > maxBytes {
+		return written, errors.New("download transfer exceeds max_transfer_bytes")
+	}
+	return written, nil
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64*1024))
+	_ = body.Close()
 }
 
 func (e *Executor) entry(path string, entry os.DirEntry) (FileEntry, error) {
@@ -669,6 +838,29 @@ func (e *Executor) allowed(path string) bool {
 	return false
 }
 
+func (e *Executor) isConfiguredRoot(path string) bool {
+	cleaned := filepath.Clean(path)
+	for _, root := range e.roots {
+		rootPath := filepath.Clean(root.Path)
+		if resolvedRoot, err := filepath.EvalSymlinks(root.Path); err == nil {
+			rootPath = filepath.Clean(resolvedRoot)
+		}
+		if samePath(cleaned, rootPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
 func sameOrChild(path string, root string) bool {
 	cleanPath := filepath.Clean(path)
 	cleanRoot := filepath.Clean(root)
@@ -733,6 +925,9 @@ func copyDir(source string, target string, overwrite bool) error {
 		if err != nil {
 			return err
 		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symbolic links are not supported in recursive copy: %s", path)
+		}
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
@@ -741,6 +936,9 @@ func copyDir(source string, target string, overwrite bool) error {
 		info, err := entry.Info()
 		if err != nil {
 			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symbolic links are not supported in recursive copy: %s", path)
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(dest, info.Mode().Perm())

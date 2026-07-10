@@ -4,33 +4,46 @@ import {
   Boxes,
   Clock3,
   Cpu,
+  DatabaseZap,
   Gauge,
   HardDrive,
-  ListChecks,
   Network,
+  RadioTower,
   RefreshCw,
-  Server,
-  ShieldAlert
+  ShieldAlert,
+  Thermometer
 } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Area, AreaChart, XAxis, YAxis } from 'recharts';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis
+} from 'recharts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { api } from '../lib/api';
 import type {
+  AgentCollectorSummary,
+  AgentDashboard,
   AgentLogEvent,
-  AgentProcessState,
-  AgentServiceState,
   AlertRow,
   Asset,
   AssetMetricDetail,
   AssetMetricSummary,
   AssetMetricsOverview,
   DashboardSummary,
+  InterfaceTraffic,
   MetricPoint
 } from '../lib/types';
 import { formatBps } from '../lib/uiModel';
@@ -42,7 +55,13 @@ type OverviewViewProps = {
 };
 
 type KpiTone = 'neutral' | 'good' | 'warning' | 'critical';
+type SourceTone = 'on' | 'warn' | 'off';
 type AssetSignalReason = NonNullable<NonNullable<AssetMetricSummary['signals']>['reasons']>[number];
+
+type DashboardLoadResult<T> = {
+  ok: boolean;
+  value: T;
+};
 
 type FleetSummary = {
   total: number;
@@ -52,13 +71,33 @@ type FleetSummary = {
   latestSeenAt?: string | null;
 };
 
-type DashboardLoadResult<T> = {
-  ok: boolean;
-  value: T;
+type ResourceRankRow = {
+  id: string;
+  assetUid: string;
+  label: string;
+  metric: string;
+  value: number;
+  formatted: string;
+  tone: KpiTone;
+};
+
+type PriorityItem = {
+  id: string;
+  assetUid?: string;
+  title: string;
+  detail: string;
+  severity: 'CRITICAL' | 'WARNING';
 };
 
 const DETAIL_DASHBOARD_TIMEOUT_MS = 5000;
 const OVERVIEW_METRICS_REFRESH_MS = 30_000;
+const HEALTH_COLORS = {
+  healthy: '#16a34a',
+  warning: '#f59e0b',
+  critical: '#dc2626',
+  stale: '#f59e0b',
+  unknown: '#94a3b8'
+};
 
 const emptyAssetMetrics: AssetMetricsOverview = {
   range: '1h',
@@ -72,11 +111,15 @@ const emptyAssetMetrics: AssetMetricsOverview = {
   assets: []
 };
 
+const emptyAgentDashboard: AgentDashboard = {};
+
 export function OverviewView({ summary, alerts, assets = [] }: OverviewViewProps) {
   const [assetMetrics, setAssetMetrics] = useState<AssetMetricsOverview>(emptyAssetMetrics);
+  const [agentDashboard, setAgentDashboard] = useState<AgentDashboard>(emptyAgentDashboard);
+  const [trafficRows, setTrafficRows] = useState<InterfaceTraffic[]>(summary.trafficTopInterfaces ?? []);
+  const [recentEvents, setRecentEvents] = useState<AgentLogEvent[]>([]);
   const [selectedAssetUid, setSelectedAssetUid] = useState<string | null>(null);
   const [detail, setDetail] = useState<AssetMetricDetail | null>(null);
-  const [importantEvents, setImportantEvents] = useState<AgentLogEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
@@ -98,18 +141,34 @@ export function OverviewView({ summary, alerts, assets = [] }: OverviewViewProps
       setLoading(true);
     }
     setError('');
-    const result = await loadWithTimeout(api.assetMetrics('1h'), emptyAssetMetrics);
-    if (result.ok || !backgroundRefresh) {
-      setAssetMetrics(result.value);
+
+    const [assetResult, agentResult, eventResult, trafficResult] = await Promise.all([
+      loadWithTimeout(api.assetMetrics('1h'), emptyAssetMetrics),
+      loadWithTimeout(api.agentDashboard(), emptyAgentDashboard),
+      loadWithTimeout(api.agentLogs('24h', 'ALL', 200), [] as AgentLogEvent[]),
+      loadWithTimeout(api.trafficInterfaces('1h'), summary.trafficTopInterfaces ?? [])
+    ]);
+
+    if (assetResult.ok || !backgroundRefresh) {
+      setAssetMetrics(assetResult.value);
       setDetailRefreshToken((value) => value + 1);
     }
-    if (!result.ok) {
-      setError('장비 상태 정보를 불러오지 못했습니다. 등록 자산 기준으로 표시합니다.');
+    if (agentResult.ok) {
+      setAgentDashboard(agentResult.value);
+    }
+    if (eventResult.ok) {
+      setRecentEvents(eventResult.value);
+    }
+    if (trafficResult.ok) {
+      setTrafficRows(trafficResult.value);
+    }
+    if ([assetResult, agentResult, eventResult, trafficResult].some((result) => !result.ok)) {
+      setError('일부 관제 정보를 불러오지 못했습니다. 마지막 정상 수집값을 유지합니다.');
     }
     setLastUpdatedAt(new Date().toISOString());
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [summary.trafficTopInterfaces]);
 
   useEffect(() => {
     void loadOverview();
@@ -126,84 +185,93 @@ export function OverviewView({ summary, alerts, assets = [] }: OverviewViewProps
     () => buildManagedAssets(assetMetrics.assets, assets),
     [assetMetrics.assets, assets]
   );
-  const sortedAssets = useMemo(
-    () => [...managedAssets].sort(sortAssetsForOperations),
-    [managedAssets]
-  );
-  const activeAlertCount = useMemo(
-    () => alerts.filter((alert) => alert.status === 'ACTIVE' && ['CRITICAL', 'WARNING'].includes(alert.severity)).length,
+  const rankedAssets = useMemo(() => [...managedAssets].sort(sortAssetsForOperations), [managedAssets]);
+  const activeAlerts = useMemo(
+    () => alerts.filter((alert) => alert.status === 'ACTIVE' && ['CRITICAL', 'WARNING'].includes(alert.severity)),
     [alerts]
   );
   const fleet = useMemo(
-    () => summarizeFleet(sortedAssets, assetMetrics.summary, summary.activeAssets, activeAlertCount),
-    [activeAlertCount, assetMetrics.summary, sortedAssets, summary.activeAssets]
+    () => summarizeFleet(rankedAssets, assetMetrics.summary, summary.activeAssets, activeAlerts.length),
+    [activeAlerts.length, assetMetrics.summary, rankedAssets, summary.activeAssets]
   );
   const selectedAsset = useMemo(
-    () => sortedAssets.find((asset) => asset.assetUid === selectedAssetUid) ?? sortedAssets[0] ?? null,
-    [selectedAssetUid, sortedAssets]
+    () => rankedAssets.find((asset) => asset.assetUid === selectedAssetUid) ?? rankedAssets[0] ?? null,
+    [rankedAssets, selectedAssetUid]
   );
+  const selectedDetail = detail?.asset.assetUid === selectedAsset?.assetUid ? detail : null;
+  const importantEvents = useMemo(() => importantOnly(recentEvents), [recentEvents]);
+  const priorityItems = useMemo(
+    () => buildPriorityItems(rankedAssets, activeAlerts, importantEvents),
+    [activeAlerts, importantEvents, rankedAssets]
+  );
+  const resourceRanks = useMemo(() => buildResourceRanks(rankedAssets), [rankedAssets]);
+  const traffic = useMemo(
+    () => mergeTrafficRows([trafficRows, summary.trafficTopInterfaces ?? []]).slice(0, 6),
+    [summary.trafficTopInterfaces, trafficRows]
+  );
+  const healthRows = useMemo(() => healthDistribution(rankedAssets), [rankedAssets]);
+  const sourceRows = useMemo(() => sourceCoverageRows(rankedAssets.slice(0, 5)), [rankedAssets]);
+  const collectors = agentDashboard.collectors ?? [];
+  const posture = useMemo(() => summarizeSecurityPosture(rankedAssets, agentDashboard), [agentDashboard, rankedAssets]);
 
   useEffect(() => {
-    if (sortedAssets.length === 0) {
+    if (rankedAssets.length === 0) {
       if (selectedAssetUid !== null) {
         setSelectedAssetUid(null);
       }
       return;
     }
-    if (!selectedAssetUid || !sortedAssets.some((asset) => asset.assetUid === selectedAssetUid)) {
-      setSelectedAssetUid(sortedAssets[0].assetUid);
+    if (!selectedAssetUid || !rankedAssets.some((asset) => asset.assetUid === selectedAssetUid)) {
+      setSelectedAssetUid(rankedAssets[0].assetUid);
     }
-  }, [selectedAssetUid, sortedAssets]);
+  }, [rankedAssets, selectedAssetUid]);
 
   useEffect(() => {
     if (!selectedAsset?.assetUid) {
       setDetail(null);
-      setImportantEvents([]);
       return;
     }
     let cancelled = false;
     setDetailLoading(true);
     setDetailError('');
-    Promise.allSettled([
-      api.assetMetricDetail(selectedAsset.assetUid, '1h'),
-      api.agentLogs('24h', 'ALL', 20, selectedAsset.assetUid)
-    ]).then(([detailResult, eventsResult]) => {
-      if (cancelled) {
-        return;
-      }
-      setDetail((current) => detailResult.status === 'fulfilled'
-        ? detailResult.value
-        : current?.asset.assetUid === selectedAsset.assetUid
-          ? current
-          : null);
-      if (eventsResult.status === 'fulfilled') {
-        setImportantEvents(importantOnly(eventsResult.value));
-      }
-      if (detailResult.status === 'rejected' || eventsResult.status === 'rejected') {
-        setDetailError('선택 장비의 일부 진단 정보를 불러오지 못했습니다.');
-      }
-      setDetailLoading(false);
-    });
+    api.assetMetricDetail(selectedAsset.assetUid, '1h')
+      .then((response) => {
+        if (!cancelled) {
+          setDetail(response);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetail((current) => current?.asset.assetUid === selectedAsset.assetUid ? current : null);
+          setDetailError('선택 장비의 시계열 일부를 불러오지 못했습니다.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, [detailRefreshToken, selectedAsset?.assetUid]);
 
   return (
-    <section className="view-frame overview-nms overview-device-home">
+    <section className="view-frame overview-nms overview-dashboard-home">
       <header className="overview-header">
         <div>
           <h2>개요</h2>
-          <p>지금 확인해야 할 장비와 그 이유를 먼저 보여줍니다.</p>
+          <p>장비 상태를 중심으로 부하, 트래픽, 이벤트, 수집 신선도를 한 화면에서 판단합니다.</p>
         </div>
         <div className="overview-header-actions">
           <div className={`overview-live-state ${loading || refreshing ? 'pending' : error ? 'degraded' : 'active'}`}>
             <span aria-hidden="true" />
             <div>
               <strong>{loading ? '갱신 중' : refreshing ? '자동 갱신' : error ? '일부 지연' : '수집 정상'}</strong>
-              <small>마지막 갱신 {formatDate(lastUpdatedAt)}</small>
+              <small>마지막 갱신 {formatDate(lastUpdatedAt)} · 30초 주기</small>
             </div>
           </div>
+          <span className="overview-range-pill">범위 1h</span>
           <Button className="overview-refresh" variant="outline" size="sm" onClick={() => void loadOverview()} type="button">
             <RefreshCw data-icon="inline-start" className={cn((loading || refreshing) && 'asset-refresh-spin')} aria-hidden="true" />
             새로고침
@@ -213,50 +281,41 @@ export function OverviewView({ summary, alerts, assets = [] }: OverviewViewProps
 
       {error && <div className="notice overview-notice warning">{error}</div>}
 
-      <section className="overview-fleet-strip" aria-label="Fleet summary">
-        <FleetKpi icon={<Boxes aria-hidden="true" />} label="전체 장비" value={fleet.total} meta={`${fleet.observed} observed`} />
-        <FleetKpi
-          icon={<AlertTriangle aria-hidden="true" />}
-          label="문제 장비"
-          value={fleet.problem}
-          meta={`${assetMetrics.summary.criticalAssets} critical`}
-          tone={fleet.problem > 0 ? 'critical' : 'good'}
-        />
-        <FleetKpi icon={<Clock3 aria-hidden="true" />} label="수집 지연" value={fleet.stale} meta="10분 초과" tone={fleet.stale > 0 ? 'warning' : 'good'} />
-        <FleetKpi icon={<Activity aria-hidden="true" />} label="최근 수집" value={formatShortDate(fleet.latestSeenAt)} meta={formatDate(fleet.latestSeenAt)} />
+      <section className="overview-kpi-strip" aria-label="Dashboard summary">
+        <OverviewKpi icon={<Boxes aria-hidden="true" />} label="전체 장비" value={fleet.total} meta={`${fleet.observed} observed`} />
+        <OverviewKpi icon={<AlertTriangle aria-hidden="true" />} label="문제 장비" value={fleet.problem} meta={`${assetMetrics.summary.criticalAssets} critical · ${assetMetrics.summary.warningAssets} warning`} tone={fleet.problem > 0 ? 'critical' : 'good'} />
+        <OverviewKpi icon={<Cpu aria-hidden="true" />} label="평균 CPU" value={formatPercent(assetMetrics.summary.avgCpuUsagePct)} meta="0%도 정상 수집값" tone={metricTone(assetMetrics.summary.avgCpuUsagePct)} />
+        <OverviewKpi icon={<Network aria-hidden="true" />} label="총 트래픽" value={formatBps(totalTrafficFromSummary(assetMetrics.summary, traffic))} meta={`RX ${formatBps(assetMetrics.summary.totalNetworkInBps ?? traffic.reduce((total, row) => total + row.inBps, 0))}`} />
       </section>
 
-      <div className="overview-device-layout">
-        <Card className="overview-device-board">
-          <CardHeader className="overview-device-board-header">
-            <div>
-              <CardTitle>장비 상태 보드</CardTitle>
-              <CardDescription>상태가 나쁜 장비와 수집 지연 장비를 먼저 정렬합니다.</CardDescription>
-            </div>
-            <Badge variant={fleet.problem > 0 ? 'critical' : 'secondary'}>{sortedAssets.length} 표시</Badge>
-          </CardHeader>
-          <CardContent className="overview-device-board-content">
-            <DeviceStatusTable
-              assets={sortedAssets}
-              selectedAssetUid={selectedAsset?.assetUid}
-              onSelect={setSelectedAssetUid}
-            />
-          </CardContent>
-        </Card>
+      <div className="overview-dashboard-shell">
+        <div className="overview-main-stack">
+          <FleetHealthPanel rows={healthRows} total={fleet.total} problem={fleet.problem} />
 
-        <SelectedAssetPanel
-          asset={selectedAsset}
-          detail={detail?.asset.assetUid === selectedAsset?.assetUid ? detail : null}
-          events={importantEvents}
-          loading={detailLoading}
-          error={detailError}
-        />
+          <div className="overview-chart-grid">
+            <SelectedAssetTrendPanel asset={selectedAsset} detail={selectedDetail} loading={detailLoading} error={detailError} />
+            <ResourcePressurePanel rows={resourceRanks} onSelectAsset={setSelectedAssetUid} />
+          </div>
+
+          <TrafficPanel rows={traffic} />
+
+          <div className="overview-chart-grid">
+            <EventTrendPanel events={importantEvents} />
+            <SourceCoveragePanel rows={sourceRows} />
+          </div>
+        </div>
+
+        <aside className="overview-side-stack">
+          <PriorityQueuePanel items={priorityItems} onSelectAsset={setSelectedAssetUid} />
+          <CollectorFreshnessPanel collectors={collectors} />
+          <SecurityPosturePanel posture={posture} />
+        </aside>
       </div>
     </section>
   );
 }
 
-function FleetKpi({
+function OverviewKpi({
   icon,
   label,
   value,
@@ -265,13 +324,13 @@ function FleetKpi({
 }: {
   icon: ReactNode;
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
   meta: string;
   tone?: KpiTone;
 }) {
   return (
-    <section className={cn('overview-fleet-kpi', tone)}>
-      <div aria-hidden="true">{icon}</div>
+    <section className={cn('overview-kpi', tone)}>
+      {icon}
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{meta}</small>
@@ -279,319 +338,279 @@ function FleetKpi({
   );
 }
 
-function DeviceStatusTable({
-  assets,
-  selectedAssetUid,
-  onSelect
+function Panel({
+  title,
+  description,
+  meta,
+  className,
+  children
 }: {
-  assets: AssetMetricSummary[];
-  selectedAssetUid?: string | null;
-  onSelect: (assetUid: string) => void;
+  title: string;
+  description: string;
+  meta?: ReactNode;
+  className?: string;
+  children: ReactNode;
 }) {
-  if (assets.length === 0) {
-    return <EmptyState title="장비 상태 대기" detail="등록되거나 관측된 장비가 아직 없습니다." />;
-  }
   return (
-    <div className="overview-device-table-wrap">
-      <Table className="overview-device-table">
-        <TableHeader>
-          <TableRow>
-            <TableHead>상태</TableHead>
-            <TableHead>장비</TableHead>
-            <TableHead>마지막 수집</TableHead>
-            <TableHead>문제 근거</TableHead>
-            <TableHead>CPU/MEM/DISK/TEMP</TableHead>
-            <TableHead>RX/TX</TableHead>
-            <TableHead>상세</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {assets.map((asset) => (
-            <TableRow
-              key={asset.assetUid}
-              className={cn('overview-device-row', asset.health, selectedAssetUid === asset.assetUid && 'selected')}
-            >
-              <TableCell><HealthBadge health={asset.health} stale={asset.stale} /></TableCell>
-              <TableCell>
-                <button className="overview-device-name" type="button" onClick={() => onSelect(asset.assetUid)}>
-                  <strong>{asset.name || asset.assetUid}</strong>
-                  <span>{asset.assetUid} · {asset.assetType || 'UNKNOWN'}</span>
-                </button>
-                <div className="overview-device-meta">
-                  <Badge variant="secondary">{asset.managementIp || '-'}</Badge>
-                  <span>{asset.location || asset.status || '위치 미지정'}</span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="overview-device-stack">
-                  <strong>{asset.stale ? 'Stale' : asset.sources.observed ? 'Observed' : 'Registered'}</strong>
-                  <span>{formatDate(asset.lastSeenAt)}</span>
-                </div>
-              </TableCell>
-              <TableCell><ReasonBadges asset={asset} /></TableCell>
-              <TableCell><MetricStrip asset={asset} /></TableCell>
-              <TableCell><NetworkCell asset={asset} /></TableCell>
-              <TableCell>
-                <Button type="button" variant={selectedAssetUid === asset.assetUid ? 'default' : 'outline'} size="sm" onClick={() => onSelect(asset.assetUid)}>
-                  상세
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+    <section className={cn('overview-chart-panel', className)}>
+      <div className="overview-chart-panel-heading">
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+        {meta && <span>{meta}</span>}
+      </div>
+      {children}
+    </section>
   );
 }
 
-function SelectedAssetPanel({
+function FleetHealthPanel({ rows, total, problem }: { rows: ReturnType<typeof healthDistribution>; total: number; problem: number }) {
+  const chartRows = rows.filter((row) => row.count > 0);
+  const config = Object.fromEntries(rows.map((row) => [row.key, { label: row.label, color: row.color }])) satisfies ChartConfig;
+  return (
+    <Panel title="Fleet Health" description="전체 장비의 현재 상태 분포입니다." meta={<><strong>{problem}</strong> need action</>} className="overview-chart-panel-tall">
+      <div className="overview-health-visual">
+        <ChartContainer config={config} className="overview-donut-chart" role="img" aria-label="Fleet Health chart">
+          <PieChart>
+            <Pie data={chartRows} dataKey="count" nameKey="label" innerRadius={48} outerRadius={74} paddingAngle={2}>
+              {chartRows.map((row) => <Cell key={row.key} fill={row.color} />)}
+            </Pie>
+            <ChartTooltip content={<ChartTooltipContent formatter={(value) => `${value} assets`} />} />
+          </PieChart>
+        </ChartContainer>
+        <div className="overview-health-center" aria-hidden="true">
+          <strong>{problem}</strong>
+          <span>need action</span>
+        </div>
+        <div className="overview-health-legend">
+          {rows.map((row) => (
+            <MetricBar key={row.key} label={row.label} value={row.count} max={Math.max(total, 1)} display={`${row.count}`} tone={row.tone} />
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function SelectedAssetTrendPanel({
   asset,
   detail,
-  events,
   loading,
   error
 }: {
   asset: AssetMetricSummary | null;
   detail: AssetMetricDetail | null;
-  events: AgentLogEvent[];
   loading: boolean;
   error: string;
 }) {
-  if (!asset) {
-    return (
-      <Card className="overview-selected-panel">
-        <CardContent>
-          <EmptyState title="선택 장비 없음" detail="장비가 수집되면 이곳에 진단 정보가 표시됩니다." />
-        </CardContent>
-      </Card>
-    );
-  }
-  const effectiveAsset = detail?.asset ?? asset;
-  const failedServices = (detail?.services ?? []).filter(isProblemService).slice(0, 8);
-  const firewalls = detail?.firewalls ?? [];
-  const downInterfaces = (detail?.interfaceStates ?? []).filter(isInterfaceDown).slice(0, 8);
-  const processes = (detail?.processes ?? []).slice(0, 6);
-  return (
-    <Card className="overview-selected-panel">
-      <CardHeader className="overview-selected-header">
-        <div>
-          <CardTitle>{effectiveAsset.name || effectiveAsset.assetUid}</CardTitle>
-          <CardDescription>{[effectiveAsset.assetUid, effectiveAsset.managementIp].filter(Boolean).join(' · ')}</CardDescription>
-        </div>
-        <HealthBadge health={effectiveAsset.health} stale={effectiveAsset.stale} />
-      </CardHeader>
-      <CardContent className="overview-selected-content">
-        {error && <div className="notice overview-notice warning">{error}</div>}
-        {loading && <div className="notice overview-notice">선택 장비 진단 정보를 갱신하는 중입니다.</div>}
-
-        <section className="overview-selected-section">
-          <div className="overview-section-title">
-            <ListChecks aria-hidden="true" />
-            <strong>문제 근거</strong>
-          </div>
-          <ReasonList asset={effectiveAsset} />
-        </section>
-
-        <section className="overview-resource-snapshot">
-          <ResourceSeries icon={<Cpu aria-hidden="true" />} title="CPU" value={formatPercent(effectiveAsset.metrics.cpuUsagePct)} points={detail?.series.cpu} field="value" />
-          <ResourceSeries icon={<Gauge aria-hidden="true" />} title="MEM" value={formatPercent(effectiveAsset.metrics.memoryUsagePct)} points={detail?.series.memory} field="value" />
-          <ResourceSeries icon={<HardDrive aria-hidden="true" />} title="DISK" value={formatPercent(effectiveAsset.metrics.diskUsagePct)} points={detail?.series.disk} field="value" />
-          <ResourceSeries icon={<Network aria-hidden="true" />} title="NET" value={formatBps(assetTraffic(effectiveAsset))} points={detail?.series.network} field="inBps" />
-        </section>
-
-        <section className="overview-selected-section">
-          <div className="overview-section-title">
-            <ShieldAlert aria-hidden="true" />
-            <strong>최근 중요 이벤트</strong>
-          </div>
-          <EventList events={events} />
-        </section>
-
-        <div className="overview-diagnostic-grid">
-          <DiagnosticList title="Failed services" empty="서비스 이상 없음" items={failedServices} render={renderService} />
-          <DiagnosticList title="Firewall" empty="방화벽 상태 없음" items={firewalls} render={renderFirewall} />
-          <DiagnosticList title="Interfaces down" empty="다운 인터페이스 없음" items={downInterfaces} render={renderInterface} />
-        </div>
-
-        <section className="overview-selected-section">
-          <div className="overview-section-title">
-            <Server aria-hidden="true" />
-            <strong>주요 프로세스</strong>
-          </div>
-          <ProcessList processes={processes} />
-        </section>
-      </CardContent>
-    </Card>
-  );
-}
-
-function MetricStrip({ asset }: { asset: AssetMetricSummary }) {
-  return (
-    <div className="overview-metric-strip">
-      <MetricPill label="CPU" value={formatPercent(asset.metrics.cpuUsagePct)} tone={metricTone(asset.metrics.cpuUsagePct)} />
-      <MetricPill label="MEM" value={formatPercent(asset.metrics.memoryUsagePct)} tone={metricTone(asset.metrics.memoryUsagePct)} />
-      <MetricPill label="DISK" value={formatPercent(asset.metrics.diskUsagePct)} tone={metricTone(asset.metrics.diskUsagePct)} />
-      <MetricPill label="TEMP" value={formatTemperature(asset.metrics.temperatureCelsius)} tone={temperatureTone(asset.metrics.temperatureCelsius)} />
-    </div>
-  );
-}
-
-function MetricPill({ label, value, tone }: { label: string; value: string; tone: KpiTone }) {
-  return (
-    <span className={cn('overview-metric-pill', tone)}>
-      <em>{label}</em>
-      <strong>{value}</strong>
-    </span>
-  );
-}
-
-function NetworkCell({ asset }: { asset: AssetMetricSummary }) {
-  return (
-    <div className="overview-device-stack">
-      <strong>{formatBps(asset.metrics.networkInBps ?? 0)} RX</strong>
-      <span>{formatBps(asset.metrics.networkOutBps ?? 0)} TX</span>
-    </div>
-  );
-}
-
-function ReasonBadges({ asset }: { asset: AssetMetricSummary }) {
-  const reasons = signalReasons(asset).slice(0, 3);
-  if (reasons.length === 0) {
-    return <Badge variant="success">정상</Badge>;
-  }
-  return (
-    <div className="overview-reason-badges">
-      {reasons.map((reason) => (
-        <Badge key={`${reason.code}-${reason.label}-${reason.detail}`} variant={reason.severity === 'critical' ? 'critical' : 'warning'}>
-          {reason.label}{reason.detail ? ` ${reason.detail}` : ''}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
-function ReasonList({ asset }: { asset: AssetMetricSummary }) {
-  const reasons = signalReasons(asset);
-  if (reasons.length === 0) {
-    return <EmptyState title="문제 근거 없음" detail="최근 수집 신호에서 임계치 초과나 상태 이상이 없습니다." />;
-  }
-  return (
-    <ul className="overview-reason-list">
-      {reasons.map((reason) => (
-        <li className={reason.severity === 'critical' ? 'critical' : 'warning'} key={`${reason.code}-${reason.label}-${reason.detail}`}>
-          <span aria-hidden="true" />
-          <div>
-            <strong>{reason.label}</strong>
-            <small>{reason.detail || reason.code || '-'}</small>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ResourceSeries({
-  icon,
-  title,
-  value,
-  points,
-  field
-}: {
-  icon: ReactNode;
-  title: string;
-  value: string;
-  points?: MetricPoint[];
-  field: keyof MetricPoint;
-}) {
-  const chartRows = (points ?? [])
-    .map((point) => ({ timestamp: point.timestamp, value: finiteNumber(point[field] as number | null | undefined) }))
-    .filter((point): point is { timestamp: string; value: number } => point.value != null)
-    .slice(-24);
-  const yDomain: [number, number | 'auto'] = title === 'NET' ? [0, 'auto'] : [0, 100];
+  const rows = useMemo(() => buildTrendRows(detail), [detail]);
   const config = {
-    value: { label: title, color: 'var(--chart-1)' }
+    cpu: { label: 'CPU', color: 'var(--chart-1)' },
+    memory: { label: 'MEM', color: 'var(--chart-2)' },
+    disk: { label: 'DISK', color: 'var(--chart-3)' },
+    temperature: { label: 'TEMP', color: 'var(--chart-4)' }
   } satisfies ChartConfig;
+  const latest = asset ? [
+    `CPU ${formatPercent(asset.metrics.cpuUsagePct)}`,
+    `MEM ${formatPercent(asset.metrics.memoryUsagePct)}`,
+    `DISK ${formatPercent(asset.metrics.diskUsagePct)}`,
+    `TEMP ${formatTemperature(asset.metrics.temperatureCelsius)}`
+  ].join(' · ') : '-';
+
   return (
-    <section className="overview-resource-card">
-      <div>
-        {icon}
-        <span>{title}</span>
-        <strong>{value}</strong>
-      </div>
-      {chartRows.length > 1 ? (
-        <ChartContainer config={config} className="overview-mini-chart" role="img" aria-label={`${title} 시계열`}>
-          <AreaChart data={chartRows}>
-            <XAxis dataKey="timestamp" hide />
-            <YAxis hide domain={yDomain} />
-            <ChartTooltip content={<ChartTooltipContent formatter={(tooltipValue) => formatTooltipValue(Number(tooltipValue), title)} />} />
-            <Area type="monotone" dataKey="value" stroke="var(--color-value)" fill="var(--color-value)" fillOpacity={0.12} strokeWidth={2} isAnimationActive />
-          </AreaChart>
+    <Panel title="선택 장비 추세" description={`${asset?.name ?? '선택 장비'}의 CPU/MEM/DISK/TEMP 흐름입니다.`} meta={loading ? 'loading' : latest}>
+      {error && <div className="notice overview-notice warning">{error}</div>}
+      {rows.length > 1 ? (
+        <ChartContainer config={config} className="overview-trend-chart" role="img" aria-label="선택 장비 추세">
+          <LineChart data={rows}>
+            <CartesianGrid vertical={false} />
+            <XAxis dataKey="label" tickLine={false} axisLine={false} />
+            <YAxis tickLine={false} axisLine={false} width={34} domain={[0, 100]} />
+            <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => formatTrendValue(Number(value), String(name))} />} />
+            <Line type="monotone" dataKey="cpu" name="CPU" stroke="var(--color-cpu)" strokeWidth={2.5} dot={false} isAnimationActive />
+            <Line type="monotone" dataKey="memory" name="MEM" stroke="var(--color-memory)" strokeWidth={2.5} dot={false} isAnimationActive />
+            <Line type="monotone" dataKey="disk" name="DISK" stroke="var(--color-disk)" strokeWidth={2.5} dot={false} isAnimationActive />
+            <Line type="monotone" dataKey="temperature" name="TEMP" stroke="var(--color-temperature)" strokeWidth={2.5} dot={false} isAnimationActive />
+          </LineChart>
         </ChartContainer>
       ) : (
-        <span className="overview-mini-chart-empty">series 대기</span>
+        <EmptyState title="시계열 대기" detail="선택 장비의 1시간 시계열이 아직 충분하지 않습니다." />
       )}
-    </section>
+    </Panel>
   );
 }
 
-function DiagnosticList<T>({
-  title,
-  empty,
-  items,
-  render
-}: {
-  title: string;
-  empty: string;
-  items: T[];
-  render: (item: T, index: number) => ReactNode;
-}) {
+function ResourcePressurePanel({ rows, onSelectAsset }: { rows: ResourceRankRow[]; onSelectAsset: (assetUid: string) => void }) {
   return (
-    <section className="overview-diagnostic-list">
-      <strong>{title}</strong>
-      {items.length === 0 ? (
-        <span>{empty}</span>
+    <Panel title="리소스 압박 Top" description="임계치에 가까운 장비를 랭킹으로 봅니다." meta={`${rows.length} signals`}>
+      <div className="overview-rank-list">
+        {rows.length === 0 ? (
+          <EmptyState title="압박 신호 없음" detail="최근 수집값에서 높은 리소스 사용률이 없습니다." />
+        ) : rows.map((row) => (
+          <button key={row.id} className="overview-rank-button" type="button" onClick={() => onSelectAsset(row.assetUid)}>
+            <MetricBar label={`${row.assetUid} · ${row.metric}`} value={row.value} max={100} display={row.formatted} tone={row.tone} />
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function TrafficPanel({ rows }: { rows: InterfaceTraffic[] }) {
+  const chartRows = rows.map((row) => ({
+    name: `${row.assetUid}/${row.interfaceName}`,
+    inBps: row.inBps,
+    outBps: row.outBps
+  }));
+  const config = {
+    inBps: { label: 'RX', color: 'var(--chart-1)' },
+    outBps: { label: 'TX', color: 'var(--chart-2)' }
+  } satisfies ChartConfig;
+  return (
+    <Panel title="상위 트래픽 인터페이스" description="트래픽이 몰리는 인터페이스와 방향을 비교합니다." meta={`${rows.length} interfaces`} className="overview-chart-panel-tall">
+      {chartRows.length > 0 ? (
+        <ChartContainer config={config} className="overview-traffic-chart" role="img" aria-label="상위 트래픽 인터페이스">
+          <BarChart data={chartRows} layout="vertical" margin={{ left: 20, right: 20 }}>
+            <CartesianGrid horizontal={false} />
+            <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={(value) => formatBps(Number(value)).replace(' ', '')} />
+            <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={112} />
+            <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatBps(Number(value))} />} />
+            <Bar dataKey="inBps" name="RX" stackId="traffic" fill="var(--color-inBps)" radius={[0, 6, 6, 0]} isAnimationActive />
+            <Bar dataKey="outBps" name="TX" stackId="traffic" fill="var(--color-outBps)" radius={[0, 6, 6, 0]} isAnimationActive />
+          </BarChart>
+        </ChartContainer>
       ) : (
-        <ul>{items.map((item, index) => <li key={index}>{render(item, index)}</li>)}</ul>
+        <EmptyState title="트래픽 신호 대기" detail="수집된 인터페이스 트래픽이 아직 없습니다." />
       )}
-    </section>
+    </Panel>
   );
 }
 
-function EventList({ events }: { events: AgentLogEvent[] }) {
-  if (events.length === 0) {
-    return <EmptyState title="최근 중요 이벤트 없음" detail="최근 24시간 내 ERROR/WARNING 이벤트가 없습니다." />;
-  }
+function EventTrendPanel({ events }: { events: AgentLogEvent[] }) {
+  const rows = useMemo(() => buildEventBuckets(events), [events]);
+  const config = {
+    warning: { label: 'Warning', color: 'var(--chart-3)' },
+    critical: { label: 'Critical', color: 'var(--chart-4)' }
+  } satisfies ChartConfig;
   return (
-    <ul className="overview-event-list">
-      {events.slice(0, 8).map((event, index) => (
-        <li key={`${event.assetUid}-${event.eventType}-${event.observedAt}-${index}`}>
-          <Badge variant={eventTone(event.severity)}>{event.severity ?? 'INFO'}</Badge>
-          <div>
-            <strong>{event.message ?? event.sourceName ?? event.outcome ?? event.eventType ?? 'Agent event'}</strong>
-            <span>{[event.eventType, formatDate(event.observedAt ?? event.eventTime)].filter(Boolean).join(' · ')}</span>
-          </div>
-        </li>
-      ))}
-    </ul>
+    <Panel title="이벤트 추세" description="최근 24시간 경고/오류 밀도입니다." meta={`${events.length} events`}>
+      <ChartContainer config={config} className="overview-event-chart" role="img" aria-label="이벤트 추세">
+        <BarChart data={rows}>
+          <CartesianGrid vertical={false} />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} />
+          <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+          <ChartTooltip content={<ChartTooltipContent />} />
+          <Bar dataKey="warning" name="Warning" stackId="events" fill="var(--color-warning)" radius={[4, 4, 0, 0]} isAnimationActive />
+          <Bar dataKey="critical" name="Critical" stackId="events" fill="var(--color-critical)" radius={[4, 4, 0, 0]} isAnimationActive />
+        </BarChart>
+      </ChartContainer>
+    </Panel>
   );
 }
 
-function ProcessList({ processes }: { processes: AgentProcessState[] }) {
-  if (processes.length === 0) {
-    return <EmptyState title="프로세스 상태 없음" detail="최근 프로세스 스냅샷이 없습니다." />;
-  }
+function SourceCoveragePanel({ rows }: { rows: ReturnType<typeof sourceCoverageRows> }) {
+  const heads = ['Agent', 'Traffic', 'Disk', 'Security', 'Events'];
   return (
-    <ul className="overview-process-list">
-      {processes.map((process) => (
-        <li key={`${process.pid}-${process.name}-${process.memoryBytes}`}>
-          <div>
-            <strong>{process.name || process.executablePath || 'process'}</strong>
-            <span>pid {process.pid ?? '-'} · sockets {(process.listeningSocketCount ?? 0) + (process.connectedSocketCount ?? 0)}</span>
+    <Panel title="Source Coverage" description="장비별 수집 경로의 빈칸을 찾습니다." meta={`${rows.length} assets`}>
+      <div className="overview-source-matrix">
+        <div className="overview-source-row overview-source-head">
+          <strong />
+          {heads.map((head) => <strong key={head}>{head}</strong>)}
+        </div>
+        {rows.length === 0 ? (
+          <EmptyState title="수집 경로 대기" detail="표시할 장비 coverage가 아직 없습니다." />
+        ) : rows.map((row) => (
+          <div className="overview-source-row" key={row.assetUid}>
+            <strong>{row.assetUid}</strong>
+            {row.cells.map((cell) => <span key={`${row.assetUid}-${cell.label}`} className={cn('overview-source-cell', cell.tone)} title={cell.label} />)}
           </div>
-          <em>{formatBytes(process.memoryBytes)}</em>
-        </li>
-      ))}
-    </ul>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function PriorityQueuePanel({ items, onSelectAsset }: { items: PriorityItem[]; onSelectAsset: (assetUid: string) => void }) {
+  return (
+    <Panel title="대응 큐" description="목록 대신 지금 볼 이유만 보여줍니다." meta={`${items.length} active`}>
+      <div className="overview-priority-card-list">
+        {items.length === 0 ? (
+          <EmptyState title="대응 대기 없음" detail="활성 Critical/Warning 알림과 최근 중요 이벤트가 없습니다." />
+        ) : items.map((item) => (
+          <button key={item.id} className="overview-priority-card" type="button" onClick={() => item.assetUid && onSelectAsset(item.assetUid)}>
+            <div>
+              <strong>{item.title}</strong>
+              <Badge variant={item.severity === 'CRITICAL' ? 'critical' : 'warning'}>{item.severity}</Badge>
+            </div>
+            <span>{item.detail}</span>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function CollectorFreshnessPanel({ collectors }: { collectors: AgentCollectorSummary[] }) {
+  return (
+    <Panel title="Collector Freshness" description="수집기가 제때 들어오는지 봅니다." meta={`${collectors.length} collectors`}>
+      <div className="overview-rank-list">
+        {collectors.length === 0 ? (
+          <EmptyState title="Collector 대기" detail="아직 표시할 collector coverage가 없습니다." />
+        ) : collectors.slice(0, 6).map((collector) => (
+          <MetricBar
+            key={`${collector.name}-${collector.lastSeenAt}`}
+            label={collector.name ?? '-'}
+            value={collector.sampleCount ?? 0}
+            max={Math.max(1, ...collectors.map((row) => row.sampleCount ?? 0))}
+            display={`${collector.sampleCount ?? 0}`}
+            tone={collectorTone(collector)}
+            meta={formatDate(collector.lastSeenAt)}
+          />
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function SecurityPosturePanel({ posture }: { posture: ReturnType<typeof summarizeSecurityPosture> }) {
+  return (
+    <Panel title="보안 포스처" description="노출 포트, 실패 서비스, 방화벽 상태입니다." meta="signals">
+      <div className="overview-rank-list">
+        <MetricBar label="노출 포트" value={posture.openPorts} max={Math.max(24, posture.openPorts)} display={`${posture.openPorts}`} tone={posture.openPorts > 0 ? 'warning' : 'good'} />
+        <MetricBar label="실패 서비스" value={posture.failedServices} max={Math.max(5, posture.failedServices)} display={`${posture.failedServices}`} tone={posture.failedServices > 0 ? 'critical' : 'good'} />
+        <MetricBar label="방화벽 비활성" value={posture.firewallDisabled} max={Math.max(5, posture.firewallDisabled)} display={`${posture.firewallDisabled}`} tone={posture.firewallDisabled > 0 ? 'warning' : 'good'} />
+        <MetricBar label="다운 인터페이스" value={posture.interfacesDown} max={Math.max(5, posture.interfacesDown)} display={`${posture.interfacesDown}`} tone={posture.interfacesDown > 0 ? 'warning' : 'good'} />
+      </div>
+    </Panel>
+  );
+}
+
+function MetricBar({
+  label,
+  value,
+  max,
+  display,
+  tone,
+  meta
+}: {
+  label: string;
+  value: number;
+  max: number;
+  display: string;
+  tone: KpiTone;
+  meta?: string;
+}) {
+  const width = Math.max(value > 0 ? 4 : 0, Math.min(100, (value / Math.max(max, 1)) * 100));
+  return (
+    <div className="overview-metric-bar">
+      <div>
+        <strong>{label}</strong>
+        <span>{meta ?? display}</span>
+      </div>
+      <div className="overview-bar-track"><i className={cn(tone)} style={{ width: `${width}%` }} /></div>
+      <em>{display}</em>
+    </div>
   );
 }
 
@@ -601,38 +620,6 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
       <strong>{title}</strong>
       <span>{detail}</span>
     </div>
-  );
-}
-
-function HealthBadge({ health, stale }: { health: AssetMetricSummary['health']; stale?: boolean }) {
-  const tone = stale ? 'warning' : health === 'critical' ? 'critical' : health === 'warning' ? 'warning' : health === 'healthy' ? 'success' : 'muted';
-  return <Badge variant={tone}>{stale ? '수집 지연' : healthLabel(health)}</Badge>;
-}
-
-function renderService(service: AgentServiceState) {
-  return (
-    <>
-      <strong>{service.name ?? service.displayName ?? 'service'}</strong>
-      <span>{service.status ?? '-'}</span>
-    </>
-  );
-}
-
-function renderFirewall(firewall: NonNullable<AssetMetricDetail['firewalls']>[number]) {
-  return (
-    <>
-      <strong>{firewall.backend ?? firewall.profile ?? 'firewall'}</strong>
-      <span>{firewall.enabled === false ? 'disabled' : 'enabled'} · {firewall.ruleCount ?? 0} rules</span>
-    </>
-  );
-}
-
-function renderInterface(row: NonNullable<AssetMetricDetail['interfaceStates']>[number]) {
-  return (
-    <>
-      <strong>{row.name ?? row.macAddress ?? 'interface'}</strong>
-      <span>{row.operStatus ?? row.status ?? row.flags ?? '-'}</span>
-    </>
   );
 }
 
@@ -676,6 +663,175 @@ function summarizeFleet(assets: AssetMetricSummary[], summary: AssetMetricsOverv
   return { total, problem, stale, observed, latestSeenAt: latestSeenAt(assets) };
 }
 
+function healthDistribution(assets: AssetMetricSummary[]) {
+  const counts = {
+    healthy: assets.filter((asset) => asset.health === 'healthy' && !asset.stale).length,
+    warning: assets.filter((asset) => asset.health === 'warning' && !asset.stale).length,
+    critical: assets.filter((asset) => asset.health === 'critical').length,
+    stale: assets.filter((asset) => asset.stale).length,
+    unknown: assets.filter((asset) => asset.health === 'unknown' && !asset.stale).length
+  };
+  return [
+    { key: 'healthy', label: 'Healthy', count: counts.healthy, color: HEALTH_COLORS.healthy, tone: 'good' as const },
+    { key: 'warning', label: 'Warning', count: counts.warning, color: HEALTH_COLORS.warning, tone: 'warning' as const },
+    { key: 'critical', label: 'Critical', count: counts.critical, color: HEALTH_COLORS.critical, tone: 'critical' as const },
+    { key: 'stale', label: 'Stale', count: counts.stale, color: HEALTH_COLORS.stale, tone: 'warning' as const },
+    { key: 'unknown', label: 'Unknown', count: counts.unknown, color: HEALTH_COLORS.unknown, tone: 'neutral' as const }
+  ];
+}
+
+function buildResourceRanks(assets: AssetMetricSummary[]): ResourceRankRow[] {
+  return assets.flatMap((asset) => {
+    const metrics = [
+      ['CPU', asset.metrics.cpuUsagePct, formatPercent],
+      ['Memory', asset.metrics.memoryUsagePct, formatPercent],
+      ['Disk', asset.metrics.diskUsagePct, formatPercent],
+      ['Disk I/O', asset.metrics.diskIoUtilizationPct, formatPercent],
+      ['Load', asset.metrics.normalizedLoadPct, formatPercent],
+      ['Temperature', asset.metrics.temperatureCelsius, formatTemperature]
+    ] as const;
+    return metrics
+      .filter(([, value]) => isFiniteNumber(value))
+      .map(([metric, value, formatter]) => ({
+        id: `${asset.assetUid}-${metric}`,
+        assetUid: asset.assetUid,
+        label: asset.name || asset.assetUid,
+        metric,
+        value: Number(value),
+        formatted: formatter(Number(value)),
+        tone: metric === 'Temperature' ? temperatureTone(Number(value)) : metricTone(Number(value))
+      }));
+  })
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 6);
+}
+
+function buildPriorityItems(assets: AssetMetricSummary[], alerts: AlertRow[], events: AgentLogEvent[]): PriorityItem[] {
+  const assetItems = assets
+    .filter((asset) => asset.health === 'critical' || asset.health === 'warning' || asset.stale || signalReasons(asset).length > 0)
+    .slice(0, 5)
+    .map((asset) => ({
+      id: `asset-${asset.assetUid}`,
+      assetUid: asset.assetUid,
+      title: asset.name || asset.assetUid,
+      detail: signalReasons(asset).slice(0, 2).map((reason) => [reason.label, reason.detail].filter(Boolean).join(' ')).join(' · ')
+        || (asset.stale ? `수집 지연 ${formatDate(asset.lastSeenAt)}` : healthLabel(asset.health)),
+      severity: asset.health === 'critical' ? 'CRITICAL' as const : 'WARNING' as const
+    }));
+  const alertItems = alerts.slice(0, 2).map((alert) => ({
+    id: `alert-${alert.id}`,
+    title: alert.title,
+    detail: alert.detail || alert.status,
+    severity: alert.severity === 'CRITICAL' ? 'CRITICAL' as const : 'WARNING' as const
+  }));
+  const eventItems = events.slice(0, 2).map((event, index) => ({
+    id: `event-${event.assetUid ?? 'event'}-${event.observedAt ?? index}`,
+    assetUid: event.assetUid,
+    title: event.assetUid || event.sourceName || event.eventType || 'Agent event',
+    detail: event.message || event.eventType || formatDate(event.observedAt ?? event.eventTime),
+    severity: (event.severity ?? '').toUpperCase() === 'CRITICAL' || (event.severity ?? '').toUpperCase() === 'ERROR' ? 'CRITICAL' as const : 'WARNING' as const
+  }));
+  return [...assetItems, ...alertItems, ...eventItems]
+    .sort((left, right) => severityRank(right.severity) - severityRank(left.severity))
+    .slice(0, 6);
+}
+
+function buildTrendRows(detail: AssetMetricDetail | null) {
+  if (!detail) {
+    return [];
+  }
+  const rows = new Map<string, Record<string, number | string | null>>();
+  mergeSeries(rows, detail.series.cpu, 'cpu');
+  mergeSeries(rows, detail.series.memory, 'memory');
+  mergeSeries(rows, detail.series.disk, 'disk');
+  mergeSeries(rows, detail.series.temperature, 'temperature');
+  return [...rows.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(-24)
+    .map(([timestamp, row]) => ({ timestamp, label: formatTime(timestamp), ...row }));
+}
+
+function mergeSeries(rows: Map<string, Record<string, number | string | null>>, points: MetricPoint[] | undefined, key: string) {
+  for (const point of points ?? []) {
+    const value = finiteNumber(point.value);
+    if (value == null) {
+      continue;
+    }
+    const row = rows.get(point.timestamp) ?? {};
+    row[key] = value;
+    rows.set(point.timestamp, row);
+  }
+}
+
+function buildEventBuckets(events: AgentLogEvent[]) {
+  const buckets = Array.from({ length: 8 }, (_, index) => ({
+    label: `${index + 1}`,
+    warning: 0,
+    critical: 0
+  }));
+  const sortedEvents = [...events].sort((left, right) => Date.parse(left.observedAt ?? left.eventTime ?? '') - Date.parse(right.observedAt ?? right.eventTime ?? ''));
+  for (const [index, event] of sortedEvents.entries()) {
+    const bucket = buckets[Math.min(buckets.length - 1, Math.floor(index / Math.max(1, Math.ceil(sortedEvents.length / buckets.length))))];
+    const severity = (event.severity ?? '').toUpperCase();
+    if (severity === 'ERROR' || severity === 'CRITICAL') {
+      bucket.critical += 1;
+    } else {
+      bucket.warning += 1;
+    }
+  }
+  return buckets;
+}
+
+function sourceCoverageRows(assets: AssetMetricSummary[]) {
+  return assets.map((asset) => ({
+    assetUid: asset.assetUid,
+    cells: [
+      { label: 'Agent', tone: sourceTone(asset.sources.agent) },
+      { label: 'Traffic', tone: sourceTone(asset.sources.traffic) },
+      { label: 'Disk', tone: sourceTone(asset.sources.diskIo) },
+      { label: 'Security', tone: sourceTone(asset.sources.security) },
+      { label: 'Events', tone: sourceTone(Boolean(asset.signals?.lastEventAt || Object.keys(asset.signals?.eventCounts ?? {}).length > 0)) }
+    ]
+  }));
+}
+
+function sourceTone(enabled?: boolean): SourceTone {
+  return enabled ? 'on' : 'off';
+}
+
+function summarizeSecurityPosture(assets: AssetMetricSummary[], agentDashboard: AgentDashboard) {
+  const security = agentDashboard.securityPosture;
+  return {
+    openPorts: security?.exposedPorts ?? assets.reduce((total, asset) => total + (asset.security?.openPorts ?? 0), 0),
+    failedServices: security?.failedServices ?? assets.reduce((total, asset) => total + (asset.security?.failedServices ?? 0), 0),
+    firewallDisabled: security?.firewallDisabled ?? assets.reduce((total, asset) => total + (asset.security?.firewallDisabled ?? 0), 0),
+    interfacesDown: assets.reduce((total, asset) => total + (asset.security?.interfacesDown ?? asset.signals?.interfacesDown ?? 0), 0)
+  };
+}
+
+function mergeTrafficRows(groups: InterfaceTraffic[][]) {
+  const rows = new Map<string, InterfaceTraffic>();
+  for (const group of groups) {
+    for (const row of group) {
+      const key = `${row.assetUid}-${row.interfaceName}`;
+      const previous = rows.get(key);
+      if (!previous) {
+        rows.set(key, row);
+      } else {
+        rows.set(key, {
+          ...previous,
+          inBps: Math.max(previous.inBps, row.inBps),
+          outBps: Math.max(previous.outBps, row.outBps),
+          utilizationPct: Math.max(previous.utilizationPct, row.utilizationPct),
+          errors: Math.max(previous.errors, row.errors),
+          discards: Math.max(previous.discards, row.discards)
+        });
+      }
+    }
+  }
+  return [...rows.values()].sort((left, right) => totalTraffic(right) - totalTraffic(left));
+}
+
 function sortAssetsForOperations(left: AssetMetricSummary, right: AssetMetricSummary) {
   const leftRank = healthRank(left.health) + (left.stale ? 3 : 0) + signalReasons(left).length;
   const rightRank = healthRank(right.health) + (right.stale ? 3 : 0) + signalReasons(right).length;
@@ -693,14 +849,18 @@ function importantOnly(events: AgentLogEvent[]) {
   return events.filter((event) => ['ERROR', 'WARNING', 'CRITICAL'].includes((event.severity ?? '').toUpperCase()));
 }
 
-function isProblemService(service: AgentServiceState) {
-  const status = (service.status ?? '').toLowerCase();
-  return status === 'failed' || status === 'error';
-}
-
-function isInterfaceDown(row: NonNullable<AssetMetricDetail['interfaceStates']>[number]) {
-  const status = (row.operStatus ?? row.status ?? '').toLowerCase();
-  return Boolean(status) && status !== 'up' && status !== 'unknown';
+function collectorTone(collector: AgentCollectorSummary): KpiTone {
+  if (!collector.lastSeenAt) {
+    return 'warning';
+  }
+  const age = Date.now() - Date.parse(collector.lastSeenAt);
+  if (!Number.isFinite(age)) {
+    return 'neutral';
+  }
+  if (age > 10 * 60 * 1000) {
+    return 'warning';
+  }
+  return 'good';
 }
 
 function healthRank(health?: AssetMetricSummary['health']) {
@@ -729,6 +889,43 @@ function healthLabel(health?: AssetMetricSummary['health']) {
   return '미확인';
 }
 
+function severityRank(severity: string) {
+  return severity === 'CRITICAL' ? 2 : 1;
+}
+
+function totalTraffic(row: InterfaceTraffic) {
+  return row.inBps + row.outBps;
+}
+
+function assetTraffic(asset: Pick<AssetMetricSummary, 'metrics'>) {
+  return safeNumber(asset.metrics.networkInBps) + safeNumber(asset.metrics.networkOutBps);
+}
+
+function totalTrafficFromSummary(summary: AssetMetricsOverview['summary'], rows: InterfaceTraffic[]) {
+  return safeNumber(summary.totalNetworkInBps) + safeNumber(summary.totalNetworkOutBps)
+    || rows.reduce((total, row) => total + totalTraffic(row), 0);
+}
+
+function latestSeenAt(assets: AssetMetricSummary[]) {
+  return assets
+    .map((asset) => asset.lastSeenAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1) ?? null;
+}
+
+function safeNumber(value?: number | null) {
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function finiteNumber(value?: number | null) {
+  return value == null || !Number.isFinite(value) ? null : Number(value);
+}
+
+function isFiniteNumber(value?: number | null): value is number {
+  return value != null && Number.isFinite(value);
+}
+
 function metricTone(value?: number | null): KpiTone {
   if (value == null || !Number.isFinite(value)) {
     return 'neutral';
@@ -755,37 +952,6 @@ function temperatureTone(value?: number | null): KpiTone {
   return 'good';
 }
 
-function eventTone(severity?: string): 'critical' | 'warning' | 'secondary' {
-  const value = (severity ?? '').toUpperCase();
-  if (value === 'ERROR' || value === 'CRITICAL') {
-    return 'critical';
-  }
-  if (value === 'WARNING') {
-    return 'warning';
-  }
-  return 'secondary';
-}
-
-function assetTraffic(asset: Pick<AssetMetricSummary, 'metrics'>) {
-  return safeNumber(asset.metrics.networkInBps) + safeNumber(asset.metrics.networkOutBps);
-}
-
-function latestSeenAt(assets: AssetMetricSummary[]) {
-  return assets
-    .map((asset) => asset.lastSeenAt)
-    .filter((value): value is string => Boolean(value))
-    .sort()
-    .at(-1) ?? null;
-}
-
-function safeNumber(value?: number | null) {
-  return Number.isFinite(value) ? Number(value) : 0;
-}
-
-function finiteNumber(value?: number | null) {
-  return value == null || !Number.isFinite(value) ? null : Number(value);
-}
-
 function formatPercent(value?: number | null) {
   if (value == null || !Number.isFinite(value)) {
     return '-';
@@ -800,25 +966,11 @@ function formatTemperature(value?: number | null) {
   return `${value.toFixed(1)}C`;
 }
 
-function formatTooltipValue(value: number, title: string) {
-  if (title === 'NET') {
-    return formatBps(value);
+function formatTrendValue(value: number, name: string) {
+  if (name === 'TEMP') {
+    return formatTemperature(value);
   }
-  return `${value.toFixed(1)}${title === 'TEMP' ? 'C' : '%'}`;
-}
-
-function formatBytes(value?: number | null) {
-  if (value == null || !Number.isFinite(value) || value <= 0) {
-    return '-';
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let current = value;
-  let unit = 0;
-  while (current >= 1024 && unit < units.length - 1) {
-    current /= 1024;
-    unit += 1;
-  }
-  return `${current.toFixed(current >= 10 ? 0 : 1)} ${units[unit]}`;
+  return formatPercent(value);
 }
 
 function formatDate(value?: string | null) {
@@ -832,13 +984,10 @@ function formatDate(value?: string | null) {
   return date.toLocaleString('ko-KR');
 }
 
-function formatShortDate(value?: string | null) {
-  if (!value) {
-    return '-';
-  }
+function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return '-';
+    return value;
   }
   return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
 }

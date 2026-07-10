@@ -5,12 +5,19 @@ tenant_id: default
 cert_dir: ./certs
 ca_cert_path: ./certs/ca.pem
 tls_server_name: manager.example.com
-ingest_transport: https
+ingest_transport: tcp_mtls
 tcp_ingest_addr: logparser.example.com:9443
 tcp_ingest_server_name: logparser.example.com
 batch_interval: 30s
+sender_flush_interval: 2s
 spool_dir: ./spool
 max_spool_record_bytes: 8mb
+max_spool_bytes: 256mb
+max_spool_records: 10000
+max_spool_age: 168h
+max_batch_items: 1000
+max_batch_bytes: 4mb
+max_item_bytes: 512kb
 log_cursor_path: ./spool/log-cursors.json
 log_message_max_bytes: 1024
 update_enabled: true
@@ -20,12 +27,31 @@ update_dir: ./update
 update_public_key_path: ./certs/update_public_key.pem
 remote_tasks_enabled: true
 remote_task_interval: 10s
-file_manager_enabled: true
-file_manager_allow_delete: true
+file_manager_enabled: false
+file_manager_allow_delete: false
 file_manager_max_transfer_bytes: 256mb
-file_manager_poll_interval: 5s
+file_manager_poll_interval: 30s
 file_manager_roots:
-  - /
+  - /var/log
+  - /etc/castrelyx
+  - /var/lib/castrelyx-agent
+collector_interval_identity: 1h
+collector_interval_metric: 30s
+collector_interval_network: 5m
+collector_interval_process: 2m
+collector_interval_service: 5m
+collector_interval_port: 2m
+collector_interval_package: 12h
+collector_interval_firewall: 10m
+collector_interval_log_tailer: 30s
+collector_interval_agent_health: 30s
+collector_full_interval_identity: 24h
+collector_full_interval_network: 1h
+collector_full_interval_process: 15m
+collector_full_interval_service: 1h
+collector_full_interval_port: 15m
+collector_full_interval_package: 24h
+collector_full_interval_firewall: 1h
 collectors:
   - identity
   - metric

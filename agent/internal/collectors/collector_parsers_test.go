@@ -1,34 +1,44 @@
 package collectors
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"castrelyx/agent/internal/envelope"
 )
 
 func TestParseProcNetDevExtractsInterfaceTrafficBytes(t *testing.T) {
 	input := `Inter-|   Receive                                                |  Transmit
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
     lo: 1000      10    0    0    0     0          0         0 2000      20    0    0    0     0       0          0
+vethabc: 3000      30    0    0    0     0          0         0 4000      40    0    0    0     0       0          0
   eth0: 123456    11    0    0    0     0          0         0 654321    22    0    0    0     0       0          0
 `
 
 	stats := parseProcNetDev(strings.NewReader(input))
 
-	if len(stats) != 2 {
+	if len(stats) != 1 {
 		t.Fatalf("stats length = %d", len(stats))
 	}
-	if stats[1].Name != "eth0" || stats[1].RxBytes != 123456 || stats[1].TxBytes != 654321 {
-		t.Fatalf("unexpected eth0 stats: %#v", stats[1])
+	if stats[0].Name != "eth0" || stats[0].RxBytes != 123456 || stats[0].TxBytes != 654321 {
+		t.Fatalf("unexpected eth0 stats: %#v", stats[0])
 	}
 }
 
 func TestParseDfOutputExtractsMountUsage(t *testing.T) {
 	input := `Filesystem 1B-blocks Used Available Use% Mounted on
 /dev/sda1 1000 400 600 40% /
+/dev/sdb1 2000 1500 500 75% /data
+tmpfs 100 10 90 10% /run
+overlay 3000 1000 2000 34% /var/lib/docker/overlay2/example/merged
+/dev/loop0 200 200 0 100% /snap/example/1
 /dev/sdb1 2000 1500 500 75% /data
 `
 
@@ -57,8 +67,10 @@ func TestPreferredManagementIPPrefersExternalInterface(t *testing.T) {
 
 func TestParseProcDiskstatsExtractsDiskIOCounters(t *testing.T) {
 	input := `   8       0 sda 100 0 2000 10 50 0 3000 20 0 500 30 0 0 0 0 0 0
+   8       1 sda1 90 0 1800 9 40 0 2500 18 0 450 25 0 0 0 0 0 0
    7       0 loop0 1 0 2 0 3 0 4 0 0 1 0 0 0 0 0 0 0
  259       0 nvme0n1 1000 0 4000 12 2000 0 8000 24 0 900 36 0 0 0 0 0 0
+ 259       1 nvme0n1p1 500 0 2000 6 1000 0 4000 12 0 450 18 0 0 0 0 0 0
 `
 
 	stats := parseProcDiskstats(strings.NewReader(input))
@@ -228,12 +240,37 @@ func TestParsePackageInventoryExtractsNamesAndVersions(t *testing.T) {
 	}
 }
 
+func TestParseApkPackagesPreservesHyphenatedNames(t *testing.T) {
+	input := strings.Join([]string{
+		"alpine-baselayout-3.6.5-r0 - Alpine base dir structure and init scripts",
+		"ca-certificates-bundle-20250619-r0 - Mozilla CA certificates",
+		"bad-package-without-revision",
+	}, "\n")
+
+	packages := parseApkPackages(strings.NewReader(input))
+
+	if len(packages) != 2 {
+		t.Fatalf("packages length = %d: %#v", len(packages), packages)
+	}
+	if packages[0].Name != "alpine-baselayout" || packages[0].Version != "3.6.5-r0" {
+		t.Fatalf("unexpected first package: %#v", packages[0])
+	}
+	if packages[1].Name != "ca-certificates-bundle" || packages[1].Version != "20250619-r0" {
+		t.Fatalf("unexpected second package: %#v", packages[1])
+	}
+}
+
 func TestParseSystemctlServiceOutputExtractsServiceState(t *testing.T) {
-	input := "ssh.service loaded active running OpenBSD Secure Shell server\ncron.service loaded inactive dead Regular background program processing daemon\n"
+	input := strings.Join([]string{
+		"ssh.service loaded active running OpenBSD Secure Shell server",
+		"cron.service loaded inactive dead Regular background program processing daemon",
+		"● failed.service loaded failed failed Broken service",
+		"●attached.service loaded active exited One-shot service",
+	}, "\n")
 
 	services := parseSystemctlServices(strings.NewReader(input))
 
-	if len(services) != 2 {
+	if len(services) != 4 {
 		t.Fatalf("services length = %d", len(services))
 	}
 	if services[0].Name != "ssh.service" || services[0].Status != "running" {
@@ -241,6 +278,12 @@ func TestParseSystemctlServiceOutputExtractsServiceState(t *testing.T) {
 	}
 	if services[1].Status != "stopped" {
 		t.Fatalf("inactive service status = %q", services[1].Status)
+	}
+	if services[2].Name != "failed.service" || services[2].Status != "failed" {
+		t.Fatalf("bullet-prefixed service parsed incorrectly: %#v", services[2])
+	}
+	if services[3].Name != "attached.service" || services[3].Status != "exited" {
+		t.Fatalf("attached bullet service parsed incorrectly: %#v", services[3])
 	}
 }
 
@@ -257,7 +300,7 @@ func TestBuildLogEventItemCreatesPlatformLogEvent(t *testing.T) {
 }
 
 func TestLinuxFileLogSourcesIncludeSuricataAndZeek(t *testing.T) {
-	sources := linuxFileLogSources()
+	sources := linuxFileLogSources(false)
 	if !containsString(sources, "/var/log/suricata/eve.json") {
 		t.Fatalf("suricata eve source missing from %#v", sources)
 	}
@@ -266,6 +309,253 @@ func TestLinuxFileLogSourcesIncludeSuricataAndZeek(t *testing.T) {
 	}
 	if !containsString(sources, "/opt/zeek/logs/current/conn.log") {
 		t.Fatalf("opt zeek conn source missing from %#v", sources)
+	}
+	if containsString(sources, "/var/log/auth.log") || containsString(sources, "/var/log/syslog") {
+		t.Fatalf("journald mirror source was included while journald is available: %#v", sources)
+	}
+	fallbackSources := linuxFileLogSources(true)
+	if !containsString(fallbackSources, "/var/log/auth.log") || !containsString(fallbackSources, "/var/log/syslog") {
+		t.Fatalf("journald fallback sources missing from %#v", fallbackSources)
+	}
+}
+
+func TestLinuxLogCollectionPrefersAvailableJournalAndCommitsCursor(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "old"
+	fileSources := []string{}
+	journalItem := buildLinuxLogEventItem("journald", "journal event", 1024)
+
+	items, err := collectLinuxLogEventsWith(
+		context.Background(),
+		Options{LogMessageMaxBytes: 1024},
+		state,
+		func(_ context.Context, _ Options, journalState *logCursorState) ([]envelope.Item, bool, error) {
+			journalState.JournaldCursor = "new"
+			return []envelope.Item{journalItem}, true, nil
+		},
+		func(_ context.Context, source string, _ Options, _ *logCursorState) ([]envelope.Item, error) {
+			fileSources = append(fileSources, source)
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.JournaldCursor != "new" {
+		t.Fatalf("journald cursor = %q, want new", state.JournaldCursor)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	if containsString(fileSources, "/var/log/auth.log") || containsString(fileSources, "/var/log/syslog") {
+		t.Fatalf("journald mirrors collected despite available journal: %#v", fileSources)
+	}
+	if !containsString(fileSources, "/var/log/suricata/eve.json") || !containsString(fileSources, "/var/log/zeek/current/notice.log") {
+		t.Fatalf("specialized log sources were not preserved: %#v", fileSources)
+	}
+}
+
+func TestLinuxLogCollectionFallsBackWhenInitialJournalHasNoCursor(t *testing.T) {
+	state := newLogCursorState()
+	fileSources := []string{}
+	_, err := collectLinuxLogEventsWith(
+		context.Background(),
+		Options{},
+		state,
+		func(context.Context, Options, *logCursorState) ([]envelope.Item, bool, error) {
+			return nil, true, nil
+		},
+		func(_ context.Context, source string, _ Options, _ *logCursorState) ([]envelope.Item, error) {
+			fileSources = append(fileSources, source)
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(fileSources, "/var/log/auth.log") || !containsString(fileSources, "/var/log/messages") {
+		t.Fatalf("empty initial journal did not enable mirror fallback: %#v", fileSources)
+	}
+}
+
+func TestLinuxLogCollectionKeepsMirrorsDisabledForEstablishedEmptyJournal(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "established"
+	fileSources := []string{}
+	_, err := collectLinuxLogEventsWith(
+		context.Background(),
+		Options{},
+		state,
+		func(context.Context, Options, *logCursorState) ([]envelope.Item, bool, error) {
+			return nil, true, nil
+		},
+		func(_ context.Context, source string, _ Options, _ *logCursorState) ([]envelope.Item, error) {
+			fileSources = append(fileSources, source)
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsString(fileSources, "/var/log/auth.log") || containsString(fileSources, "/var/log/messages") {
+		t.Fatalf("established journal enabled mirror files: %#v", fileSources)
+	}
+}
+
+func TestLinuxLogCollectionFallsBackWithoutCommittingFailedJournalCursor(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "committed"
+	fileSources := []string{}
+	items, err := collectLinuxLogEventsWith(
+		context.Background(),
+		Options{},
+		state,
+		func(_ context.Context, _ Options, journalState *logCursorState) ([]envelope.Item, bool, error) {
+			journalState.JournaldCursor = "partial"
+			return nil, true, errors.New("journal unavailable")
+		},
+		func(_ context.Context, source string, _ Options, _ *logCursorState) ([]envelope.Item, error) {
+			fileSources = append(fileSources, source)
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.JournaldCursor != "committed" {
+		t.Fatalf("failed journal cursor was committed: %q", state.JournaldCursor)
+	}
+	if !containsString(fileSources, "/var/log/auth.log") || !containsString(fileSources, "/var/log/messages") {
+		t.Fatalf("journal mirror fallback sources missing: %#v", fileSources)
+	}
+	if len(items) != 1 || items[0].Type != "collector_error" || items[0].Key != "log_tailer:journald" {
+		t.Fatalf("journald failure diagnostic missing: %#v", items)
+	}
+}
+
+func TestLinuxLogCollectionPropagatesCanceledContextWithoutFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fileCalls := 0
+	_, err := collectLinuxLogEventsWith(
+		ctx,
+		Options{},
+		newLogCursorState(),
+		func(context.Context, Options, *logCursorState) ([]envelope.Item, bool, error) {
+			return nil, false, context.Canceled
+		},
+		func(context.Context, string, Options, *logCursorState) ([]envelope.Item, error) {
+			fileCalls++
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if fileCalls != 0 {
+		t.Fatalf("file fallback calls = %d, want 0", fileCalls)
+	}
+}
+
+func TestLinuxLogCollectionContinuesAfterOptionalFileError(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "cursor"
+	fileCalls := 0
+	items, err := collectLinuxLogEventsWith(
+		context.Background(),
+		Options{},
+		state,
+		func(context.Context, Options, *logCursorState) ([]envelope.Item, bool, error) {
+			return nil, true, nil
+		},
+		func(_ context.Context, source string, _ Options, _ *logCursorState) ([]envelope.Item, error) {
+			fileCalls++
+			if source == "/var/log/suricata/eve.json" {
+				return nil, errors.New("permission denied")
+			}
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileCalls <= 1 {
+		t.Fatalf("file collection stopped after optional source error: calls=%d", fileCalls)
+	}
+	foundDiagnostic := false
+	for _, item := range items {
+		if item.Type == "collector_error" && item.Key == "log_tailer:/var/log/suricata/eve.json" {
+			foundDiagnostic = true
+		}
+	}
+	if !foundDiagnostic {
+		t.Fatalf("optional file error diagnostic missing: %#v", items)
+	}
+}
+
+func TestLinuxJournalCollectionRecoversFromStaleCursor(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "vacuumed"
+	attempts := 0
+	items, available, err := collectLinuxJournalEventsWithAttempt(
+		context.Background(),
+		Options{},
+		state,
+		func(_ context.Context, _ Options, attemptState *logCursorState) ([]envelope.Item, bool, error) {
+			attempts++
+			if attempts == 1 {
+				attemptState.JournaldCursor = "partial"
+				return nil, true, errors.Join(errJournalCursorInvalid, errors.New("failed to seek to cursor"))
+			}
+			if attemptState.JournaldCursor != "" {
+				t.Fatalf("reset retry cursor = %q, want empty", attemptState.JournaldCursor)
+			}
+			attemptState.JournaldCursor = "replacement"
+			return []envelope.Item{buildLinuxLogEventItem("journald", "recovered", 1024)}, true, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !available || attempts != 2 || len(items) != 1 || state.JournaldCursor != "replacement" {
+		t.Fatalf("stale cursor recovery failed: available=%v attempts=%d items=%d state=%#v", available, attempts, len(items), state)
+	}
+}
+
+func TestLinuxJournalCollectionDoesNotResetCursorOnParseFailure(t *testing.T) {
+	state := newLogCursorState()
+	state.JournaldCursor = "committed"
+	attempts := 0
+	_, _, err := collectLinuxJournalEventsWithAttempt(
+		context.Background(),
+		Options{},
+		state,
+		func(_ context.Context, _ Options, attemptState *logCursorState) ([]envelope.Item, bool, error) {
+			attempts++
+			attemptState.JournaldCursor = "partial"
+			return nil, true, errors.New("decode journal event: record exceeds scanner limit")
+		},
+	)
+	if err == nil || attempts != 1 {
+		t.Fatalf("parse failure was reset/retried: attempts=%d err=%v", attempts, err)
+	}
+	if state.JournaldCursor != "committed" {
+		t.Fatalf("parse failure changed committed cursor: %q", state.JournaldCursor)
+	}
+}
+
+func TestInvalidJournalCursorMessageClassification(t *testing.T) {
+	for _, message := range []string{
+		"Failed to seek to cursor: Invalid argument",
+		"Cursor not found",
+		"invalid cursor token",
+	} {
+		if !isInvalidJournalCursorMessage(message) {
+			t.Fatalf("stale cursor message was not recognized: %q", message)
+		}
+	}
+	if isInvalidJournalCursorMessage("permission denied") {
+		t.Fatal("unrelated journal failure was classified as stale cursor")
 	}
 }
 
@@ -338,7 +628,10 @@ func TestZeekHeaderLinesAreSkippedByFileTailer(t *testing.T) {
 	}, "\n")
 	writeTestFile(t, path, content)
 
-	items := collectLinuxFileLogSource(path, Options{LogMessageMaxBytes: 1024}, newLogCursorState())
+	items, err := collectLinuxFileLogSource(context.Background(), path, Options{LogMessageMaxBytes: 1024}, newLogCursorState())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(items) != 1 {
 		t.Fatalf("items = %d, want 1: %#v", len(items), items)
@@ -380,7 +673,10 @@ func TestLinuxLogTailerUsesCursorForIncrementalFileReads(t *testing.T) {
 	state := newLogCursorState()
 	options := Options{LogMessageMaxBytes: 1024}
 
-	initial := collectLinuxFileLogSource(path, options, state)
+	initial, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(initial) != initialFileTailLines {
 		t.Fatalf("initial items = %d, want %d", len(initial), initialFileTailLines)
 	}
@@ -397,7 +693,10 @@ func TestLinuxLogTailerUsesCursorForIncrementalFileReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	next := collectLinuxFileLogSource(path, options, state)
+	next, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(next) != 1 {
 		t.Fatalf("incremental items = %d, want 1", len(next))
 	}
@@ -463,4 +762,361 @@ func TestLogMessageScrubsSecretsAndLimitsLength(t *testing.T) {
 	if len(message) > 64 {
 		t.Fatalf("message length = %d, want <= 64: %q", len(message), message)
 	}
+}
+
+func TestLinuxLogTailerPagesBacklogOldestFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "application.log")
+	writeTestFile(t, path, "")
+	state := newLogCursorState()
+	options := Options{LogMessageMaxBytes: 1024}
+
+	items, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("initial items = %d, want 0", len(items))
+	}
+
+	var backlog strings.Builder
+	for i := 0; i < 450; i++ {
+		backlog.WriteString("line-")
+		backlog.WriteString(strconv.Itoa(i))
+		backlog.WriteByte('\n')
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(backlog.String()); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 200 || len(second) != 200 || len(third) != 50 {
+		t.Fatalf("page sizes = %d, %d, %d; want 200, 200, 50", len(first), len(second), len(third))
+	}
+	if logItemMessage(first[0]) != "line-0" || logItemMessage(second[0]) != "line-200" || logItemMessage(third[0]) != "line-400" {
+		t.Fatalf("pages were not oldest-first: %q, %q, %q", logItemMessage(first[0]), logItemMessage(second[0]), logItemMessage(third[0]))
+	}
+}
+
+func TestLinuxLogTailerPreservesIncompleteTrailingLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "application.log")
+	writeTestFile(t, path, "complete\npartial")
+	state := newLogCursorState()
+	options := Options{LogMessageMaxBytes: 1024}
+
+	initial, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial) != 1 || logItemMessage(initial[0]) != "complete" {
+		t.Fatalf("initial items = %#v", initial)
+	}
+	if state.Files[path].Pending != "partial" {
+		t.Fatalf("pending line = %q, want partial", state.Files[path].Pending)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("-done\nnext\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 2 || logItemMessage(next[0]) != "partial-done" || logItemMessage(next[1]) != "next" {
+		t.Fatalf("completed items = %#v", next)
+	}
+	if state.Files[path].Pending != "" {
+		t.Fatalf("pending line was not cleared: %q", state.Files[path].Pending)
+	}
+}
+
+func TestLinuxLogTailerBoundsIncrementalRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.log")
+	writeTestFile(t, path, "")
+	state := newLogCursorState()
+	options := Options{LogMessageMaxBytes: 1024}
+	if _, err := collectLinuxFileLogSource(context.Background(), path, options, state); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(bytes.Repeat([]byte("x"), tailReadWindowBytes*3)); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %d, want 0 before newline", len(items))
+	}
+	if state.Files[path].Offset != tailReadWindowBytes {
+		t.Fatalf("cursor offset = %d, want bounded page %d", state.Files[path].Offset, tailReadWindowBytes)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := collectLinuxFileLogSource(context.Background(), path, options, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(completed) != 1 || completed[0].Payload.(map[string]any)["line_truncated"] != true {
+		t.Fatalf("oversized line was not completed as an explicit truncated event: %#v", completed)
+	}
+}
+
+func TestLinuxLogTailerHandlesTruncationAndRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "application.log")
+	writeTestFile(t, path, "old-one\nold-two\n")
+	state := newLogCursorState()
+	options := Options{LogMessageMaxBytes: 1024}
+	if _, err := collectLinuxFileLogSource(context.Background(), path, options, state); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, path, "new-one-after-truncate-and-regrow\n")
+	truncated, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(truncated) != 1 || logItemMessage(truncated[0]) != "new-one-after-truncate-and-regrow" {
+		t.Fatalf("truncation items = %#v", truncated)
+	}
+
+	cursor := state.Files[path]
+	cursor.FileID = "previous-rotated-file"
+	state.Files[path] = cursor
+	writeTestFile(t, path, "rotated-one\nrotated-two\n")
+	rotated, err := collectLinuxFileLogSource(context.Background(), path, options, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rotated) != 2 || logItemMessage(rotated[0]) != "rotated-one" || logItemMessage(rotated[1]) != "rotated-two" {
+		t.Fatalf("rotation items = %#v", rotated)
+	}
+}
+
+func TestLogCursorErrorsArePropagated(t *testing.T) {
+	dir := t.TempDir()
+	cursorPath := filepath.Join(dir, "cursor.json")
+	writeTestFile(t, cursorPath, "{")
+	if _, err := loadLogCursorState(cursorPath); err == nil {
+		t.Fatal("loadLogCursorState accepted invalid JSON")
+	}
+
+	blocker := filepath.Join(dir, "not-a-directory")
+	writeTestFile(t, blocker, "block")
+	if err := saveLogCursorState(filepath.Join(blocker, "cursor.json"), newLogCursorState()); err == nil {
+		t.Fatal("saveLogCursorState returned nil for an invalid parent path")
+	}
+
+	if _, err := collectLinuxFileLogSource(context.Background(), dir, Options{LogMessageMaxBytes: 1024}, newLogCursorState()); err == nil {
+		t.Fatal("collectLinuxFileLogSource accepted a directory as a log file")
+	}
+}
+
+func TestJournalScannerErrorIsPropagated(t *testing.T) {
+	oversized := append(bytes.Repeat([]byte("x"), 1024*1024+1), '\n')
+	_, _, err := parseJournalEvents(context.Background(), bytes.NewReader(oversized), Options{LogMessageMaxBytes: 1024}, newLogCursorState(), 200)
+	if err == nil || !strings.Contains(err.Error(), "scan journal events") {
+		t.Fatalf("parseJournalEvents error = %v, want scanner error", err)
+	}
+}
+
+func TestJournalEventsArePagedOldestFirst(t *testing.T) {
+	var input strings.Builder
+	for i := 0; i < 250; i++ {
+		input.WriteString(`{"MESSAGE":"event-`)
+		input.WriteString(strconv.Itoa(i))
+		input.WriteString(`","__CURSOR":"cursor-`)
+		input.WriteString(strconv.Itoa(i))
+		input.WriteString(`","PRIORITY":"6"}`)
+		input.WriteByte('\n')
+	}
+	state := newLogCursorState()
+	items, reachedLimit, err := parseJournalEvents(context.Background(), strings.NewReader(input.String()), Options{LogMessageMaxBytes: 1024}, state, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reachedLimit || len(items) != 200 {
+		t.Fatalf("journal page reached=%v items=%d, want true/200", reachedLimit, len(items))
+	}
+	if logItemMessage(items[0]) != "event-0" || logItemMessage(items[199]) != "event-199" || state.JournaldCursor != "cursor-199" {
+		t.Fatalf("journal page is not oldest-first: first=%q last=%q cursor=%q", logItemMessage(items[0]), logItemMessage(items[199]), state.JournaldCursor)
+	}
+}
+
+func TestLogTailerStagesCursorUntilExplicitCommit(t *testing.T) {
+	dir := t.TempDir()
+	cursorPath := filepath.Join(dir, "cursor.json")
+	collector := &logTailerCollector{
+		options: Options{LogCursorPath: cursorPath, LogMessageMaxBytes: 1024},
+		collectFn: func(_ context.Context, _ Options, state *logCursorState) ([]envelope.Item, error) {
+			state.Files["test.log"] = fileLogCursor{FileID: "file-1", Offset: 42}
+			return nil, nil
+		},
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cursorPath); !os.IsNotExist(err) {
+		t.Fatalf("cursor was persisted before commit: %v", err)
+	}
+	if err := collector.CommitPendingCursor(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadLogCursorState(cursorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Files["test.log"].Offset != 42 {
+		t.Fatalf("committed offset = %d, want 42", state.Files["test.log"].Offset)
+	}
+}
+
+func TestLogTailerReplaysUncommittedCursorState(t *testing.T) {
+	starts := []int64{}
+	collector := &logTailerCollector{
+		options: Options{LogMessageMaxBytes: 1024},
+		collectFn: func(_ context.Context, _ Options, state *logCursorState) ([]envelope.Item, error) {
+			starts = append(starts, state.Files["test.log"].Offset)
+			state.Files["test.log"] = fileLogCursor{FileID: "file-1", Offset: 42}
+			return nil, nil
+		},
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(starts) != 2 || starts[0] != 0 || starts[1] != 0 {
+		t.Fatalf("uncommitted cursor advanced between collections: %#v", starts)
+	}
+}
+
+func TestCrossSourceLogDedupKeepsSameSourceRepeats(t *testing.T) {
+	line := "Jun 24 08:00:00 host sshd[123]: Failed password for alice from 10.0.0.1 port 22 ssh2"
+	auth := buildLinuxLogEventItem("/var/log/auth.log", line, 1024)
+	secure := buildLinuxLogEventItem("/var/log/secure", line, 1024)
+	items := dedupeCrossSourceLogItems([]envelope.Item{auth, auth, secure})
+	if len(items) != 2 {
+		t.Fatalf("deduped items = %d, want 2", len(items))
+	}
+}
+
+func TestWindowsLogIncrementalQueryIsOldestFirst(t *testing.T) {
+	command := windowsLogChannelCommand("System", 42, incrementalWindowsChannelEvents)
+	if !strings.Contains(command, "EventRecordID > 42") || !strings.Contains(command, "-Oldest") || !strings.Contains(command, "-MaxEvents 100") || !strings.Contains(command, "-MaxEvents 1") {
+		t.Fatalf("incremental Windows event query is not paged oldest-first: %s", command)
+	}
+	initial := windowsLogChannelCommand("System", 0, initialWindowsChannelEvents)
+	if strings.Contains(initial, "-FilterXPath") || strings.Contains(initial, "-Oldest") || !strings.Contains(initial, "-MaxEvents 20") {
+		t.Fatalf("initial Windows event query changed unexpectedly: %s", initial)
+	}
+}
+
+func TestWindowsLogChannelRecoversAfterRecordIDReset(t *testing.T) {
+	state := newLogCursorState()
+	state.Windows["System"] = 100
+	outputs := []string{
+		`{"TimeCreated":"2026-07-10T00:00:00Z","Id":6005,"RecordId":5,"ProviderName":"EventLog","LevelDisplayName":"Information","Message":"log cleared"}`,
+		`[{"TimeCreated":"2026-07-10T00:00:00Z","Id":6005,"RecordId":4,"ProviderName":"EventLog","LevelDisplayName":"Information","Message":"log initialized"},{"TimeCreated":"2026-07-10T00:00:01Z","Id":1,"RecordId":5,"ProviderName":"Test","LevelDisplayName":"Information","Message":"new event"}]`,
+	}
+	calls := 0
+	items, err := collectWindowsChannelEventsWith(
+		context.Background(),
+		"System",
+		Options{LogMessageMaxBytes: 1024},
+		state,
+		func(context.Context, string) (string, error) {
+			out := outputs[calls]
+			calls++
+			return out, nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || len(items) != 2 || state.Windows["System"] != 5 {
+		t.Fatalf("record id reset recovery failed: calls=%d items=%d state=%#v", calls, len(items), state.Windows)
+	}
+}
+
+func TestWindowsLogChannelResetsCursorForClearedEmptyChannel(t *testing.T) {
+	state := newLogCursorState()
+	state.Windows["Security"] = 50
+	items, err := collectWindowsChannelEventsWith(
+		context.Background(),
+		"Security",
+		Options{},
+		state,
+		func(context.Context, string) (string, error) { return "", nil },
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || state.Windows["Security"] != 0 {
+		t.Fatalf("cleared empty channel cursor not reset: items=%d state=%#v", len(items), state.Windows)
+	}
+}
+
+func logItemMessage(item envelope.Item) string {
+	payload, _ := item.Payload.(map[string]any)
+	message, _ := payload["message"].(string)
+	return message
 }

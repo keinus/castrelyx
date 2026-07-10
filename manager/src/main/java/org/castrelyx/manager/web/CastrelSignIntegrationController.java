@@ -306,19 +306,45 @@ public class CastrelSignIntegrationController {
         ingest_transport: tcp_mtls
         tcp_ingest_addr: %s
         tcp_ingest_server_name: %s
+        batch_interval: 30s
+        sender_flush_interval: 2s
+        max_spool_record_bytes: 8mb
+        max_spool_bytes: 256mb
+        max_spool_records: 10000
+        max_spool_age: 168h
+        max_batch_items: 1000
+        max_batch_bytes: 4mb
+        max_item_bytes: 512kb
+        log_message_max_bytes: 1024
+        collector_interval_identity: 1h
+        collector_interval_metric: 30s
+        collector_interval_network: 5m
+        collector_interval_process: 2m
+        collector_interval_service: 5m
+        collector_interval_port: 2m
+        collector_interval_package: 12h
+        collector_interval_firewall: 10m
+        collector_interval_log_tailer: 30s
+        collector_interval_agent_health: 30s
+        collector_full_interval_identity: 24h
+        collector_full_interval_network: 1h
+        collector_full_interval_process: 15m
+        collector_full_interval_service: 1h
+        collector_full_interval_port: 15m
+        collector_full_interval_package: 24h
+        collector_full_interval_firewall: 1h
         update_enabled: true
         update_channel: stable
         update_check_interval: 6h
         update_public_key_path: ./update_public_key.pem
         remote_tasks_enabled: true
         remote_task_interval: 10s
-        file_manager_enabled: true
-        file_manager_allow_delete: true
+        file_manager_enabled: false
+        file_manager_allow_delete: false
         file_manager_max_transfer_bytes: 256mb
-        file_manager_poll_interval: 5s
+        file_manager_poll_interval: 30s
         file_manager_roots:
-          - /
-        batch_interval: 30s
+          - __FILE_MANAGER_ROOT__
         collectors:
           - identity
           - metric
@@ -326,6 +352,10 @@ public class CastrelSignIntegrationController {
           - process
           - service
           - port
+          - package
+          - firewall
+          - log_tailer
+          - agent_health
         """.formatted(managerUrl, token, agentId, tenantId, tlsServerName, tcpIngestAddr, tlsServerName);
   }
 
@@ -357,6 +387,8 @@ public class CastrelSignIntegrationController {
         $binDir = Join-Path $installRoot 'bin'
         $certDir = Join-Path $installRoot 'certs'
         $spoolDir = Join-Path $installRoot 'spool'
+        $updateDir = Join-Path $installRoot 'update'
+        $fileManagerDir = Join-Path $installRoot 'files'
         $configPath = Join-Path $installRoot 'agent.yaml'
         $serviceName = 'CastrelyxAgent'
         $agentExe = Join-Path $binDir 'castrelyx-agent.exe'
@@ -365,7 +397,7 @@ public class CastrelSignIntegrationController {
         $sourceUpdateKey = Join-Path $packageDir 'certs\\update_public_key.pem'
         $sourceConfig = Join-Path $packageDir 'agent.yaml'
 
-        foreach ($path in @($installRoot, $binDir, $certDir, $spoolDir)) {
+        foreach ($path in @($installRoot, $binDir, $certDir, $spoolDir, $updateDir, $fileManagerDir)) {
           New-Item -ItemType Directory -Force -Path $path | Out-Null
         }
         foreach ($required in @($sourceExe, $sourceCa, $sourceUpdateKey, $sourceConfig)) {
@@ -379,7 +411,9 @@ public class CastrelSignIntegrationController {
         Copy-Item -Path $sourceUpdateKey -Destination (Join-Path $installRoot 'update_public_key.pem') -Force
         $hostname = [System.Net.Dns]::GetHostName()
         $agentYaml = Get-Content $sourceConfig -Raw
-        $agentYaml.Replace('__HOSTNAME__', $hostname) | Set-Content -Path $configPath -Encoding utf8 -NoNewline
+        $renderedConfig = $agentYaml.Replace('__HOSTNAME__', $hostname).Replace('__FILE_MANAGER_ROOT__', $fileManagerDir)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($configPath, $renderedConfig, $utf8NoBom)
         & icacls.exe $configPath /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null
 
         $binaryPath = '"' + $agentExe + '" -config "' + $configPath + '"'
@@ -394,6 +428,8 @@ public class CastrelSignIntegrationController {
         } else {
           New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName 'Castrelyx Agent' -Description 'Collects host telemetry for Castrelyx.' -StartupType Automatic | Out-Null
         }
+        & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+        & sc.exe failureflag $serviceName 1 | Out-Null
         Start-Service -Name $serviceName
         Write-Host "Agent ID set to $hostname."
         Write-Host "Installed Castrelyx Agent service: $serviceName"
@@ -430,8 +466,11 @@ public class CastrelSignIntegrationController {
         source_update_key="$package_dir/certs/update_public_key.pem"
         config_dir="/etc/castrelyx"
         config_path="$config_dir/agent.yaml"
-        cert_dir="/var/lib/castrelyx-agent/certs"
-        spool_dir="/var/lib/castrelyx-agent/spool"
+        state_dir="/var/lib/castrelyx-agent"
+        cert_dir="$state_dir/certs"
+        spool_dir="$state_dir/spool"
+        update_dir="$state_dir/update"
+        file_manager_dir="$state_dir/files"
         agent_bin="/usr/local/bin/castrelyx-agent"
         service_path="/etc/systemd/system/castrelyx-agent.service"
 
@@ -442,14 +481,18 @@ public class CastrelSignIntegrationController {
           fi
         done
 
-        mkdir -p "$config_dir" "$cert_dir" "$spool_dir"
-        install -m 0755 "$source_bin" "$agent_bin"
-        install -m 0644 "$source_ca" "$cert_dir/ca.pem"
-        install -m 0644 "$source_update_key" "$config_dir/update_public_key.pem"
+        install -d -o root -g root -m 0750 "$config_dir"
+        install -d -o root -g root -m 0700 "$state_dir" "$cert_dir" "$spool_dir" "$update_dir" "$file_manager_dir"
+        install -d -o root -g root -m 0755 /usr/local/bin
+        install -o root -g root -m 0755 "$source_bin" "$agent_bin"
+        install -o root -g root -m 0644 "$source_ca" "$cert_dir/ca.pem"
+        install -o root -g root -m 0644 "$source_update_key" "$config_dir/update_public_key.pem"
         agent_hostname="$(hostname)"
         escaped_hostname="$(printf '%s' "$agent_hostname" | sed 's/[\\\\/&]/\\\\&/g')"
-        sed "s/__HOSTNAME__/$escaped_hostname/g" "$source_config" > "$config_path"
+        sed -e "s/__HOSTNAME__/$escaped_hostname/g" -e 's|__FILE_MANAGER_ROOT__|/var/lib/castrelyx-agent/files|g' "$source_config" > "$config_path"
+        chown root:root "$config_path" "$cert_dir/ca.pem" "$config_dir/update_public_key.pem"
         chmod 600 "$config_path"
+        chmod 0644 "$cert_dir/ca.pem" "$config_dir/update_public_key.pem"
         cat > "$service_path" <<'SERVICE'
         [Unit]
         Description=Castrelyx Agent
@@ -458,14 +501,43 @@ public class CastrelSignIntegrationController {
 
         [Service]
         Type=simple
+        User=root
+        Group=root
         ExecStart=/usr/local/bin/castrelyx-agent -config /etc/castrelyx/agent.yaml
         Restart=always
         RestartSec=5s
+        TimeoutStopSec=30s
         WorkingDirectory=/var/lib/castrelyx-agent
+        UMask=0077
+
+        # Keep host /proc, /proc/net, journal and service/package visibility for collectors.
+        NoNewPrivileges=true
+        PrivateTmp=true
+        ProtectSystem=strict
+        ProtectHome=read-only
+        ProtectKernelTunables=true
+        ProtectKernelModules=true
+        ProtectControlGroups=true
+        ProtectHostname=true
+        ProtectClock=true
+        LockPersonality=true
+        MemoryDenyWriteExecute=true
+        SystemCallArchitectures=native
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+        ReadOnlyPaths=/etc/castrelyx /var/log
+        # The binary directory remains writable only so the signed self-updater can replace the agent.
+        ReadWritePaths=/var/lib/castrelyx-agent /usr/local/bin
+
+        LimitNOFILE=65536
+        TasksMax=512
+        MemoryMax=512M
+        CPUQuota=50%
 
         [Install]
         WantedBy=multi-user.target
         SERVICE
+        chown root:root "$service_path"
+        chmod 0644 "$service_path"
         systemctl daemon-reload
         if systemctl is-active --quiet castrelyx-agent; then
           systemctl restart castrelyx-agent

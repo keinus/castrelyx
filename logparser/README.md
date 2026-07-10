@@ -183,11 +183,27 @@ TLS 연결을 쓰려면 기존 RabbitMQ 입력에 `tlsEnabled=true`를 주거나
   "trustStorePath": "/var/lib/castrelsign/certs/truststore.p12",
   "trustStorePasswordEnv": "CASTRELSIGN_TRUSTSTORE_PASSWORD",
   "maxFrameBytes": 10485760,
+  "maxConnections": 32,
+  "tlsReloadIntervalMs": 5000,
   "ackMode": "queueAccepted"
 }
 ```
 
-batch payload는 4-byte frame length 뒤에 gzip JSON body가 오는 형식입니다. JSON body는 `source_id`, `tenant_id`, `items[]`를 포함하고, 각 item은 `kind`, `type`, `key`, `payload`를 가질 수 있습니다. adapter는 payload의 object field를 `payload_<field>` 형태로 추가 노출합니다.
+batch payload는 4-byte big-endian frame length 뒤에 gzip JSON body가 오는 형식입니다. 기본 상한은 compressed frame 10 MiB, decompressed JSON 16 MiB, batch item 5,000개입니다. JSON body는 `source_id`, `tenant_id`, `items[]`를 포함하고, 각 item은 `kind`, `type`, `key`, `payload`를 가질 수 있습니다. adapter는 payload의 object field를 `payload_<field>` 형태로 추가 노출합니다.
+
+schema `1.1` batch는 다음을 추가 검증합니다.
+
+- nonblank, 최대 128자인 `batch_id`
+- `chunk_count > 0`이고 `0 <= chunk_index < chunk_count`인 정수 chunk metadata
+- 배열 형태의 `items`
+- item별 nonblank, 최대 256자인 `item_id`
+- 같은 chunk 안에서 중복되지 않는 0 이상의 정수 `sequence`
+
+각 `LogEvent`에는 `batch_id`, `chunk_index`, `chunk_count`, 실제 `items[]` 길이인 `chunk_item_count`, `item_id`, `item_sequence`가 추가됩니다. adapter는 전체 chunk가 queue의 남은 용량에 들어가는지 먼저 확인하고 모든 item을 enqueue한 뒤 ACK합니다. 용량이 부족하면 아무 item도 넣지 않고 `queue_full` NACK를 반환합니다.
+
+최근 50,000개의 `source_id:batch_id:chunk_index`는 고정 길이 SHA-256 digest로 process memory에 기억합니다. 같은 process 수명 안의 최근 재전송이면 다시 enqueue하지 않고 ACK하지만, restart와 cache eviction을 넘는 영구 dedup store는 아닙니다. ACK는 메모리 input queue 수락을 의미하며 downstream output이나 ClickHouse commit을 의미하지 않습니다.
+
+동시 client 수는 `maxConnections` semaphore로 제한합니다. 생략하면 input의 `workerThreads`, 둘 다 없으면 32를 사용합니다. Adapter는 `tlsReloadIntervalMs`마다 key/trust PKCS12 내용 digest를 확인합니다. 파일이 원자 교체되면 새 SSLContext를 먼저 검증한 뒤 같은 port의 listener를 재바인드하며, 새 material이 깨졌으면 기존 listener를 유지합니다. 이미 연결된 client session은 종료될 때까지 기존 context를 사용합니다.
 
 ### SNMP 입력
 
@@ -289,15 +305,38 @@ create table if not exists castrelyx_agent_events (
   "endpointUrl": "http://clickhouse:8123",
   "database": "castrelyx",
   "tableName": "castrelyx_agent_events",
+  "metricTableName": "manager_metric_samples",
+  "stateTableName": "manager_state_snapshots",
+  "eventTableName": "manager_events",
   "usernameEnv": "CLICKHOUSE_USER",
   "passwordEnv": "CLICKHOUSE_PASSWORD",
   "batchSize": 100,
   "flushIntervalMs": 5000,
+  "incompleteGroupTimeoutMs": 30000,
+  "maxPendingGroups": 2048,
+  "maxPendingItems": 50000,
+  "maxPendingBytes": 67108864,
+  "incompleteChunkDlqDir": "/root/logparser/data/incomplete-chunks",
+  "maxIncompleteChunkDlqBytes": 134217728,
+  "maxIncompleteChunkDlqRecords": 1000,
+  "writeTelemetryTables": true,
   "autoCreateSchema": true
 }
 ```
 
 `database` 기본값은 `default`, `tableName` 기본값은 `castrelyx_agent_events`입니다. `usernameEnv`와 `passwordEnv`는 함께 지정해야 하며, 둘 다 없으면 인증 없이 요청합니다.
+
+schema `1.1` event는 legacy `batchSize` buffer와 분리해 처리합니다.
+
+- `source_id`/`batch_id`/`chunk_index`가 같은 event를 `chunk_item_count`만큼 모읍니다.
+- 같은 `item_sequence`가 재입력되면 group 안에서 교체하고, 완성 group은 sequence 오름차순으로 raw table과 canonical telemetry table에 insert합니다.
+- 완성 chunk의 insert dedup token은 table namespace와 chunk identity로 계산합니다. 재시도에서 `sent_at`이나 JSON body가 달라져도 같은 table의 같은 chunk는 동일 token을 사용합니다.
+- `autoCreateSchema: true`이면 raw/canonical `MergeTree`에 `non_replicated_deduplication_window = 4096`을 설정하고 raw table에 `batch_id`, `chunk_index`, `chunk_item_count`, `item_sequence`, `item_id` 컬럼을 생성·보강합니다.
+- pending chunk와 legacy buffer는 실제 JSONEachRow UTF-8 byte를 합산하며 기본 64 MiB를 넘지 않습니다. group 2,048개/item 50,000개 한계도 함께 적용됩니다.
+- 불완전 group은 기본 30초가 지나거나 count/byte 한계에 걸리거나 adapter가 닫힐 때 canonical telemetry table에 쓰지 않습니다. 먼저 bounded durable DLQ에 temp-write, file fsync, atomic rename, directory fsync 순서로 보관한 뒤 raw audit table insert만 best effort로 시도합니다. DLQ 기본 한계는 128 MiB/1,000 records이고 공간이 필요하면 가장 오래된 record부터 제거합니다.
+- chunk metadata가 없는 legacy event만 `batchSize`와 `flushIntervalMs` buffer를 사용합니다.
+
+이 설계는 재전송 중복을 줄이지만 end-to-end exactly-once를 보장하지 않습니다. Input ACK 뒤 ClickHouse 저장 전에 Logparser가 종료되면 memory queue의 event가 유실될 수 있습니다. 반대로 ACK 유실, 최근-batch cache eviction/restart, ClickHouse dedup window 초과 시에는 중복이 생길 수 있습니다. 불완전 chunk는 canonical table 대신 DLQ에 남으므로 운영자가 원인과 replay 여부를 명시적으로 판단해야 합니다.
 
 ## REST API 요약
 
@@ -350,4 +389,5 @@ Flyway migration은 `src/main/resources/db/migration`에서 관리합니다. 새
 - MariaDB와 ClickHouse 출력 인증은 환경 변수 참조만 지원합니다.
 - TLS key/trust store password는 직접 값 또는 `*PasswordEnv`를 지원하지만, 운영에서는 env 참조를 권장합니다.
 - SNMP community, RabbitMQ password처럼 직접 입력하는 secret은 DB 접근 권한과 백업 정책으로 보호해야 합니다.
-- 네트워크 입력은 timeout, queue size, worker count를 운영 부하에 맞춰 조정해야 합니다.
+- 네트워크 입력은 timeout, queue size, `maxConnections`를 운영 부하에 맞춰 조정해야 합니다.
+- `tcp_mtls_gzip`의 accepted ACK는 memory queue 경계이고 durable 저장 ACK가 아닙니다. 무손실이 필요한 배포는 Logparser 장애/재시작 구간과 ClickHouse insert 실패를 별도로 모니터링해야 합니다.

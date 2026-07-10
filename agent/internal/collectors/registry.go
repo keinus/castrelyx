@@ -27,6 +27,7 @@ func Build(names []string) ([]agent.Collector, error) {
 
 func BuildWithOptions(names []string, options Options) ([]agent.Collector, error) {
 	collectors := make([]agent.Collector, 0, len(names))
+	hostSnapshotProvider := newHostSnapshotProvider()
 	for _, name := range names {
 		switch name {
 		case "identity":
@@ -36,9 +37,9 @@ func BuildWithOptions(names []string, options Options) ([]agent.Collector, error
 		case "network":
 			collectors = append(collectors, networkCollector{})
 		case "port":
-			collectors = append(collectors, portCollector{})
+			collectors = append(collectors, portCollector{snapshotProvider: hostSnapshotProvider})
 		case "process":
-			collectors = append(collectors, processCollector{})
+			collectors = append(collectors, processCollector{snapshotProvider: hostSnapshotProvider})
 		case "service":
 			collectors = append(collectors, serviceCollector{})
 		case "package":
@@ -155,12 +156,41 @@ func isInternalManagementInterface(name string) bool {
 	if strings.Contains(name, "external") || strings.Contains(name, "wan") {
 		return false
 	}
-	return name == "lo" ||
-		strings.Contains(name, "loopback") ||
-		strings.HasPrefix(name, "veth") ||
-		strings.HasPrefix(name, "docker") ||
-		strings.HasPrefix(name, "br-") ||
-		strings.HasPrefix(name, "virbr")
+	return isInternalNetworkInterface(name)
+}
+
+func isInternalNetworkInterface(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	if name == "lo" || strings.Contains(name, "loopback") {
+		return true
+	}
+	for _, prefix := range []string{
+		"veth", "docker", "virbr", "lxcbr", "cni", "flannel", "cali", "kube-ipvs",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return isContainerBridgeInterface(name)
+}
+
+func isContainerBridgeInterface(name string) bool {
+	if !strings.HasPrefix(name, "br-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, "br-")
+	if len(suffix) < 12 {
+		return false
+	}
+	for _, r := range suffix {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type metricCollector struct{}
@@ -220,11 +250,11 @@ func (metricCollector) Collect(context.Context) ([]envelope.Item, error) {
 				items = append(items, metricItem("host.memory.available_bytes", available, "bytes"))
 			}
 		}
-		items = append(items, collectLinuxCPUMetricItems(cpuCount)...)
+		items = append(items, collectLinuxCPUMetricItems()...)
 		items = append(items, collectLinuxLoadMetricItems(cpuCount)...)
 		items = append(items, collectLinuxTemperatureMetricItems()...)
 	} else if runtime.GOOS == "windows" {
-		items = append(items, collectWindowsHostMetricItems(cpuCount)...)
+		items = append(items, collectWindowsHostMetricItems()...)
 	}
 
 	items = append(items, collectNetworkTrafficMetricItems()...)
@@ -245,6 +275,9 @@ func (networkCollector) Collect(context.Context) ([]envelope.Item, error) {
 	}
 	items := make([]envelope.Item, 0, len(interfaces))
 	for _, iface := range interfaces {
+		if isInternalNetworkInterface(iface.Name) {
+			continue
+		}
 		addrs, _ := iface.Addrs()
 		addresses := make([]string, 0, len(addrs))
 		for _, addr := range addrs {
@@ -281,17 +314,21 @@ func (c noopCollector) Collect(context.Context) ([]envelope.Item, error) {
 	return nil, nil
 }
 
-type portCollector struct{}
+type portCollector struct {
+	snapshotProvider *hostSnapshotProvider
+}
 
 func (portCollector) Name() string { return "port" }
 
-func (portCollector) Collect(context.Context) ([]envelope.Item, error) {
-	sockets := collectSocketStates()
-	processes := collectProcessStates()
-	linkSocketsToProcesses(sockets, processes)
+func (c portCollector) BeginCollectionCycle(startedAt time.Time) {
+	c.snapshotProvider.beginCollectionCycle(startedAt)
+}
 
-	items := make([]envelope.Item, 0, len(sockets))
-	for _, socket := range sockets {
+func (c portCollector) Collect(context.Context) ([]envelope.Item, error) {
+	snapshot := c.snapshotProvider.snapshotFor(hostSnapshotPortConsumer)
+
+	items := make([]envelope.Item, 0, len(snapshot.Sockets))
+	for _, socket := range snapshot.Sockets {
 		items = append(items, socket.Item())
 	}
 	return items, nil

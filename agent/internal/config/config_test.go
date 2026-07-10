@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -313,4 +314,122 @@ func TestLoadAllowsMissingEnrollmentTokenWhenCertificateFilesExist(t *testing.T)
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load returned error with certificate files present: %v", err)
 	}
+}
+
+func TestLoadParsesRuntimeLimitsAndCollectorCadence(t *testing.T) {
+	cfg := loadConfigText(t, `
+manager_url: https://manager.local
+enrollment_token: token
+sender_flush_interval: 3s
+max_spool_record_bytes: 2mb
+max_spool_bytes: 10mb
+max_spool_records: 25
+max_spool_age: 48h
+max_batch_items: 50
+max_batch_bytes: 1mb
+max_item_bytes: 256kb
+collector_interval_identity: 2h
+collector_interval_metric: 15s
+`)
+
+	if cfg.SenderFlushInterval != 3*time.Second {
+		t.Fatalf("SenderFlushInterval = %s", cfg.SenderFlushInterval)
+	}
+	if cfg.MaxSpoolRecord != 2*1024*1024 || cfg.MaxSpoolBytes != 10*1024*1024 || cfg.MaxSpoolRecords != 25 || cfg.MaxSpoolAge != 48*time.Hour {
+		t.Fatalf("unexpected spool limits: record=%d bytes=%d records=%d age=%s", cfg.MaxSpoolRecord, cfg.MaxSpoolBytes, cfg.MaxSpoolRecords, cfg.MaxSpoolAge)
+	}
+	if cfg.MaxBatchItems != 50 || cfg.MaxBatchBytes != 1024*1024 || cfg.MaxItemBytes != 256*1024 {
+		t.Fatalf("unexpected batch limits: items=%d bytes=%d item_bytes=%d", cfg.MaxBatchItems, cfg.MaxBatchBytes, cfg.MaxItemBytes)
+	}
+	if cfg.CollectorIntervals["identity"] != 2*time.Hour || cfg.CollectorIntervals["metric"] != 15*time.Second {
+		t.Fatalf("unexpected collector intervals: %#v", cfg.CollectorIntervals)
+	}
+	if cfg.CollectorIntervals["package"] <= 0 || cfg.CollectorIntervals["agent_health"] <= 0 {
+		t.Fatalf("default collector intervals were lost: %#v", cfg.CollectorIntervals)
+	}
+}
+
+func TestLoadRejectsNonPositiveRuntimeIntervals(t *testing.T) {
+	tests := map[string]string{
+		"batch interval zero":        "batch_interval: 0s",
+		"sender interval negative":   "sender_flush_interval: -1s",
+		"spool age zero":             "max_spool_age: 0s",
+		"collector interval zero":    "collector_interval_metric: 0s",
+		"collector interval unknown": "collector_interval_not_real: 1m",
+	}
+	for name, setting := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfigText(t, "manager_url: https://manager.local\nenrollment_token: token\n"+setting+"\n")
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load accepted invalid setting %q", setting)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInconsistentRuntimeLimits(t *testing.T) {
+	tests := map[string]string{
+		"spool cannot hold record": strings.Join([]string{
+			"max_spool_record_bytes: 2mb",
+			"max_spool_bytes: 1mb",
+			"max_batch_bytes: 1mb",
+			"max_item_bytes: 256kb",
+		}, "\n"),
+		"item exceeds batch": strings.Join([]string{
+			"max_batch_bytes: 256kb",
+			"max_item_bytes: 512kb",
+		}, "\n"),
+		"batch exceeds record": strings.Join([]string{
+			"max_spool_record_bytes: 1mb",
+			"max_batch_bytes: 2mb",
+			"max_item_bytes: 512kb",
+		}, "\n"),
+	}
+	for name, settings := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfigText(t, "manager_url: https://manager.local\nenrollment_token: token\n"+settings+"\n")
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load accepted inconsistent settings:\n%s", settings)
+			}
+		})
+	}
+}
+
+func TestDiscoverUpdateDirIgnoresUnrelatedInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(path, []byte("this line breaks the full parser\nupdate_dir: ./recovery-updates\nunknown: value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	updateDir, err := DiscoverUpdateDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "recovery-updates")
+	if updateDir != want {
+		t.Fatalf("DiscoverUpdateDir = %q, want %q", updateDir, want)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("full config unexpectedly accepted invalid syntax")
+	}
+}
+
+func loadConfigText(t *testing.T, content string) Config {
+	t.Helper()
+	path := writeConfigText(t, content)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	return cfg
+}
+
+func writeConfigText(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "agent.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

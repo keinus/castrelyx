@@ -55,6 +55,8 @@ class CastrelyxSeedServiceTest {
         assertTrue(inputCaptor.getValue().getEnabled());
         assertTrue(inputCaptor.getValue().getConfigParams().contains("/var/lib/castrelsign/certs/server.p12"));
         assertTrue(inputCaptor.getValue().getConfigParams().contains("CASTRELSIGN_KEYSTORE_PASSWORD"));
+        assertTrue(inputCaptor.getValue().getConfigParams().contains("\"maxConnections\":32"));
+        assertTrue(inputCaptor.getValue().getConfigParams().contains("\"tlsReloadIntervalMs\":5000"));
 
         ArgumentCaptor<OutputAdapterEntity> outputCaptor = ArgumentCaptor.forClass(OutputAdapterEntity.class);
         verify(outputAdapterRepository).save(outputCaptor.capture());
@@ -63,32 +65,31 @@ class CastrelyxSeedServiceTest {
         assertTrue(outputCaptor.getValue().getEnabled());
         assertTrue(outputCaptor.getValue().getConfigParams().contains("http://clickhouse:8123"));
         assertTrue(outputCaptor.getValue().getConfigParams().contains("CLICKHOUSE_PASSWORD"));
+        assertTrue(outputCaptor.getValue().getConfigParams().contains("\"maxPendingBytes\":67108864"));
+        assertTrue(outputCaptor.getValue().getConfigParams().contains("\"maxIncompleteChunkDlqRecords\":1000"));
 
         verify(mappingRepository).save(any(MappingConfiguration.class));
         verify(configSettingsRepository, times(2)).save(any(ConfigSettingsEntity.class));
     }
 
     @Test
-    void updatesExistingAgentInputAndAddsClickHouseOutput() {
+    void preservesExistingInputSettingsWhileAddingSafetyDefaultsAndMissingOutput() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY)).thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
         InputAdapterEntity existingInput = InputAdapterEntity.builder()
                 .id(1L)
                 .type("TcpMtlsGzipInputAdapter")
                 .messagetype("castrelyx-agent-item")
-                .port(9443)
+                .host("127.0.0.1")
+                .port(9555)
                 .enabled(false)
-                .configParams("{}")
+                .configParams("""
+                        {"keyStorePath":"/custom/server.p12","trustStorePath":"/custom/trust.p12","maxConnections":7}
+                        """)
                 .build();
         when(inputAdapterRepository.findByType("TcpMtlsGzipInputAdapter"))
                 .thenReturn(List.of(existingInput));
         when(outputAdapterRepository.findByType("ClickHouseOutputAdapter")).thenReturn(List.of());
-        when(outputAdapterRepository.findByType("MariaDbOutputAdapter"))
-                .thenReturn(List.of(OutputAdapterEntity.builder()
-                        .id(2L)
-                        .messagetype("castrelyx-agent-item")
-                        .enabled(true)
-                        .build()));
         when(mappingRepository.findByMessageType("castrelyx-agent-item"))
                 .thenReturn(Optional.of(new MappingConfiguration()));
 
@@ -103,22 +104,88 @@ class CastrelyxSeedServiceTest {
 
         verify(inputAdapterRepository).save(argThat(entity ->
                 entity.getId().equals(1L)
-                        && entity.getEnabled()
-                        && entity.getConfigParams().contains("truststore.p12")));
+                        && !entity.getEnabled()
+                        && entity.getPort().equals(9555)
+                        && "127.0.0.1".equals(entity.getHost())
+                        && entity.getConfigParams().contains("/custom/server.p12")
+                        && entity.getConfigParams().contains("\"maxConnections\":7")
+                        && entity.getConfigParams().contains("\"tlsReloadIntervalMs\":5000")));
         verify(outputAdapterRepository).save(argThat(entity ->
                 "ClickHouseOutputAdapter".equals(entity.getType())
                         && entity.getEnabled()
                         && entity.getConfigParams().contains("\"database\":\"castrelyx\"")));
-        verify(outputAdapterRepository).save(argThat(entity ->
-                Long.valueOf(2L).equals(entity.getId()) && !entity.getEnabled()));
         verify(configSettingsRepository).save(any(ConfigSettingsEntity.class));
         verify(mappingRepository, never()).save(any(MappingConfiguration.class));
     }
 
     @Test
+    void upgradesVersionThreeSeedWithoutReplacingOperatorAdapterSettings() {
+        ConfigSettingsEntity existingMarker = ConfigSettingsEntity.builder()
+                .id(99L)
+                .configKey(CastrelyxSeedService.SEED_MARKER_KEY)
+                .configValue("3")
+                .dataType("STRING")
+                .build();
+        when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
+                .thenReturn(Optional.of(existingMarker));
+        when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY))
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
+        when(inputAdapterRepository.findByType("TcpMtlsGzipInputAdapter"))
+                .thenReturn(List.of(InputAdapterEntity.builder()
+                        .id(1L)
+                        .type("TcpMtlsGzipInputAdapter")
+                        .messagetype("castrelyx-agent-item")
+                        .host("10.0.0.5")
+                        .port(10443)
+                        .enabled(false)
+                        .configParams("{\"keyStorePath\":\"/operator/server.p12\",\"maxConnections\":5}")
+                        .build()));
+        when(outputAdapterRepository.findByType("ClickHouseOutputAdapter"))
+                .thenReturn(List.of(OutputAdapterEntity.builder()
+                        .id(2L)
+                        .type("ClickHouseOutputAdapter")
+                        .messagetype("castrelyx-agent-item")
+                        .enabled(false)
+                        .configParams("{\"endpointUrl\":\"https://operator-clickhouse:8443\",\"database\":\"operator_db\",\"maxPendingBytes\":123456}")
+                        .build()));
+        when(mappingRepository.findByMessageType("castrelyx-agent-item"))
+                .thenReturn(Optional.of(new MappingConfiguration()));
+
+        CastrelyxSeedService service = new CastrelyxSeedService(
+                inputAdapterRepository,
+                outputAdapterRepository,
+                configSettingsRepository,
+                mappingRepository
+        );
+
+        service.seedDefaults();
+
+        verify(inputAdapterRepository).save(argThat(entity ->
+                Long.valueOf(1L).equals(entity.getId())
+                        && !entity.getEnabled()
+                        && entity.getPort().equals(10443)
+                        && "10.0.0.5".equals(entity.getHost())
+                        && entity.getConfigParams().contains("/operator/server.p12")
+                        && entity.getConfigParams().contains("\"maxConnections\":5")
+                        && entity.getConfigParams().contains("\"tlsReloadIntervalMs\":5000")));
+        verify(outputAdapterRepository).save(argThat(entity ->
+                Long.valueOf(2L).equals(entity.getId())
+                        && !entity.getEnabled()
+                        && entity.getConfigParams().contains("https://operator-clickhouse:8443")
+                        && entity.getConfigParams().contains("\"database\":\"operator_db\"")
+                        && entity.getConfigParams().contains("\"maxPendingBytes\":123456")
+                        && entity.getConfigParams().contains("\"incompleteChunkDlqDir\":")
+                        && entity.getConfigParams().contains("\"maxIncompleteChunkDlqRecords\":1000")));
+        verify(configSettingsRepository).save(argThat(entity ->
+                Long.valueOf(99L).equals(entity.getId())
+                        && CastrelyxSeedService.SEED_MARKER_KEY.equals(entity.getConfigKey())
+                        && "4".equals(entity.getConfigValue())));
+    }
+
+    @Test
     void seedsDefaultAgentMappingWhenMarkerExistsButMappingIsMissing() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY))
                 .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
         when(mappingRepository.findByMessageType("castrelyx-agent-item")).thenReturn(Optional.empty());
@@ -140,7 +207,7 @@ class CastrelyxSeedServiceTest {
     @Test
     void seedsDefaultAgentMappingWhenMissing() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(mappingRepository.findByMessageType("castrelyx-agent-item")).thenReturn(Optional.empty());
 
@@ -180,7 +247,7 @@ class CastrelyxSeedServiceTest {
     @Test
     void doesNotOverwriteExistingAgentMapping() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(mappingRepository.findByMessageType("castrelyx-agent-item"))
                 .thenReturn(Optional.of(new MappingConfiguration()));

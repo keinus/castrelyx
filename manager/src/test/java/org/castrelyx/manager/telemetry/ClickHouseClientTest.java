@@ -1,10 +1,20 @@
 package org.castrelyx.manager.telemetry;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import org.castrelyx.manager.config.ManagerProperties;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.ExpectedCount;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
 
 class ClickHouseClientTest {
   @Test
@@ -75,6 +85,59 @@ class ClickHouseClientTest {
   }
 
   @Test
+  void queriesAllDashboardStateTypesWithOneSharedThirtyDayScan() {
+    RestClient.Builder builder = RestClient.builder();
+    MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+    List<String> queries = new ArrayList<>();
+    String stateRows = """
+        {"asset_uid":"asset-1","source_id":"agent-1","state_type":"socket","state_key":"tcp:22","state_json":"{\\"protocol\\":\\"tcp\\"}","observed_at":"2026-07-10 01:00:00"}
+        {"asset_uid":"asset-1","source_id":"agent-1","state_type":"package","state_key":"curl","state_json":"{\\"name\\":\\"curl\\"}","observed_at":"2026-07-10 00:59:00"}
+        """;
+    server.expect(ExpectedCount.times(5), request -> queries.add(clickHouseQuery(request.getURI().getRawQuery())))
+        .andRespond(request -> {
+          String query = clickHouseQuery(request.getURI().getRawQuery());
+          String body = query.contains("complete_full_snapshots") ? stateRows : "";
+          return withSuccess(body, MediaType.TEXT_PLAIN).createResponse(request);
+        });
+    ClickHouseClient client = new ClickHouseClient(
+        new ManagerProperties(
+            "test-key",
+            "https://manager.test",
+            new ManagerProperties.ClickHouse(
+                "http://localhost:18123", "castrelyx", "default", "", "castrelyx_agent_events")),
+        builder);
+
+    Map<String, Object> dashboard = client.queryAgentDashboard("asset-1");
+
+    server.verify();
+    List<String> stateQueries = queries.stream()
+        .filter(query -> query.contains("complete_full_snapshots"))
+        .toList();
+    assertThat(stateQueries).hasSize(1);
+    assertThat(stateQueries.getFirst())
+        .contains("state_type IN ('socket', 'service', 'firewall', 'interface', 'process', 'package')")
+        .contains("observed_at >= now() - INTERVAL 30 DAY")
+        .contains("HAVING uniqExact(state_key) >= max(JSONExtractUInt(state_json, 'snapshot_item_count'))")
+        .contains("WHERE NOT JSONExtractBool(state_json, 'deleted')")
+        .contains("PARTITION BY state_type")
+        .contains("state_rank <= if(state_type = 'package', 200, 500)");
+    @SuppressWarnings("unchecked")
+    Map<String, List<Map<String, Object>>> states =
+        (Map<String, List<Map<String, Object>>>) dashboard.get("states");
+    assertThat(states.get("sockets"))
+        .singleElement()
+        .satisfies(row -> assertThat(row)
+            .containsEntry("stateType", "socket")
+            .containsEntry("protocol", "tcp"));
+    assertThat(states.get("packages"))
+        .singleElement()
+        .satisfies(row -> assertThat(row)
+            .containsEntry("stateType", "package")
+            .containsEntry("name", "curl"));
+    assertThat(states.get("services")).isEmpty();
+  }
+
+  @Test
   void extractsTopLevelAgentPayloadForDashboardStateRows() {
     Map<String, Object> row = ClickHouseClient.rawStateRow(Map.of(
         "source_id", "nas",
@@ -130,5 +193,14 @@ class ClickHouseClientTest {
         .containsEntry("operStatus", "down")
         .containsEntry("macAddress", "02:00:00:00:00:01");
     assertThat(row.get("observedAt")).isEqualTo("2026-07-06T12:00:00Z");
+  }
+
+  private static String clickHouseQuery(String rawQuery) {
+    for (String parameter : rawQuery.split("&")) {
+      if (parameter.startsWith("query=")) {
+        return URLDecoder.decode(parameter.substring("query=".length()), StandardCharsets.UTF_8);
+      }
+    }
+    return "";
   }
 }

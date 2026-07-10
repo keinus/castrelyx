@@ -301,6 +301,12 @@ public class ConfigValidationService {
             if (root.has("maxFrameBytes") && root.get("maxFrameBytes").asLong() <= 0) {
                 errors.add("configParams.maxFrameBytes must be greater than zero");
             }
+            if (root.has("maxConnections") && root.get("maxConnections").asInt() <= 0) {
+                errors.add("configParams.maxConnections must be greater than zero");
+            }
+            if (root.has("tlsReloadIntervalMs") && root.get("tlsReloadIntervalMs").asLong() <= 0) {
+                errors.add("configParams.tlsReloadIntervalMs must be greater than zero");
+            }
             if (root.hasNonNull("ackMode") && !"queueAccepted".equals(root.get("ackMode").asText())) {
                 errors.add("configParams.ackMode must be queueAccepted");
             }
@@ -487,6 +493,22 @@ public class ConfigValidationService {
             }
             if (root.has("flushIntervalMs") && root.get("flushIntervalMs").asLong() <= 0) {
                 errors.add("configParams.flushIntervalMs must be greater than zero");
+            }
+            for (String field : List.of(
+                    "incompleteGroupTimeoutMs",
+                    "maxPendingGroups",
+                    "maxPendingItems",
+                    "maxPendingBytes",
+                    "maxIncompleteChunkDlqBytes",
+                    "maxIncompleteChunkDlqRecords")) {
+                if (root.has(field) && root.get(field).asLong() <= 0) {
+                    errors.add("configParams." + field + " must be greater than zero");
+                }
+            }
+            if (root.has("incompleteChunkDlqDir")
+                    && (!root.get("incompleteChunkDlqDir").isTextual()
+                    || root.get("incompleteChunkDlqDir").asText().isBlank())) {
+                errors.add("configParams.incompleteChunkDlqDir must be a nonblank path");
             }
         } catch (Exception e) {
             errors.add("configParams must be valid JSON for ClickHouseOutputAdapter");

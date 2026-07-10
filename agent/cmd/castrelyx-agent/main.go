@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,16 +28,21 @@ import (
 	"castrelyx/agent/internal/updater"
 )
 
-const agentVersion = "0.1.1"
+const agentVersion = "0.2.0"
 const renewBefore = 7 * 24 * time.Hour
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to agent config file")
 	once := flag.Bool("once", false, "run collectors once and exit")
+	showVersion := flag.Bool("version", false, "print agent version and exit")
 	updateHelper := flag.Bool("update-helper", false, "run update helper")
 	updateState := flag.String("update-state", "", "path to update state")
 	updateService := flag.String("update-service", "CastrelyxAgent", "service name to restart after update")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(agentVersion)
+		return
+	}
 
 	if *updateHelper {
 		if err := updater.RunWindowsHelper(*updateState, *updateService); err != nil {
@@ -51,13 +57,28 @@ func main() {
 }
 
 func runAgent(parentCtx context.Context, configPath string, once bool) error {
+	updateDir, _ := config.DiscoverUpdateDir(configPath)
+	probationPending, err := updater.PrepareUpdateStartup(parentCtx, updateDir)
+	if err != nil {
+		if errors.Is(err, updater.ErrRestartRequired) {
+			log.Print("agent update startup recovery requested restart")
+			return nil
+		}
+		return fmt.Errorf("prepare agent update startup: %w", err)
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	collectors.AgentVersion = agentVersion
 
-	queue, err := spool.Open(cfg.SpoolDir, cfg.MaxSpoolRecord)
+	queue, err := spool.OpenWithOptions(cfg.SpoolDir, spool.Options{
+		MaxRecordBytes: cfg.MaxSpoolRecord,
+		MaxBytes:       cfg.MaxSpoolBytes,
+		MaxRecords:     cfg.MaxSpoolRecords,
+		MaxAge:         cfg.MaxSpoolAge,
+	})
 	if err != nil {
 		return fmt.Errorf("open spool: %w", err)
 	}
@@ -99,6 +120,19 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 		return fmt.Errorf("build tls config: %w", err)
 	}
 	agentUpdater := buildUpdater(cfg, managerTLSConfig)
+	if agentUpdater != nil {
+		if err := agentUpdater.ResumePendingReplacement(ctx); err != nil {
+			if errors.Is(err, updater.ErrRestartRequired) {
+				log.Print("pending agent rollback resumed; restarting")
+				return nil
+			}
+			return fmt.Errorf("resume pending agent replacement: %w", err)
+		}
+	}
+	// Only an APPLYING state that existed before this process started is eligible
+	// for first-collection rollback. A state created by the concurrent updater
+	// loop belongs to the next process and must not be rolled back by this one.
+	pendingApplyAtStartup := agentUpdater != nil && agentUpdater.HasPendingApply()
 	remoteTaskClient := buildRemoteTaskClient(cfg, managerTLSConfig)
 	fileManagerClient := buildFileManagerClient(cfg, managerTLSConfig)
 	collectors.UpdateStatusProvider = func() (string, string, string) {
@@ -119,12 +153,28 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 		return fmt.Errorf("create sender: %w", err)
 	}
 	runtime := agentruntime.New(agentruntime.Config{
-		AgentID:  cfg.AgentID,
-		TenantID: cfg.TenantID,
+		AgentID:                cfg.AgentID,
+		TenantID:               cfg.TenantID,
+		CollectorIntervals:     cfg.CollectorIntervals,
+		CollectorFullIntervals: cfg.CollectorFullIntervals,
+		MaxBatchItems:          cfg.MaxBatchItems,
+		MaxBatchBytes:          cfg.MaxBatchBytes,
+		MaxItemBytes:           cfg.MaxItemBytes,
+		StatePath:              filepath.Join(cfg.SpoolDir, "state-cache.json"),
 	}, telemetrySender, queue, collectorSet)
+	collectors.HealthStatusProvider = runtime.HealthSnapshot
 
 	if once {
 		err := runtime.RunOnce(ctx)
+		if err == nil && probationPending {
+			if !runtime.StartupCollectionHealthy() {
+				return errors.New("agent update startup probation failed: critical collectors did not succeed")
+			}
+			if healthErr := updater.MarkUpdateStartupHealthy(updateDir); healthErr != nil {
+				return fmt.Errorf("persist agent update startup health: %w", healthErr)
+			}
+			probationPending = false
+		}
 		if err == nil && remoteTaskClient != nil {
 			_ = remoteTaskClient.PollAndRun(ctx)
 		}
@@ -137,15 +187,19 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 	if fileManagerClient != nil {
 		go fileManagerClient.Run(ctx)
 	}
-
-	ticker := time.NewTicker(cfg.BatchInterval)
-	defer ticker.Stop()
-	nextUpdateCheck := time.Now()
-	nextRemoteTaskCheck := time.Now()
+	go runSenderLoop(ctx, runtime, cfg.SenderFlushInterval)
+	if remoteTaskClient != nil {
+		go runRemoteTaskLoop(ctx, remoteTaskClient, cfg.RemoteTaskInterval)
+	}
+	collectionSucceeded := make(chan struct{}, 1)
+	restartRequired := make(chan string, 1)
+	if agentUpdater != nil {
+		go runUpdaterLoop(ctx, agentUpdater, cfg.UpdateCheckInterval, collectionSucceeded, restartRequired, pendingApplyAtStartup)
+	}
 
 	for {
-		if err := runtime.RunOnce(ctx); err != nil {
-			if agentUpdater != nil && agentUpdater.HasPendingApply() {
+		if err := runtime.CollectOnce(ctx); err != nil {
+			if agentUpdater != nil && pendingApplyAtStartup && shouldRollbackPostUpdateCollection(err) {
 				rollbackErr := agentUpdater.Rollback(ctx, "first post-update collection failed: "+err.Error())
 				if errors.Is(rollbackErr, updater.ErrRestartRequired) {
 					log.Print("agent rollback applied; restarting")
@@ -155,37 +209,171 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 					log.Printf("agent rollback failed: %v", rollbackErr)
 				}
 			}
-			log.Printf("collector batch failed: %v", err)
+			log.Printf("collector enqueue failed: %v", err)
 		} else {
-			if remoteTaskClient != nil && !time.Now().Before(nextRemoteTaskCheck) {
-				if err := remoteTaskClient.PollAndRun(ctx); err != nil {
-					log.Printf("remote task check failed: %v", err)
+			if probationPending {
+				if !runtime.StartupCollectionHealthy() {
+					return errors.New("agent update startup probation failed: critical collectors did not succeed")
 				}
-				nextRemoteTaskCheck = time.Now().Add(cfg.RemoteTaskInterval)
+				if err := updater.MarkUpdateStartupHealthy(updateDir); err != nil {
+					return fmt.Errorf("persist agent update startup health: %w", err)
+				}
+				probationPending = false
 			}
-			if agentUpdater != nil {
-				if err := agentUpdater.MarkApplied(ctx); err != nil {
-					log.Printf("agent update status report failed: %v", err)
-				}
-				if !time.Now().Before(nextUpdateCheck) {
-					if err := agentUpdater.CheckAndApply(ctx); err != nil {
-						if errors.Is(err, updater.ErrRestartRequired) {
-							log.Print("agent update applied; restarting")
-							return nil
-						}
-						log.Printf("agent update check failed: %v", err)
-					}
-					nextUpdateCheck = time.Now().Add(cfg.UpdateCheckInterval)
-				}
+			pendingApplyAtStartup = false
+			select {
+			case collectionSucceeded <- struct{}{}:
+			default:
 			}
 		}
 
+		timer := time.NewTimer(jitter(cfg.BatchInterval, 0.1))
 		select {
 		case <-ctx.Done():
+			stopTimer(timer)
 			log.Print("agent stopped")
 			return nil
-		case <-ticker.C:
+		case reason := <-restartRequired:
+			stopTimer(timer)
+			log.Printf("%s; restarting", reason)
+			return nil
+		case <-timer.C:
 		}
+	}
+}
+
+func shouldRollbackPostUpdateCollection(err error) bool {
+	return err != nil && !errors.Is(err, agentruntime.ErrLocalPersistence)
+}
+
+func runSenderLoop(ctx context.Context, runtime *agentruntime.Agent, interval time.Duration) {
+	backoff := interval
+	for {
+		if err := runtime.FlushPending(ctx, 25); err != nil {
+			log.Printf("telemetry delivery failed: %v", err)
+			backoff = minDuration(maxDuration(backoff*2, time.Second), time.Minute)
+		} else {
+			backoff = interval
+		}
+		timer := time.NewTimer(jitter(backoff, 0.2))
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func runRemoteTaskLoop(ctx context.Context, client *remotetasks.Client, interval time.Duration) {
+	backoff := interval
+	for {
+		if err := client.PollAndRun(ctx); err != nil {
+			log.Printf("remote task check failed: %v", err)
+			backoff = minDuration(maxDuration(backoff*2, time.Second), time.Minute)
+		} else {
+			backoff = interval
+		}
+		timer := time.NewTimer(jitter(backoff, 0.2))
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+type updateLoopClient interface {
+	CheckAndApply(context.Context) error
+	MarkApplied(context.Context) error
+	HasPendingApply() bool
+}
+
+func runUpdaterLoop(ctx context.Context, agentUpdater updateLoopClient, interval time.Duration, collectionSucceeded <-chan struct{}, restartRequired chan<- string, pendingApplyAtStartup bool) {
+	var checkTimer *time.Timer
+	var checkTimerC <-chan time.Time
+	armCheckTimer := func(delay time.Duration) {
+		if checkTimer == nil {
+			checkTimer = time.NewTimer(jitter(delay, 0.2))
+		} else {
+			stopTimer(checkTimer)
+			checkTimer.Reset(jitter(delay, 0.2))
+		}
+		checkTimerC = checkTimer.C
+	}
+	if !pendingApplyAtStartup {
+		armCheckTimer(time.Second)
+	}
+	defer func() {
+		if checkTimer != nil {
+			checkTimer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-collectionSucceeded:
+			if err := agentUpdater.MarkApplied(ctx); err != nil {
+				if errors.Is(err, updater.ErrRestartRequired) {
+					select {
+					case restartRequired <- "pending agent replacement resumed":
+					default:
+					}
+					return
+				}
+				log.Printf("agent update status report failed: %v", err)
+			}
+			if checkTimerC == nil && !agentUpdater.HasPendingApply() {
+				armCheckTimer(time.Second)
+			}
+		case <-checkTimerC:
+			checkTimerC = nil
+			if err := agentUpdater.CheckAndApply(ctx); err != nil {
+				if errors.Is(err, updater.ErrRestartRequired) {
+					select {
+					case restartRequired <- "agent update applied":
+					default:
+					}
+					return
+				}
+				log.Printf("agent update check failed: %v", err)
+			}
+			armCheckTimer(interval)
+		}
+	}
+}
+
+func jitter(base time.Duration, fraction float64) time.Duration {
+	if base <= 0 || fraction <= 0 {
+		return base
+	}
+	factor := 1 - fraction + rand.Float64()*(2*fraction)
+	return time.Duration(float64(base) * factor)
+}
+
+func minDuration(left, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 

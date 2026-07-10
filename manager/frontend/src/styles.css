@@ -767,6 +767,330 @@
   color: #7b5815;
 }
 
+.overview-dashboard-home {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.overview-range-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid #d8e1e5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #60717a;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.overview-dashboard-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.32fr) minmax(310px, 0.68fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.overview-main-stack,
+.overview-side-stack,
+.overview-chart-grid {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-side-stack {
+  position: sticky;
+  top: 14px;
+}
+
+.overview-chart-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.overview-chart-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  min-height: 226px;
+  border: 1px solid #d8e1e5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: 0 14px 32px rgba(16, 32, 39, 0.05);
+}
+
+.overview-chart-panel-tall {
+  min-height: 316px;
+}
+
+.overview-chart-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-chart-panel-heading > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.overview-chart-panel-heading h3 {
+  margin: 0;
+  color: #102027;
+  font-size: 15px;
+}
+
+.overview-chart-panel-heading p {
+  margin: 0;
+  color: #60717a;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.overview-chart-panel-heading > span {
+  color: #60717a;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-chart-panel-heading strong {
+  color: #236264;
+}
+
+.overview-health-visual {
+  position: relative;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  min-width: 0;
+}
+
+.overview-donut-chart {
+  width: 200px;
+  height: 200px;
+  min-height: 200px;
+  justify-self: center;
+}
+
+.overview-health-center {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  width: 210px;
+  height: 200px;
+  pointer-events: none;
+}
+
+.overview-health-center strong {
+  color: #102027;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.overview-health-center span {
+  color: #60717a;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.overview-health-legend,
+.overview-rank-list,
+.overview-priority-card-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview-trend-chart,
+.overview-traffic-chart,
+.overview-event-chart {
+  width: 100%;
+  min-height: 190px;
+}
+
+.overview-traffic-chart {
+  min-height: 240px;
+}
+
+.overview-event-chart {
+  min-height: 154px;
+}
+
+.overview-rank-button,
+.overview-priority-card {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+
+.overview-metric-bar {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.3fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.overview-metric-bar > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.overview-metric-bar strong,
+.overview-metric-bar span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview-metric-bar strong {
+  color: #102027;
+  font-size: 13px;
+}
+
+.overview-metric-bar span {
+  color: #60717a;
+  font-size: 11px;
+}
+
+.overview-metric-bar em {
+  color: #236264;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.overview-bar-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2f4;
+}
+
+.overview-bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2f7d7e;
+}
+
+.overview-bar-track i.good {
+  background: #16a34a;
+}
+
+.overview-bar-track i.warning {
+  background: #f59e0b;
+}
+
+.overview-bar-track i.critical {
+  background: #dc2626;
+}
+
+.overview-source-matrix {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.overview-source-row {
+  display: grid;
+  grid-template-columns: 82px repeat(5, minmax(0, 1fr));
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.overview-source-row strong {
+  min-width: 0;
+  color: #102027;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.overview-source-head strong {
+  color: #60717a;
+  font-size: 11px;
+}
+
+.overview-source-cell {
+  height: 28px;
+  border: 1px solid #dce5e8;
+  border-radius: 6px;
+  background: #eef2f3;
+}
+
+.overview-source-cell.on {
+  border-color: #a9dfc6;
+  background: #dff6ef;
+}
+
+.overview-source-cell.warn {
+  border-color: #f2d27a;
+  background: #fff3cf;
+}
+
+.overview-source-cell.off {
+  border-color: #dce5e8;
+  background: #eef2f3;
+}
+
+.overview-priority-card {
+  gap: 6px;
+  border-bottom: 1px solid #edf1f3;
+  padding-bottom: 10px;
+}
+
+.overview-priority-card:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.overview-priority-card > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview-priority-card strong,
+.overview-priority-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview-priority-card strong {
+  color: #102027;
+  font-size: 13px;
+}
+
+.overview-priority-card span {
+  color: #60717a;
+  font-size: 12px;
+}
+
 .overview-kpi-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));

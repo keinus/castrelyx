@@ -13,6 +13,9 @@ castrelsign:
   root-valid-days: ${CASTRELSIGN_ROOT_VALID_DAYS:3650}
   tls-server-name: ${CASTRELSIGN_TLS_SERVER_NAME:localhost}
   key-store-password: ${CASTRELSIGN_KEYSTORE_PASSWORD:changeit}
+  tls-bootstrap-enabled: ${CASTRELSIGN_TLS_BOOTSTRAP_ENABLED:true}
+  server-cert-check-interval-ms: ${CASTRELSIGN_SERVER_CERT_CHECK_INTERVAL_MS:3600000}
+  server-cert-check-initial-delay-ms: ${CASTRELSIGN_SERVER_CERT_CHECK_INITIAL_DELAY_MS:60000}
 
 spring:
   application:

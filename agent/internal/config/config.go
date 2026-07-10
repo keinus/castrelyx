@@ -19,8 +19,15 @@ type Config struct {
 	AgentID                     string
 	TenantID                    string
 	BatchInterval               time.Duration
+	SenderFlushInterval         time.Duration
 	SpoolDir                    string
 	MaxSpoolRecord              int64
+	MaxSpoolBytes               int64
+	MaxSpoolRecords             int
+	MaxSpoolAge                 time.Duration
+	MaxBatchItems               int
+	MaxBatchBytes               int64
+	MaxItemBytes                int64
 	CertDir                     string
 	CACertPath                  string
 	ClientCertPath              string
@@ -30,6 +37,8 @@ type Config struct {
 	TCPIngestAddr               string
 	TCPIngestServerName         string
 	EnabledCollectors           []string
+	CollectorIntervals          map[string]time.Duration
+	CollectorFullIntervals      map[string]time.Duration
 	LogCursorPath               string
 	LogMessageMaxBytes          int
 	UpdateEnabled               bool
@@ -56,10 +65,19 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		TenantID:                    "default",
 		BatchInterval:               30 * time.Second,
+		SenderFlushInterval:         2 * time.Second,
 		SpoolDir:                    defaultSpoolDir(),
 		MaxSpoolRecord:              8 * 1024 * 1024,
+		MaxSpoolBytes:               256 * 1024 * 1024,
+		MaxSpoolRecords:             10_000,
+		MaxSpoolAge:                 7 * 24 * time.Hour,
+		MaxBatchItems:               1_000,
+		MaxBatchBytes:               4 * 1024 * 1024,
+		MaxItemBytes:                512 * 1024,
 		IngestTransport:             "https",
 		EnabledCollectors:           defaultCollectors(),
+		CollectorIntervals:          defaultCollectorIntervals(),
+		CollectorFullIntervals:      defaultCollectorFullIntervals(),
 		LogMessageMaxBytes:          1024,
 		UpdateEnabled:               true,
 		UpdateChannel:               "stable",
@@ -67,11 +85,11 @@ func Load(path string) (Config, error) {
 		UpdateDir:                   defaultUpdateDir(),
 		RemoteTasksEnabled:          true,
 		RemoteTaskInterval:          10 * time.Second,
-		FileManagerEnabled:          true,
+		FileManagerEnabled:          false,
 		FileManagerRoots:            defaultFileManagerRoots(),
-		FileManagerAllowDelete:      true,
+		FileManagerAllowDelete:      false,
 		FileManagerMaxTransferBytes: 256 * 1024 * 1024,
-		FileManagerPollInterval:     5 * time.Second,
+		FileManagerPollInterval:     30 * time.Second,
 	}
 
 	var listKey string
@@ -138,6 +156,12 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("invalid batch_interval: %w", err)
 			}
 			cfg.BatchInterval = d
+		case "sender_flush_interval":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid sender_flush_interval: %w", err)
+			}
+			cfg.SenderFlushInterval = d
 		case "spool_dir":
 			cfg.SpoolDir = value
 		case "cert_dir":
@@ -162,6 +186,42 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("invalid max_spool_record_bytes: %w", err)
 			}
 			cfg.MaxSpoolRecord = n
+		case "max_spool_bytes":
+			n, err := parseBytes(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_spool_bytes: %w", err)
+			}
+			cfg.MaxSpoolBytes = n
+		case "max_spool_records":
+			n, err := parsePositiveInt(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_spool_records: %w", err)
+			}
+			cfg.MaxSpoolRecords = n
+		case "max_spool_age":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_spool_age: %w", err)
+			}
+			cfg.MaxSpoolAge = d
+		case "max_batch_items":
+			n, err := parsePositiveInt(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_batch_items: %w", err)
+			}
+			cfg.MaxBatchItems = n
+		case "max_batch_bytes":
+			n, err := parseBytes(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_batch_bytes: %w", err)
+			}
+			cfg.MaxBatchBytes = n
+		case "max_item_bytes":
+			n, err := parseBytes(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid max_item_bytes: %w", err)
+			}
+			cfg.MaxItemBytes = n
 		case "log_cursor_path":
 			cfg.LogCursorPath = value
 		case "log_message_max_bytes":
@@ -227,11 +287,53 @@ func Load(path string) (Config, error) {
 			}
 			cfg.FileManagerPollInterval = d
 		default:
+			if strings.HasPrefix(key, "collector_interval_") {
+				name := strings.TrimPrefix(key, "collector_interval_")
+				if _, ok := cfg.CollectorIntervals[name]; !ok {
+					return Config{}, fmt.Errorf("unknown collector interval %q", name)
+				}
+				d, err := time.ParseDuration(value)
+				if err != nil || d <= 0 {
+					return Config{}, fmt.Errorf("invalid collector interval for %s", name)
+				}
+				cfg.CollectorIntervals[name] = d
+				continue
+			}
+			if strings.HasPrefix(key, "collector_full_interval_") {
+				name := strings.TrimPrefix(key, "collector_full_interval_")
+				if _, ok := cfg.CollectorFullIntervals[name]; !ok {
+					return Config{}, fmt.Errorf("unknown collector full interval %q", name)
+				}
+				d, err := time.ParseDuration(value)
+				if err != nil || d <= 0 {
+					return Config{}, fmt.Errorf("invalid collector full interval for %s", name)
+				}
+				cfg.CollectorFullIntervals[name] = d
+				continue
+			}
 			return Config{}, fmt.Errorf("unknown config key %q", key)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return Config{}, err
+	}
+	if cfg.BatchInterval <= 0 {
+		return Config{}, errors.New("batch_interval must be positive")
+	}
+	if cfg.SenderFlushInterval <= 0 {
+		return Config{}, errors.New("sender_flush_interval must be positive")
+	}
+	if cfg.MaxSpoolRecord <= 0 || cfg.MaxSpoolBytes < cfg.MaxSpoolRecord || cfg.MaxSpoolRecords <= 0 || cfg.MaxSpoolAge <= 0 {
+		return Config{}, errors.New("spool limits must be positive and max_spool_bytes must cover one record")
+	}
+	if cfg.MaxBatchItems <= 0 || cfg.MaxBatchBytes <= 0 || cfg.MaxItemBytes <= 0 {
+		return Config{}, errors.New("batch limits must be positive")
+	}
+	if cfg.MaxItemBytes > cfg.MaxBatchBytes {
+		return Config{}, errors.New("max_item_bytes must not exceed max_batch_bytes")
+	}
+	if cfg.MaxBatchBytes > cfg.MaxSpoolRecord {
+		return Config{}, errors.New("max_batch_bytes must not exceed max_spool_record_bytes")
 	}
 
 	if cfg.ManagerURL == "" {
@@ -324,6 +426,39 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// DiscoverUpdateDir reads only the rollback-critical update_dir setting and
+// deliberately ignores unrelated or invalid configuration. It runs before the
+// full parser so an updated binary can still recover from a startup/config
+// compatibility regression.
+func DiscoverUpdateDir(path string) (string, error) {
+	updateDir := defaultUpdateDir()
+	f, err := os.Open(path)
+	if err != nil {
+		return updateDir, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripComment(scanner.Text()))
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) != "update_dir" {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if value != "" {
+			updateDir = value
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return updateDir, err
+	}
+	if !filepath.IsAbs(updateDir) {
+		updateDir = filepath.Join(filepath.Dir(path), updateDir)
+	}
+	return filepath.Clean(updateDir), nil
+}
+
 func defaultUpdateDir() string {
 	if runtime.GOOS == "windows" {
 		base := os.Getenv("ProgramData")
@@ -337,19 +472,13 @@ func defaultUpdateDir() string {
 
 func defaultFileManagerRoots() []string {
 	if runtime.GOOS == "windows" {
-		roots := []string{}
-		for drive := 'C'; drive <= 'Z'; drive++ {
-			path := string(drive) + `:\`
-			if _, err := os.Stat(path); err == nil {
-				roots = append(roots, path)
-			}
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			base = `C:\ProgramData`
 		}
-		if len(roots) > 0 {
-			return roots
-		}
-		return []string{`C:\`}
+		return []string{filepath.Join(base, "Castrelyx", "files")}
 	}
-	return []string{"/"}
+	return []string{"/var/log", "/etc/castrelyx", "/var/lib/castrelyx-agent"}
 }
 
 func defaultCollectors() []string {
@@ -364,6 +493,33 @@ func defaultCollectors() []string {
 		"firewall",
 		"log_tailer",
 		"agent_health",
+	}
+}
+
+func defaultCollectorIntervals() map[string]time.Duration {
+	return map[string]time.Duration{
+		"identity":     time.Hour,
+		"metric":       30 * time.Second,
+		"network":      5 * time.Minute,
+		"process":      2 * time.Minute,
+		"service":      5 * time.Minute,
+		"port":         2 * time.Minute,
+		"package":      12 * time.Hour,
+		"firewall":     10 * time.Minute,
+		"log_tailer":   30 * time.Second,
+		"agent_health": 30 * time.Second,
+	}
+}
+
+func defaultCollectorFullIntervals() map[string]time.Duration {
+	return map[string]time.Duration{
+		"identity": 24 * time.Hour,
+		"network":  time.Hour,
+		"process":  15 * time.Minute,
+		"service":  time.Hour,
+		"port":     15 * time.Minute,
+		"package":  24 * time.Hour,
+		"firewall": time.Hour,
 	}
 }
 
