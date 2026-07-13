@@ -14,6 +14,7 @@ import javax.sql.DataSource;
 import org.keinus.logparser.domain.model.mapping.MappingConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.stereotype.Repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,21 +35,23 @@ public class SqliteMappingRepository implements MappingRepository {
 
     @PostConstruct
     public void initTable() {
-        try (Connection conn = dataSource.getConnection();
-             Statement stmt = conn.createStatement()) {
+        Connection conn = DataSourceUtils.getConnection(dataSource);
+        try (Statement stmt = conn.createStatement()) {
             stmt.execute("CREATE TABLE IF NOT EXISTS mapping_config (" +
                          "message_type VARCHAR(255) PRIMARY KEY, " +
                          "config_json TEXT NOT NULL)");
         } catch (SQLException e) {
             log.error("Failed to initialize mapping_config table", e);
+        } finally {
+            DataSourceUtils.releaseConnection(conn, dataSource);
         }
     }
 
     @Override
     public Optional<MappingConfiguration> findByMessageType(String messageType) {
         String sql = "SELECT config_json FROM mapping_config WHERE message_type = ?";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        Connection conn = DataSourceUtils.getConnection(dataSource);
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             
             pstmt.setString(1, messageType);
             try (ResultSet rs = pstmt.executeQuery()) {
@@ -59,6 +62,8 @@ public class SqliteMappingRepository implements MappingRepository {
             }
         } catch (Exception e) {
             log.error("Error loading mapping config for type: {}", messageType, e);
+        } finally {
+            DataSourceUtils.releaseConnection(conn, dataSource);
         }
         return Optional.empty();
     }
@@ -67,8 +72,8 @@ public class SqliteMappingRepository implements MappingRepository {
     public List<MappingConfiguration> findAll() {
         String sql = "SELECT config_json FROM mapping_config ORDER BY message_type";
         List<MappingConfiguration> configs = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql);
+        Connection conn = DataSourceUtils.getConnection(dataSource);
+        try (PreparedStatement pstmt = conn.prepareStatement(sql);
              ResultSet rs = pstmt.executeQuery()) {
 
             while (rs.next()) {
@@ -80,14 +85,16 @@ public class SqliteMappingRepository implements MappingRepository {
             }
         } catch (Exception e) {
             log.error("Error loading mapping configs", e);
+        } finally {
+            DataSourceUtils.releaseConnection(conn, dataSource);
         }
         return configs;
     }
 
     @Override
     public void save(MappingConfiguration config) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(upsertSql(conn))) {
+        Connection conn = DataSourceUtils.getConnection(dataSource);
+        try (PreparedStatement pstmt = conn.prepareStatement(upsertSql(conn))) {
             
             String json = objectMapper.writeValueAsString(config);
             pstmt.setString(1, config.getMessageType());
@@ -98,6 +105,8 @@ public class SqliteMappingRepository implements MappingRepository {
         } catch (Exception e) {
             log.error("Error saving mapping config for type: {}", config.getMessageType(), e);
             throw new RuntimeException("Failed to save mapping config", e);
+        } finally {
+            DataSourceUtils.releaseConnection(conn, dataSource);
         }
     }
 

@@ -13,10 +13,10 @@ describe('App shell', () => {
 
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Castrelyx Manager' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Traffic/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Agent Logs' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Castrelyx' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Action Rail Command Center' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Network' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hunt' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'LogParser' })).toBeInTheDocument();
   });
@@ -39,7 +39,7 @@ describe('App shell', () => {
 
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Agent Logs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Hunt' }));
 
     expect(await screen.findByRole('heading', { name: 'Agent Logs' })).toBeInTheDocument();
     expect(await screen.findByText('Failed password for invalid user admin')).toBeInTheDocument();
@@ -95,6 +95,7 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
       }
     },
     '/api/dashboards/agent': { body: { heartbeat: { healthy: 0, stale: 0 }, collectors: [], events: [] } },
+    '/api/agent/logs?range=15m&severity=ALL&limit=200': { body: [] },
     '/api/agent/logs?range=1h&severity=ALL&limit=8': { body: [] },
     '/api/agent/logs?range=1h&severity=ALL&limit=300': { body: [] },
     '/api/dashboards/snmp': { body: { polls: { success: 0, failure: 0 }, targets: [], interfaces: [] } },
@@ -106,6 +107,14 @@ function mockFetch(overrides: Record<string, MockResponse> = {}) {
         assets: []
       }
     },
+    '/api/metrics/assets?range=15m': {
+      body: {
+        range: '15m',
+        summary: { totalAssets: 0, observedAssets: 0, staleAssets: 0, criticalAssets: 0, warningAssets: 0 },
+        assets: []
+      }
+    },
+    '/api/traffic/interfaces?range=15m': { body: [] },
     '/api/assets': { body: [] },
     '/api/alerts': { body: [] },
     ...overrides

@@ -1,0 +1,388 @@
+- main [ref=f4e3]:
+  - complementary [ref=f4e4]:
+    - generic [ref=f4e11]:
+      - heading "Castrelyx" [level=1] [ref=f4e12]
+      - text: OPERATOR
+    - navigation [ref=f4e13]:
+      - button "Operations" [ref=f4e14] [cursor=pointer]
+      - button "Incidents" [ref=f4e19] [cursor=pointer]
+      - button "Network" [ref=f4e24] [cursor=pointer]
+      - button "Assets" [ref=f4e28] [cursor=pointer]
+      - button "Hunt" [ref=f4e40] [cursor=pointer]
+      - button "Collection" [ref=f4e45] [cursor=pointer]
+      - button "SNMP" [ref=f4e50] [cursor=pointer]
+      - button "CastrelSign" [ref=f4e56] [cursor=pointer]
+      - button "LogParser" [ref=f4e61] [cursor=pointer]
+      - button "Settings" [ref=f4e66] [cursor=pointer]
+    - button "로그아웃" [ref=f4e71] [cursor=pointer]
+  - region "SOC 및 NMS 운영 대시보드" [ref=f4e77]:
+    - generic [ref=f4e78]:
+      - generic [ref=f4e79]:
+        - heading "Action Rail Command Center" [level=2] [ref=f4e80]
+        - generic [ref=f4e81]: SOC + NMS
+      - generic [ref=f4e82]:
+        - generic [ref=f4e83]: Live
+        - generic [ref=f4e87]:
+          - generic [ref=f4e88]: 시간 범위
+          - combobox "시간 범위" [ref=f4e89]:
+            - option "Last 15m" [selected]
+            - option "Last 1h"
+            - option "Last 24h"
+        - generic [ref=f4e90]:
+          - generic [ref=f4e94]: 자산, IP, 신호 검색
+          - textbox "자산, IP, 신호 검색" [ref=f4e95]:
+            - /placeholder: 검색 (자산, IP, 신호)
+      - generic [ref=f4e96]:
+        - generic [ref=f4e97]: 마지막 업데이트 22:00:00 KST (30s)
+        - generic [ref=f4e99]: operator.kim
+    - generic [ref=f4e104]:
+      - region [ref=f4e105]:
+        - generic [ref=f4e106]:
+          - generic [ref=f4e107]:
+            - heading "전체 장비 리소스 상태" [level=3] [ref=f4e108]
+            - paragraph [ref=f4e109]: CPU·RAM은 선택 범위의 최신 수집값, Disk·Network I/O는 선택 범위에서 계산한 장비별 평균 처리량의 합계입니다.
+          - generic [ref=f4e110]: 최근 15분 · 30초 갱신
+        - generic [ref=f4e111]:
+          - generic "수집 장비 3대, 전체 4대" [ref=f4e112]:
+            - generic [ref=f4e113]: 장비 수집
+            - strong [ref=f4e114]:
+              - text: "3"
+              - generic [ref=f4e115]: / 4
+            - emphasis [ref=f4e116]: 지연 1 · 확인 필요 3
+          - generic "전체 장비 평균 CPU 45.2%" [ref=f4e117]:
+            - generic [ref=f4e118]: 평균 CPU
+            - strong [ref=f4e119]: 45.2%
+            - emphasis [ref=f4e120]: 3대 수집
+          - generic "전체 장비 평균 RAM 42.8%" [ref=f4e121]:
+            - generic [ref=f4e122]: 평균 RAM
+            - strong [ref=f4e123]: 42.8%
+            - emphasis [ref=f4e124]: 3대 수집
+          - generic "Disk I/O 읽기 1.25 MB/s, 쓰기 2.13 MB/s" [ref=f4e125]:
+            - generic [ref=f4e126]: Disk I/O
+            - strong [ref=f4e127]:
+              - generic [ref=f4e128]: R
+              - text: 1.25 MB/s
+            - strong [ref=f4e129]:
+              - generic [ref=f4e130]: W
+              - text: 2.13 MB/s
+            - emphasis [ref=f4e131]: 216 IOPS · 3대
+          - generic "Network I/O 수신 1.24 Mbps, 송신 948.76 Kbps" [ref=f4e132]:
+            - generic [ref=f4e133]: Network I/O
+            - strong [ref=f4e134]:
+              - generic [ref=f4e135]: RX
+              - text: 1.24 Mbps
+            - strong [ref=f4e136]:
+              - generic [ref=f4e137]: TX
+              - text: 948.76 Kbps
+            - emphasis [ref=f4e138]: 3대 수집 · 활성 알림 1
+      - region [ref=f4e139]:
+        - generic [ref=f4e140]:
+          - generic [ref=f4e141]:
+            - heading "전체 장비 리소스 매트릭스" [level=3] [ref=f4e142]
+            - paragraph [ref=f4e143]: 모든 등록·관측 장비의 CPU, RAM, Disk I/O, Network I/O를 비교합니다.
+          - generic [ref=f4e144]:
+            - generic [ref=f4e145]:
+              - text: 표시
+              - strong [ref=f4e146]: "4"
+              - text: / 4
+            - generic [ref=f4e147]:
+              - text: 수집
+              - strong [ref=f4e148]: "3"
+            - generic [ref=f4e149]:
+              - text: 확인 필요
+              - strong [ref=f4e150]: "3"
+        - table [ref=f4e152]:
+          - rowgroup [ref=f4e153]:
+            - row [ref=f4e154]:
+              - columnheader [ref=f4e155]:
+                - button "장비 기준 내림차순 정렬" [ref=f4e156] [cursor=pointer]: 장비
+              - columnheader [ref=f4e160]:
+                - button "상태 기준 오름차순 정렬" [ref=f4e161] [cursor=pointer]: 상태
+              - columnheader [ref=f4e165]:
+                - button "CPU 기준 내림차순 정렬" [ref=f4e166] [cursor=pointer]: CPU
+              - columnheader [ref=f4e170]:
+                - button "RAM 기준 내림차순 정렬" [ref=f4e171] [cursor=pointer]: RAM
+              - columnheader [ref=f4e175]:
+                - button "Disk I/O 기준 내림차순 정렬" [ref=f4e176] [cursor=pointer]: Disk I/O
+              - columnheader [ref=f4e180]:
+                - button "Network I/O 기준 내림차순 정렬" [ref=f4e181] [cursor=pointer]: Network I/O
+              - columnheader [ref=f4e185]:
+                - button "최근 수집 기준 내림차순 정렬" [ref=f4e186] [cursor=pointer]: 최근 수집
+          - rowgroup [ref=f4e190]:
+            - row "security 리소스 상태" [ref=f4e191]:
+              - cell [ref=f4e192]:
+                - button "security 192.168.50.25 LINUX_SERVER · Security" [pressed] [ref=f4e193] [cursor=pointer]:
+                  - strong [ref=f4e194]: security
+                  - generic [ref=f4e195]: 192.168.50.25
+                  - generic [ref=f4e196]: LINUX_SERVER · Security
+              - cell [ref=f4e197]
+              - cell [ref=f4e200]:
+                - generic "security CPU 91.2 퍼센트" [ref=f4e201]:
+                  - strong [ref=f4e202]: 91.2%
+                  - meter "CPU 사용률" [ref=f4e203]
+              - cell [ref=f4e205]:
+                - generic "security RAM 67.8 퍼센트" [ref=f4e206]:
+                  - strong [ref=f4e207]: 67.8%
+                  - meter "RAM 사용률" [ref=f4e208]
+              - cell [ref=f4e210]:
+                - generic "security Disk I/O 읽기 1.00 MB/s, 쓰기 2.00 MB/s" [ref=f4e211]:
+                  - generic [ref=f4e212]:
+                    - generic [ref=f4e213]: R
+                    - strong [ref=f4e214]: 1.00 MB/s
+                  - generic [ref=f4e215]:
+                    - generic [ref=f4e216]: W
+                    - strong [ref=f4e217]: 2.00 MB/s
+                  - generic [ref=f4e218]: R 128 IOPS · W 64.0 IOPS · util 87.5%
+              - cell [ref=f4e219]:
+                - generic "security Network I/O 수신 4.62 Kbps, 송신 11.66 Kbps" [ref=f4e220]:
+                  - generic [ref=f4e221]:
+                    - generic [ref=f4e222]: RX
+                    - strong [ref=f4e223]: 4.62 Kbps
+                  - generic [ref=f4e224]:
+                    - generic [ref=f4e225]: TX
+                    - strong [ref=f4e226]: 11.66 Kbps
+                  - generic [ref=f4e227]: interface errors 0
+              - cell "12초 전 21:59:48 KST" [ref=f4e228]:
+                - generic [ref=f4e229]:
+                  - strong [ref=f4e230]: 12초 전
+                  - generic [ref=f4e231]: 21:59:48 KST
+            - row "x86host 리소스 상태" [ref=f4e232]:
+              - cell [ref=f4e233]:
+                - button "x86host 192.168.50.21 LINUX_SERVER · Seoul HQ" [ref=f4e234] [cursor=pointer]:
+                  - strong [ref=f4e235]: x86host
+                  - generic [ref=f4e236]: 192.168.50.21
+                  - generic [ref=f4e237]: LINUX_SERVER · Seoul HQ
+              - cell [ref=f4e238]
+              - cell [ref=f4e241]:
+                - generic "x86host CPU 42.1 퍼센트" [ref=f4e242]:
+                  - strong [ref=f4e243]: 42.1%
+                  - meter "CPU 사용률" [ref=f4e244]
+              - cell [ref=f4e246]:
+                - generic "x86host RAM 55.4 퍼센트" [ref=f4e247]:
+                  - strong [ref=f4e248]: 55.4%
+                  - meter "RAM 사용률" [ref=f4e249]
+              - cell [ref=f4e251]:
+                - generic "x86host Disk I/O 읽기 256 KB/s, 쓰기 128 KB/s" [ref=f4e252]:
+                  - generic [ref=f4e253]:
+                    - generic [ref=f4e254]: R
+                    - strong [ref=f4e255]: 256 KB/s
+                  - generic [ref=f4e256]:
+                    - generic [ref=f4e257]: W
+                    - strong [ref=f4e258]: 128 KB/s
+                  - generic [ref=f4e259]: R 16.0 IOPS · W 8.0 IOPS · util 42.5%
+              - cell [ref=f4e260]:
+                - generic "x86host Network I/O 수신 1.20 Mbps, 송신 900.00 Kbps" [ref=f4e261]:
+                  - generic [ref=f4e262]:
+                    - generic [ref=f4e263]: RX
+                    - strong [ref=f4e264]: 1.20 Mbps
+                  - generic [ref=f4e265]:
+                    - generic [ref=f4e266]: TX
+                    - strong [ref=f4e267]: 900.00 Kbps
+                  - generic [ref=f4e268]: interface errors 1
+              - cell "8분 전 21:52:00 KST" [ref=f4e269]:
+                - generic [ref=f4e270]:
+                  - strong [ref=f4e271]: 8분 전
+                  - generic [ref=f4e272]: 21:52:00 KST
+            - row "inventory-only 리소스 상태" [ref=f4e273]:
+              - cell [ref=f4e274]:
+                - button "inventory-only 192.168.50.99 LINUX_SERVER · Lab" [ref=f4e275] [cursor=pointer]:
+                  - strong [ref=f4e276]: inventory-only
+                  - generic [ref=f4e277]: 192.168.50.99
+                  - generic [ref=f4e278]: LINUX_SERVER · Lab
+              - cell [ref=f4e279]
+              - cell [ref=f4e282]:
+                - generic "inventory-only CPU 미수집" [ref=f4e283]:
+                  - text: —
+                  - generic [ref=f4e284]: 미수집
+              - cell [ref=f4e285]:
+                - generic "inventory-only RAM 미수집" [ref=f4e286]:
+                  - text: —
+                  - generic [ref=f4e287]: 미수집
+              - cell [ref=f4e288]:
+                - generic "inventory-only Disk I/O 미수집" [ref=f4e289]:
+                  - text: —
+                  - generic [ref=f4e290]: 미수집
+              - cell [ref=f4e291]:
+                - generic "inventory-only Network I/O 미수집" [ref=f4e292]:
+                  - text: —
+                  - generic [ref=f4e293]: 미수집
+              - cell "- --:--:-- KST" [ref=f4e294]:
+                - generic [ref=f4e295]:
+                  - strong [ref=f4e296]: "-"
+                  - generic [ref=f4e297]: "--:--:-- KST"
+            - row "nas 리소스 상태" [ref=f4e298]:
+              - cell [ref=f4e299]:
+                - button "nas 192.168.50.22 LINUX_SERVER · Storage" [ref=f4e300] [cursor=pointer]:
+                  - strong [ref=f4e301]: nas
+                  - generic [ref=f4e302]: 192.168.50.22
+                  - generic [ref=f4e303]: LINUX_SERVER · Storage
+              - cell [ref=f4e304]
+              - cell [ref=f4e307]:
+                - generic "nas CPU 2.4 퍼센트" [ref=f4e308]:
+                  - strong [ref=f4e309]: 2.4%
+                  - meter "CPU 사용률" [ref=f4e310]
+              - cell [ref=f4e312]:
+                - generic "nas RAM 5.3 퍼센트" [ref=f4e313]:
+                  - strong [ref=f4e314]: 5.3%
+                  - meter "RAM 사용률" [ref=f4e315]
+              - cell [ref=f4e317]:
+                - generic "nas Disk I/O 읽기 0 B/s, 쓰기 0 B/s" [ref=f4e318]:
+                  - generic [ref=f4e319]:
+                    - generic [ref=f4e320]: R
+                    - strong [ref=f4e321]: 0 B/s
+                  - generic [ref=f4e322]:
+                    - generic [ref=f4e323]: W
+                    - strong [ref=f4e324]: 0 B/s
+                  - generic [ref=f4e325]: R 0.0 IOPS · W 0.0 IOPS · util 0.0%
+              - cell [ref=f4e326]:
+                - generic "nas Network I/O 수신 36.30 Kbps, 송신 37.10 Kbps" [ref=f4e327]:
+                  - generic [ref=f4e328]:
+                    - generic [ref=f4e329]: RX
+                    - strong [ref=f4e330]: 36.30 Kbps
+                  - generic [ref=f4e331]:
+                    - generic [ref=f4e332]: TX
+                    - strong [ref=f4e333]: 37.10 Kbps
+                  - generic [ref=f4e334]: interface errors 0
+              - cell "18초 전 21:59:42 KST" [ref=f4e335]:
+                - generic [ref=f4e336]:
+                  - strong [ref=f4e337]: 18초 전
+                  - generic [ref=f4e338]: 21:59:42 KST
+        - generic [ref=f4e339]: 응답에 포함된 0은 그대로 표시하고, 수집 소스를 확인할 수 없는 값은 대시(—)로 구분합니다.
+      - generic [ref=f4e340]:
+        - complementary "security 자산 인스펙터" [ref=f4e341]:
+          - generic [ref=f4e342]:
+            - heading "자산 인스펙터" [level=3] [ref=f4e343]
+            - generic [ref=f4e344]: Live
+          - generic [ref=f4e346]:
+            - generic [ref=f4e350]:
+              - strong [ref=f4e351]: security
+              - generic [ref=f4e352]: IP 192.168.50.25
+              - generic [ref=f4e353]: Agent 수집 Live (30s)
+            - generic [ref=f4e355]:
+              - generic [ref=f4e356]: 12초 전
+              - strong [ref=f4e357]: CRITICAL
+          - generic [ref=f4e358]:
+            - generic [ref=f4e359]:
+              - generic [ref=f4e360]: CPU
+              - strong [ref=f4e361]: 91.2%
+            - generic [ref=f4e364]:
+              - generic [ref=f4e365]: MEM
+              - strong [ref=f4e366]: 67.8%
+            - generic [ref=f4e369]:
+              - generic [ref=f4e370]: DISK CAP
+              - strong [ref=f4e371]: 72.4%
+            - generic [ref=f4e374]:
+              - generic [ref=f4e375]: DISK I/O
+              - strong [ref=f4e376]: 87.5%
+            - generic [ref=f4e379]:
+              - generic [ref=f4e380]: TEMP
+              - strong [ref=f4e381]: 46.8°C
+          - generic [ref=f4e384]:
+            - generic [ref=f4e385]:
+              - generic [ref=f4e386]: 서비스 실패
+              - strong [ref=f4e387]: "0"
+            - generic [ref=f4e388]:
+              - generic [ref=f4e389]: 인터페이스 다운
+              - strong [ref=f4e390]: "0"
+            - generic [ref=f4e391]:
+              - generic [ref=f4e392]: 프로세스
+              - strong [ref=f4e393]: "0"
+            - generic [ref=f4e394]:
+              - generic [ref=f4e395]: 소켓
+              - strong [ref=f4e396]: "0"
+            - generic [ref=f4e397]:
+              - generic [ref=f4e398]: 리슨닝
+              - strong [ref=f4e399]: "0"
+          - generic [ref=f4e400]:
+            - heading "네트워크 인터페이스 (1)" [level=4] [ref=f4e402]
+            - generic [ref=f4e403]:
+              - strong [ref=f4e404]: enp1s0
+              - generic [ref=f4e405]: RX
+              - generic [ref=f4e406]: 4.62 Kbps
+              - application [ref=f4e408]
+              - generic [ref=f4e409]: TX
+              - generic [ref=f4e410]: 11.66 Kbps
+              - application [ref=f4e412]
+              - emphasis [ref=f4e413]: up
+          - generic [ref=f4e415]:
+            - generic [ref=f4e416]:
+              - heading "선택 장비 I/O" [level=4] [ref=f4e417]
+              - generic [ref=f4e418]: 15m
+            - generic [ref=f4e419]:
+              - generic [ref=f4e420]:
+                - generic [ref=f4e421]: Disk I/O
+                - generic "security Disk I/O 읽기 1.00 MB/s, 쓰기 2.00 MB/s" [ref=f4e422]:
+                  - generic [ref=f4e423]:
+                    - generic [ref=f4e424]: R
+                    - strong [ref=f4e425]: 1.00 MB/s
+                  - generic [ref=f4e426]:
+                    - generic [ref=f4e427]: W
+                    - strong [ref=f4e428]: 2.00 MB/s
+                  - generic [ref=f4e429]: R 128 IOPS · W 64.0 IOPS · util 87.5%
+              - generic [ref=f4e430]:
+                - generic [ref=f4e431]: Network I/O
+                - generic "security Network I/O 수신 4.62 Kbps, 송신 11.66 Kbps" [ref=f4e432]:
+                  - generic [ref=f4e433]:
+                    - generic [ref=f4e434]: RX
+                    - strong [ref=f4e435]: 4.62 Kbps
+                  - generic [ref=f4e436]:
+                    - generic [ref=f4e437]: TX
+                    - strong [ref=f4e438]: 11.66 Kbps
+                  - generic [ref=f4e439]: interface errors 0
+          - generic [ref=f4e440]:
+            - generic [ref=f4e441]:
+              - heading "최근 이벤트" [level=4] [ref=f4e442]
+              - generic [ref=f4e443]: 최신순
+            - generic [ref=f4e444]:
+              - time [ref=f4e445]: 21:58:10 KST
+              - generic [ref=f4e448]: system.service.failure
+            - generic [ref=f4e449]:
+              - time [ref=f4e450]: 21:55:42 KST
+              - generic [ref=f4e453]: interface.down
+          - generic [ref=f4e454]:
+            - button "조사" [ref=f4e455] [cursor=pointer]
+            - button "확인/할당" [ref=f4e457] [cursor=pointer]
+        - region [ref=f4e461]:
+          - generic [ref=f4e462]:
+            - heading "이벤트 스트림" [level=3] [ref=f4e463]
+            - generic [ref=f4e464]: 최신순
+          - generic [ref=f4e465]:
+            - generic [ref=f4e466]:
+              - time [ref=f4e467]: 21:58:10 KST
+              - strong [ref=f4e470]: security
+              - generic [ref=f4e471]: system.service.failure
+            - generic [ref=f4e472]:
+              - time [ref=f4e473]: 21:56:05 KST
+              - strong [ref=f4e476]: x86host
+              - generic [ref=f4e477]: auth.privilege.sudo
+            - generic [ref=f4e478]:
+              - time [ref=f4e479]: 21:55:42 KST
+              - strong [ref=f4e482]: security
+              - generic [ref=f4e483]: interface.down
+          - button "모든 이벤트 보기" [ref=f4e484] [cursor=pointer]
+      - region [ref=f4e487]:
+        - heading "수집 커버리지 (현재 자산 4)" [level=3] [ref=f4e489]:
+          - text: 수집 커버리지
+          - generic [ref=f4e490]: (현재 자산 4)
+        - generic [ref=f4e491]:
+          - generic [ref=f4e492]:
+            - generic [ref=f4e496]:
+              - strong [ref=f4e497]: AGENT
+              - generic [ref=f4e498]: 수집 중
+            - generic [ref=f4e499]: 3 / 4
+          - generic [ref=f4e500]:
+            - generic [ref=f4e505]:
+              - strong [ref=f4e506]: SNMP
+              - generic [ref=f4e507]: 미수집
+            - generic [ref=f4e508]: 0 / 4
+          - generic [ref=f4e509]:
+            - generic [ref=f4e514]:
+              - strong [ref=f4e515]: Suricata
+              - generic [ref=f4e516]: 미수집
+            - generic [ref=f4e517]: 0 / 4
+          - generic [ref=f4e518]:
+            - generic [ref=f4e523]:
+              - strong [ref=f4e524]: Zeek
+              - generic [ref=f4e525]: 미수집
+            - generic [ref=f4e526]: 0 / 4
+        - generic [ref=f4e527]: 수집 상태는 30초 간격으로 갱신됩니다.

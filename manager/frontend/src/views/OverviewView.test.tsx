@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AlertRow, Asset, AssetMetricDetail, AssetMetricsOverview, DashboardSummary, InterfaceTraffic } from '../lib/types';
 import { OverviewView } from './OverviewView';
@@ -9,47 +9,48 @@ describe('OverviewView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders a chart-first command dashboard instead of an asset table', async () => {
+  it('renders every managed device with CPU, RAM, Disk I/O, and Network I/O', async () => {
     mockFetch({
-      '/api/metrics/assets?range=1h': { body: assetMetrics },
+      '/api/metrics/assets?range=15m': { body: assetMetrics },
       '/api/dashboards/agent': { body: agentDashboard },
-      '/api/agent/logs?range=24h&severity=ALL&limit=200': { body: agentLogs },
-      '/api/traffic/interfaces?range=1h': { body: trafficRows },
-      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: nasDetail }
+      '/api/agent/logs?range=15m&severity=ALL&limit=200': { body: agentLogs },
+      '/api/traffic/interfaces?range=15m': { body: trafficRows },
+      '/api/metrics/assets/nas?range=15m&bucket=auto': { body: nasDetail },
+      '/api/metrics/assets/x86host?range=15m&bucket=auto': { body: x86hostDetail }
     });
 
-    render(<OverviewView summary={summary} alerts={alerts} />);
+    render(<OverviewView summary={summary} alerts={alerts} assets={[registeredAsset]} />);
 
-    expect(await screen.findByRole('heading', { name: '개요' })).toBeInTheDocument();
-    expect(screen.getByText('장비 상태를 중심으로 부하, 트래픽, 이벤트, 수집 신선도를 한 화면에서 판단합니다.')).toBeInTheDocument();
-    expect(screen.getByText('전체 장비')).toBeInTheDocument();
-    expect(screen.getByText('문제 장비')).toBeInTheDocument();
-    expect(screen.getByText('평균 CPU')).toBeInTheDocument();
-    expect(screen.getByText('총 트래픽')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Action Rail Command Center' })).toBeInTheDocument();
+    expect(screen.getAllByText('SOC + NMS').length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: '전체 장비 리소스 상태' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '전체 장비 리소스 매트릭스' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '자산 인스펙터' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '이벤트 스트림' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /수집 커버리지/ })).toBeInTheDocument();
+    expect(screen.getByText('AGENT')).toBeInTheDocument();
 
-    expect(screen.getByRole('heading', { name: 'Fleet Health' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '선택 장비 추세' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '리소스 압박 Top' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '상위 트래픽 인터페이스' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '이벤트 추세' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Source Coverage' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '대응 큐' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Collector Freshness' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '보안 포스처' })).toBeInTheDocument();
+    const table = screen.getByRole('table');
+    for (const label of ['CPU', 'RAM', 'Disk I/O', 'Network I/O']) {
+      expect(within(table).getByRole('button', { name: `${label} 기준 내림차순 정렬` })).toBeInTheDocument();
+    }
+    const nasRow = within(table).getByRole('row', { name: 'nas 리소스 상태' });
+    expect(within(nasRow).getByLabelText('nas CPU 92.1 퍼센트')).toBeInTheDocument();
+    expect(within(nasRow).getByLabelText('nas RAM 71.4 퍼센트')).toBeInTheDocument();
+    expect(within(nasRow).getByLabelText('nas Disk I/O 읽기 1.00 MB/s, 쓰기 2.00 MB/s')).toBeInTheDocument();
+    expect(within(nasRow).getByLabelText('nas Network I/O 수신 12.00 Kbps, 송신 9.00 Kbps')).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: 'x86host 리소스 상태' })).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: 'security 리소스 상태' })).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: 'registered-only 리소스 상태' })).toBeInTheDocument();
 
-    expect(screen.getByText('nas · CPU')).toBeInTheDocument();
-    expect(screen.getByText('x86host · Temperature')).toBeInTheDocument();
-    expect(screen.getByText('metric')).toBeInTheDocument();
-    expect(screen.getByText('process')).toBeInTheDocument();
-    expect(screen.getAllByText('nas').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Root filesystem full/)).toBeInTheDocument();
-
-    expect(screen.queryByRole('heading', { name: '장비 상태 보드' })).not.toBeInTheDocument();
-    expect(screen.queryByText('마지막 수집')).not.toBeInTheDocument();
-    expect(screen.queryByText('CPU/MEM/DISK/TEMP')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('검색 (자산, IP, 신호)'), { target: { value: 'x86host' } });
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(2));
+    expect(within(table).getByRole('row', { name: 'x86host 리소스 상태' })).toBeInTheDocument();
+    expect(within(table).queryByRole('row', { name: 'nas 리소스 상태' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('x86host 자산 인스펙터')).toBeInTheDocument();
   });
 
-  it('refreshes overview and selected resource series on the collection cadence', async () => {
+  it('refreshes on the 30-second cadence and retains the last good matrix when refresh fails', async () => {
     let intervalHandler: TimerHandler | undefined;
     const originalSetInterval = window.setInterval.bind(window);
     vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
@@ -83,21 +84,27 @@ describe('OverviewView', () => {
     let detailCalls = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path === '/api/metrics/assets?range=1h') {
+      if (path === '/api/metrics/assets?range=15m') {
         overviewCalls += 1;
-        return mockJsonResponse(overviewCalls === 1 ? assetMetrics : refreshedAssetMetrics);
+        if (overviewCalls === 1) {
+          return mockJsonResponse(assetMetrics);
+        }
+        if (overviewCalls === 2) {
+          return mockJsonResponse(refreshedAssetMetrics);
+        }
+        return mockJsonResponse({}, 500);
       }
-      if (path === '/api/metrics/assets/nas?range=1h&bucket=auto') {
+      if (path === '/api/metrics/assets/nas?range=15m&bucket=auto') {
         detailCalls += 1;
         return mockJsonResponse(detailCalls === 1 ? nasDetail : refreshedNasDetail);
       }
       if (path === '/api/dashboards/agent') {
         return mockJsonResponse(agentDashboard);
       }
-      if (path === '/api/agent/logs?range=24h&severity=ALL&limit=200') {
+      if (path === '/api/agent/logs?range=15m&severity=ALL&limit=200') {
         return mockJsonResponse(agentLogs);
       }
-      if (path === '/api/traffic/interfaces?range=1h') {
+      if (path === '/api/traffic/interfaces?range=15m') {
         return mockJsonResponse(trafficRows);
       }
       return mockJsonResponse({}, 404);
@@ -106,9 +113,12 @@ describe('OverviewView', () => {
 
     render(<OverviewView summary={summary} alerts={alerts} />);
 
-    expect(await screen.findByRole('heading', { name: 'Fleet Health' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '전체 장비 리소스 매트릭스' })).toBeInTheDocument();
     await waitFor(() => expect(detailCalls).toBe(1));
     expect(intervalHandler).toEqual(expect.any(Function));
+    const table = screen.getByRole('table');
+    let nasRow = within(table).getByRole('row', { name: 'nas 리소스 상태' });
+    expect(within(nasRow).getByLabelText('nas CPU 92.1 퍼센트')).toBeInTheDocument();
 
     await act(async () => {
       if (typeof intervalHandler === 'function') {
@@ -118,53 +128,110 @@ describe('OverviewView', () => {
 
     await waitFor(() => expect(overviewCalls).toBe(2));
     await waitFor(() => expect(detailCalls).toBe(2));
-    await waitFor(() => expect(screen.getByText(/CPU 45\.0%/)).toBeInTheDocument());
-  });
-
-  it('renders zero-valued CPU samples as collected trend data', async () => {
-    const zeroCpuDetail: AssetMetricDetail = {
-      ...nasDetail,
-      asset: {
-        ...nasDetail.asset,
-        metrics: { ...nasDetail.asset.metrics, cpuUsagePct: 0 }
-      },
-      series: {
-        ...nasDetail.series,
-        cpu: [
-          { timestamp: '2026-07-06T11:50:00Z', value: 0 },
-          { timestamp: '2026-07-06T12:00:00Z', value: 0 }
-        ]
-      }
-    };
-    mockFetch({
-      '/api/metrics/assets?range=1h': { body: assetMetrics },
-      '/api/dashboards/agent': { body: agentDashboard },
-      '/api/agent/logs?range=24h&severity=ALL&limit=200': { body: [] },
-      '/api/traffic/interfaces?range=1h': { body: trafficRows },
-      '/api/metrics/assets/nas?range=1h&bucket=auto': { body: zeroCpuDetail }
+    await waitFor(() => {
+      nasRow = within(table).getByRole('row', { name: 'nas 리소스 상태' });
+      expect(within(nasRow).getByLabelText('nas CPU 45.0 퍼센트')).toBeInTheDocument();
     });
 
-    render(<OverviewView summary={summary} alerts={alerts} />);
+    await act(async () => {
+      if (typeof intervalHandler === 'function') {
+        intervalHandler();
+      }
+    });
 
-    expect(await screen.findByRole('img', { name: '선택 장비 추세' })).toBeInTheDocument();
-    expect(screen.queryByText('시계열 대기')).not.toBeInTheDocument();
+    await waitFor(() => expect(overviewCalls).toBe(3));
+    expect(await screen.findByText('일부 관제 정보가 지연되고 있습니다. 마지막 정상 수집값을 유지합니다.')).toBeInTheDocument();
+    nasRow = within(table).getByRole('row', { name: 'nas 리소스 상태' });
+    expect(within(nasRow).getByLabelText('nas CPU 45.0 퍼센트')).toBeInTheDocument();
+    expect(within(nasRow).queryByLabelText('nas CPU 92.1 퍼센트')).not.toBeInTheDocument();
+    expect(detailCalls).toBe(2);
+  });
+
+  it('distinguishes collected zero values, missing metrics, and stale devices', async () => {
+    mockFetch({
+      '/api/metrics/assets?range=15m': { body: assetMetrics },
+      '/api/dashboards/agent': { body: agentDashboard },
+      '/api/agent/logs?range=15m&severity=ALL&limit=200': { body: [] },
+      '/api/traffic/interfaces?range=15m': { body: trafficRows },
+      '/api/metrics/assets/nas?range=15m&bucket=auto': { body: nasDetail }
+    });
+
+    render(<OverviewView summary={summary} alerts={alerts} assets={[registeredAsset]} />);
+
+    const table = await screen.findByRole('table');
+    const zeroRow = within(table).getByRole('row', { name: 'security 리소스 상태' });
+    expect(within(zeroRow).getByLabelText('security CPU 0.0 퍼센트')).toBeInTheDocument();
+    expect(within(zeroRow).getByLabelText('security RAM 0.0 퍼센트')).toBeInTheDocument();
+    expect(within(zeroRow).getByLabelText('security Disk I/O 읽기 0 B/s, 쓰기 0 B/s')).toBeInTheDocument();
+    expect(within(zeroRow).getByLabelText('security Network I/O 수신 0 bps, 송신 0 bps')).toBeInTheDocument();
+    expect(within(zeroRow).queryByText('미수집')).not.toBeInTheDocument();
+
+    const missingRow = within(table).getByRole('row', { name: 'registered-only 리소스 상태' });
+    expect(within(missingRow).getByLabelText('registered-only CPU 미수집')).toBeInTheDocument();
+    expect(within(missingRow).getByLabelText('registered-only RAM 미수집')).toBeInTheDocument();
+    expect(within(missingRow).getByLabelText('registered-only Disk I/O 미수집')).toBeInTheDocument();
+    expect(within(missingRow).getByLabelText('registered-only Network I/O 미수집')).toBeInTheDocument();
+
+    const staleRow = within(table).getByRole('row', { name: 'x86host 리소스 상태' });
+    expect(within(staleRow).getByText(/수집 지연/)).toBeInTheDocument();
+    expect(within(staleRow).getByLabelText('x86host Disk I/O 읽기 256 KB/s, 쓰기 128 KB/s')).toBeInTheDocument();
+  });
+
+  it('keeps every device represented as the fleet grows', async () => {
+    const fleetSize = 50;
+    const largeFleet: AssetMetricsOverview = {
+      range: '15m',
+      summary: {
+        totalAssets: fleetSize,
+        observedAssets: fleetSize,
+        staleAssets: 0,
+        criticalAssets: fleetSize,
+        warningAssets: 0
+      },
+      assets: Array.from({ length: fleetSize }, (_, index) => ({
+        ...assetMetrics.assets[0],
+        assetUid: `asset-${index}`,
+        name: `asset-${index}`,
+        managementIp: `10.0.${Math.floor(index / 255)}.${index % 255}`
+      }))
+    };
+    const firstDetail: AssetMetricDetail = { ...nasDetail, asset: largeFleet.assets[0] };
+    mockFetch({
+      '/api/metrics/assets?range=15m': { body: largeFleet },
+      '/api/dashboards/agent': { body: agentDashboard },
+      '/api/agent/logs?range=15m&severity=ALL&limit=200': { body: [] },
+      '/api/traffic/interfaces?range=15m': { body: [] },
+      '/api/metrics/assets/asset-0?range=15m&bucket=auto': { body: firstDetail }
+    });
+
+    render(<OverviewView summary={summary} alerts={[]} />);
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(fleetSize + 1);
+    expect(within(table).getByRole('row', { name: 'asset-0 리소스 상태' })).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: `asset-${fleetSize - 1} 리소스 상태` })).toBeInTheDocument();
+    expect(screen.getByLabelText(`수집 장비 ${fleetSize}대, 전체 ${fleetSize}대`)).toBeInTheDocument();
   });
 
   it('falls back to registered assets when dashboard APIs fail', async () => {
     mockFetch({
-      '/api/metrics/assets?range=1h': { status: 500, body: {} },
+      '/api/metrics/assets?range=15m': { status: 500, body: {} },
       '/api/dashboards/agent': { status: 500, body: {} },
-      '/api/agent/logs?range=24h&severity=ALL&limit=200': { status: 500, body: {} },
-      '/api/traffic/interfaces?range=1h': { status: 500, body: {} },
-      '/api/metrics/assets/registered-only?range=1h&bucket=auto': { status: 500, body: {} }
+      '/api/agent/logs?range=15m&severity=ALL&limit=200': { status: 500, body: {} },
+      '/api/traffic/interfaces?range=15m': { status: 500, body: {} },
+      '/api/metrics/assets/registered-only?range=15m&bucket=auto': { status: 500, body: {} }
     });
 
     render(<OverviewView summary={summary} alerts={[]} assets={[registeredAsset]} />);
 
-    expect(await screen.findByText('일부 관제 정보를 불러오지 못했습니다. 마지막 정상 수집값을 유지합니다.')).toBeInTheDocument();
-    expect(screen.getAllByText('registered-only').length).toBeGreaterThan(0);
-    expect(screen.getByText('수집 데이터 없음')).toBeInTheDocument();
-    expect(screen.getByText('선택 장비의 시계열 일부를 불러오지 못했습니다.')).toBeInTheDocument();
+    expect(await screen.findByText('일부 관제 정보가 지연되고 있습니다. 마지막 정상 수집값을 유지합니다.')).toBeInTheDocument();
+    expect(screen.getByLabelText('수집 장비 0대, 전체 1대')).toBeInTheDocument();
+    const table = screen.getByRole('table');
+    const row = within(table).getByRole('row', { name: 'registered-only 리소스 상태' });
+    expect(within(row).getByLabelText('registered-only CPU 미수집')).toBeInTheDocument();
+    expect(within(row).getByLabelText('registered-only RAM 미수집')).toBeInTheDocument();
+    expect(within(row).getByLabelText('registered-only Disk I/O 미수집')).toBeInTheDocument();
+    expect(within(row).getByLabelText('registered-only Network I/O 미수집')).toBeInTheDocument();
   });
 });
 
@@ -229,9 +296,11 @@ const assetMetrics: AssetMetricsOverview = {
     staleAssets: 1,
     criticalAssets: 1,
     warningAssets: 1,
-    avgCpuUsagePct: 36.3,
-    totalNetworkInBps: 23500,
-    totalNetworkOutBps: 15200
+    avgCpuUsagePct: 35.4,
+    avgMemoryUsagePct: 34.8,
+    maxDiskIoUtilizationPct: 88.8,
+    totalNetworkInBps: 22000,
+    totalNetworkOutBps: 14000
   },
   assets: [
     {
@@ -249,10 +318,15 @@ const assetMetrics: AssetMetricsOverview = {
         cpuUsagePct: 92.1,
         memoryUsagePct: 71.4,
         diskUsagePct: 86.2,
+        diskReadBps: 1048576,
+        diskWriteBps: 2097152,
+        diskReadIops: 128,
+        diskWriteIops: 64,
         diskIoUtilizationPct: 88.8,
         temperatureCelsius: 82.4,
         networkInBps: 12000,
-        networkOutBps: 9000
+        networkOutBps: 9000,
+        interfaceErrorCount: 0
       },
       security: {
         openPorts: 21,
@@ -283,14 +357,20 @@ const assetMetrics: AssetMetricsOverview = {
       lastSeenAt: '2026-07-06T11:42:00Z',
       stale: true,
       health: 'warning',
-      sources: { registered: true, agent: true, traffic: true, observed: true },
+      sources: { registered: true, agent: true, traffic: true, diskIo: true, observed: true },
       metrics: {
         cpuUsagePct: 14.2,
         memoryUsagePct: 33.1,
         diskUsagePct: 52.0,
+        diskReadBps: 262144,
+        diskWriteBps: 131072,
+        diskReadIops: 16,
+        diskWriteIops: 8,
+        diskIoUtilizationPct: 35.5,
         temperatureCelsius: 83.0,
         networkInBps: 10000,
-        networkOutBps: 5000
+        networkOutBps: 5000,
+        interfaceErrorCount: 1
       },
       security: { openPorts: 20, failedServices: 0, firewallDisabled: 0, interfacesDown: 2 },
       signals: {
@@ -311,14 +391,20 @@ const assetMetrics: AssetMetricsOverview = {
       lastSeenAt: '2026-07-06T12:01:00Z',
       stale: false,
       health: 'healthy',
-      sources: { registered: true, agent: true, traffic: true, observed: true },
+      sources: { registered: true, agent: true, traffic: true, diskIo: true, observed: true },
       metrics: {
-        cpuUsagePct: 2.5,
-        memoryUsagePct: 5.3,
+        cpuUsagePct: 0,
+        memoryUsagePct: 0,
         diskUsagePct: 45,
+        diskReadBps: 0,
+        diskWriteBps: 0,
+        diskReadIops: 0,
+        diskWriteIops: 0,
+        diskIoUtilizationPct: 0,
         temperatureCelsius: 46.9,
-        networkInBps: 1500,
-        networkOutBps: 1200
+        networkInBps: 0,
+        networkOutBps: 0,
+        interfaceErrorCount: 0
       },
       security: { openPorts: 10, failedServices: 0, firewallDisabled: 0, interfacesDown: 0 },
       signals: {
@@ -349,6 +435,10 @@ const nasDetail: AssetMetricDetail = {
       { timestamp: '2026-07-06T11:50:00Z', value: 84 },
       { timestamp: '2026-07-06T12:00:00Z', value: 86.2 }
     ],
+    diskIo: [
+      { timestamp: '2026-07-06T11:50:00Z', readBps: 786432, writeBps: 1572864, readIops: 96, writeIops: 48, utilizationPct: 70 },
+      { timestamp: '2026-07-06T12:00:00Z', readBps: 1048576, writeBps: 2097152, readIops: 128, writeIops: 64, utilizationPct: 88.8 }
+    ],
     temperature: [
       { timestamp: '2026-07-06T11:50:00Z', value: 80.1 },
       { timestamp: '2026-07-06T12:00:00Z', value: 82.4 }
@@ -357,6 +447,18 @@ const nasDetail: AssetMetricDetail = {
       { timestamp: '2026-07-06T11:50:00Z', inBps: 9000, outBps: 7000 },
       { timestamp: '2026-07-06T12:00:00Z', inBps: 12000, outBps: 9000 }
     ]
+  }
+};
+
+const x86hostDetail: AssetMetricDetail = {
+  ...nasDetail,
+  asset: assetMetrics.assets[1],
+  series: {
+    cpu: [{ timestamp: '2026-07-06T11:42:00Z', value: 14.2 }],
+    memory: [{ timestamp: '2026-07-06T11:42:00Z', value: 33.1 }],
+    disk: [{ timestamp: '2026-07-06T11:42:00Z', value: 52 }],
+    diskIo: [{ timestamp: '2026-07-06T11:42:00Z', readBps: 262144, writeBps: 131072, readIops: 16, writeIops: 8, utilizationPct: 35.5 }],
+    network: [{ timestamp: '2026-07-06T11:42:00Z', inBps: 10000, outBps: 5000 }]
   }
 };
 

@@ -28,8 +28,13 @@ import (
 	"castrelyx/agent/internal/updater"
 )
 
-const agentVersion = "0.2.0"
+const agentVersion = "0.2.2"
 const renewBefore = 7 * 24 * time.Hour
+const identityCheckInterval = time.Hour
+const identityRetryBase = time.Minute
+const identityRetryMax = 15 * time.Minute
+
+var errIdentityRefreshRestart = errors.New("mTLS identity refreshed; service restart required")
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to agent config file")
@@ -102,7 +107,7 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 	ctx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ingestURL, err := ensureIdentity(ctx, cfg, certPaths)
+	identity, err := ensureIdentity(ctx, cfg, certPaths)
 	if err != nil {
 		return fmt.Errorf("ensure mTLS identity: %w", err)
 	}
@@ -145,9 +150,9 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 
 	var telemetrySender agentruntime.Sender
 	if cfg.IngestTransport == "tcp_mtls" {
-		telemetrySender, err = sender.NewTCPMTLS(cfg.TCPIngestAddr, tlsConfig)
+		telemetrySender, err = sender.NewTCPMTLSWithMaxIdle(cfg.TCPIngestAddr, tlsConfig, cfg.TCPIngestMaxIdle)
 	} else {
-		telemetrySender, err = sender.New(ingestURL, tlsConfig)
+		telemetrySender, err = sender.New(identity.IngestURL, tlsConfig)
 	}
 	if err != nil {
 		return fmt.Errorf("create sender: %w", err)
@@ -184,6 +189,8 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 		return err
 	}
 
+	restartRequired := make(chan string, 1)
+	identityRestartRequired := make(chan error, 1)
 	if fileManagerClient != nil {
 		go fileManagerClient.Run(ctx)
 	}
@@ -192,10 +199,10 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 		go runRemoteTaskLoop(ctx, remoteTaskClient, cfg.RemoteTaskInterval)
 	}
 	collectionSucceeded := make(chan struct{}, 1)
-	restartRequired := make(chan string, 1)
 	if agentUpdater != nil {
 		go runUpdaterLoop(ctx, agentUpdater, cfg.UpdateCheckInterval, collectionSucceeded, restartRequired, pendingApplyAtStartup)
 	}
+	go runIdentityMaintenanceLoop(ctx, cfg, certPaths, identity.RefreshDeferred, identityRestartRequired)
 
 	for {
 		if err := runtime.CollectOnce(ctx); err != nil {
@@ -237,6 +244,9 @@ func runAgent(parentCtx context.Context, configPath string, once bool) error {
 			stopTimer(timer)
 			log.Printf("%s; restarting", reason)
 			return nil
+		case restartErr := <-identityRestartRequired:
+			stopTimer(timer)
+			return restartErr
 		case <-timer.C:
 		}
 	}
@@ -452,69 +462,207 @@ func defaultConfigPath() string {
 	return "/etc/castrelyx/agent.yaml"
 }
 
-func ensureIdentity(ctx context.Context, cfg config.Config, paths tlsidentity.Paths) (string, error) {
+type identityBootstrap struct {
+	IngestURL       string
+	RefreshDeferred bool
+	MaterialChanged bool
+}
+
+type identityEnsurer func(context.Context, config.Config, tlsidentity.Paths) (identityBootstrap, error)
+
+type identityMaintenanceOptions struct {
+	Ensure        identityEnsurer
+	CheckInterval time.Duration
+	RetryBase     time.Duration
+	RetryMax      time.Duration
+}
+
+func ensureIdentity(ctx context.Context, cfg config.Config, paths tlsidentity.Paths) (identityBootstrap, error) {
+	if err := tlsidentity.RecoverEnrollment(paths); err != nil {
+		if errors.Is(err, tlsidentity.ErrEnrollmentArtifactCleanup) {
+			log.Printf("stale mTLS identity transaction artifact cleanup deferred: %v", err)
+		} else {
+			return identityBootstrap{}, fmt.Errorf("recover interrupted identity update: %w", err)
+		}
+	}
 	status, err := tlsidentity.CertificateStatus(paths, renewBefore)
 	if err != nil {
-		return "", err
+		return identityBootstrap{}, err
 	}
 	if !status.NeedsRenewal {
-		if metadata, err := tlsidentity.LoadMetadata(paths); err == nil && metadata.IngestURL != "" {
-			return metadata.IngestURL, nil
+		identityStatus, err := tlsidentity.ValidateClientIdentity(paths, cfg.AgentID, false)
+		if err != nil {
+			return identityBootstrap{}, fmt.Errorf("validate current client identity: %w", err)
 		}
-		return cfg.ManagerURL + "/api/agent/ingest", nil
+		ingestURL, err := identityIngestURL(cfg, paths, identityStatus.ExpiresAt, false)
+		if err != nil {
+			return identityBootstrap{}, err
+		}
+		return identityBootstrap{IngestURL: ingestURL}, nil
 	}
 
 	key, err := tlsidentity.EnsurePrivateKey(paths)
 	if err != nil {
-		return "", err
+		return identityBootstrap{}, err
 	}
 	hostname, _ := os.Hostname()
 	request, err := enrollmentRequest(cfg.AgentID, hostname, key)
 	if err != nil {
-		return "", err
+		return identityBootstrap{}, err
 	}
 
 	var response enrollment.Response
 	if status.Exists && time.Now().Before(status.ExpiresAt) {
+		if _, err := tlsidentity.ValidateClientIdentity(paths, cfg.AgentID, false); err != nil {
+			return identityBootstrap{}, fmt.Errorf("validate renewable client identity: %w", err)
+		}
 		currentTLS, err := tlsidentity.BuildTLSConfig(paths, cfg.TLSServerName)
 		if err != nil {
-			return "", err
+			return identityBootstrap{}, err
 		}
 		renewClient := enrollment.New(cfg.ManagerURL, "", cfg.TLSServerName, &http.Transport{TLSClientConfig: currentTLS})
+		defer renewClient.CloseIdleConnections()
 		response, err = renewClient.Renew(ctx, request)
 		if err != nil {
-			return "", err
+			return deferIdentityRefresh(cfg, paths, fmt.Errorf("renew client certificate: %w", err))
 		}
 	} else {
 		if cfg.EnrollmentToken == "" {
-			return "", fmt.Errorf("enrollment token is required when no valid client certificate exists")
+			return deferIdentityRefresh(cfg, paths, errors.New("enrollment token is required when no valid client certificate exists"))
 		}
 		transport, err := enrollmentTransport(paths, cfg.TLSServerName)
 		if err != nil {
-			return "", err
+			return identityBootstrap{}, err
 		}
 		enrollClient := enrollment.New(cfg.ManagerURL, cfg.EnrollmentToken, cfg.TLSServerName, transport)
+		defer enrollClient.CloseIdleConnections()
 		response, err = enrollClient.Enroll(ctx, request)
 		if err != nil {
-			return "", err
+			return deferIdentityRefresh(cfg, paths, fmt.Errorf("enroll client certificate: %w", err))
 		}
 	}
 
-	if err := tlsidentity.SaveCertificates(paths, []byte(response.CACertPEM), []byte(response.ClientCertPEM)); err != nil {
-		return "", err
-	}
 	expiresAt, err := time.Parse(time.RFC3339, response.ExpiresAt)
 	if err != nil {
-		return "", fmt.Errorf("parse enrollment expires_at: %w", err)
+		return identityBootstrap{}, fmt.Errorf("parse enrollment expires_at: %w", err)
 	}
-	if err := tlsidentity.SaveMetadata(paths, tlsidentity.Metadata{
+	metadata := tlsidentity.Metadata{
 		AgentID:   response.AgentID,
 		IngestURL: response.IngestURL,
 		ExpiresAt: expiresAt,
-	}); err != nil {
-		return "", err
 	}
-	return response.IngestURL, nil
+	commit, saveErr := tlsidentity.SaveEnrollment(paths, []byte(response.CACertPEM), []byte(response.ClientCertPEM), cfg.AgentID, metadata)
+	if !commit.Committed {
+		if saveErr == nil {
+			saveErr = errors.New("identity transaction did not commit")
+		}
+		return identityBootstrap{}, saveErr
+	}
+	if saveErr != nil {
+		log.Printf("mTLS identity committed with deferred artifact cleanup: %v", saveErr)
+	}
+	if !commit.Changed {
+		log.Print("mTLS identity refresh returned unchanged material; retrying with renewal backoff")
+		return identityBootstrap{IngestURL: response.IngestURL, RefreshDeferred: true}, nil
+	}
+	return identityBootstrap{IngestURL: response.IngestURL, MaterialChanged: commit.Changed}, nil
+}
+
+func identityIngestURL(cfg config.Config, paths tlsidentity.Paths, certificateExpiresAt time.Time, allowExpired bool) (string, error) {
+	defaultURL := cfg.ManagerURL + "/api/agent/ingest"
+	metadata, err := tlsidentity.LoadMetadata(paths)
+	if errors.Is(err, os.ErrNotExist) {
+		return defaultURL, nil
+	}
+	if err != nil {
+		log.Printf("identity metadata unavailable; using configured manager ingest URL: %v", err)
+		return defaultURL, nil
+	}
+	if err := tlsidentity.ValidateEnrollmentMetadata(metadata, cfg.AgentID, certificateExpiresAt, allowExpired); err != nil {
+		log.Printf("identity metadata rejected; using configured manager ingest URL: %v", err)
+		return defaultURL, nil
+	}
+	return metadata.IngestURL, nil
+}
+
+func deferIdentityRefresh(cfg config.Config, paths tlsidentity.Paths, refreshErr error) (identityBootstrap, error) {
+	// Loading the complete key pair and CA is the safety boundary for degraded
+	// startup. Network TLS remains strict; only local collection and spooling
+	// continue while renewal is retried in the background.
+	identityStatus, err := tlsidentity.ValidateClientIdentity(paths, cfg.AgentID, true)
+	if err != nil {
+		return identityBootstrap{}, errors.Join(refreshErr, fmt.Errorf("existing local mTLS identity is unusable: %w", err))
+	}
+	ingestURL, err := identityIngestURL(cfg, paths, identityStatus.ExpiresAt, true)
+	if err != nil {
+		return identityBootstrap{}, errors.Join(refreshErr, err)
+	}
+	log.Printf("mTLS identity refresh deferred; continuing local collection with the existing strict TLS identity: %v", refreshErr)
+	return identityBootstrap{IngestURL: ingestURL, RefreshDeferred: true}, nil
+}
+
+func runIdentityMaintenanceLoop(ctx context.Context, cfg config.Config, paths tlsidentity.Paths, initialDeferred bool, restartRequired chan<- error) {
+	runIdentityMaintenanceLoopWithOptions(ctx, cfg, paths, initialDeferred, restartRequired, identityMaintenanceOptions{
+		Ensure:        ensureIdentity,
+		CheckInterval: identityCheckInterval,
+		RetryBase:     identityRetryBase,
+		RetryMax:      identityRetryMax,
+	})
+}
+
+func runIdentityMaintenanceLoopWithOptions(ctx context.Context, cfg config.Config, paths tlsidentity.Paths, initialDeferred bool, restartRequired chan<- error, options identityMaintenanceOptions) {
+	if options.Ensure == nil {
+		options.Ensure = ensureIdentity
+	}
+	if options.CheckInterval <= 0 {
+		options.CheckInterval = identityCheckInterval
+	}
+	if options.RetryBase <= 0 {
+		options.RetryBase = identityRetryBase
+	}
+	if options.RetryMax < options.RetryBase {
+		options.RetryMax = options.RetryBase
+	}
+
+	backoff := options.RetryBase
+	delay := options.CheckInterval
+	if initialDeferred {
+		delay = backoff
+		backoff = minDuration(backoff*2, options.RetryMax)
+	}
+	for {
+		timer := time.NewTimer(jitter(delay, 0.1))
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return
+		case <-timer.C:
+		}
+
+		identity, err := options.Ensure(ctx, cfg, paths)
+		if err != nil {
+			log.Printf("mTLS identity maintenance failed: %v", err)
+			delay = backoff
+			backoff = minDuration(backoff*2, options.RetryMax)
+			continue
+		}
+		if identity.RefreshDeferred {
+			delay = backoff
+			backoff = minDuration(backoff*2, options.RetryMax)
+			continue
+		}
+
+		if identity.MaterialChanged {
+			select {
+			case restartRequired <- errIdentityRefreshRestart:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		backoff = options.RetryBase
+		delay = options.CheckInterval
+	}
 }
 
 func enrollmentTransport(paths tlsidentity.Paths, serverName string) (http.RoundTripper, error) {

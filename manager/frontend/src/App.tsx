@@ -5,17 +5,20 @@ import {
   FileText,
   Gauge,
   LogOut,
+  Menu,
   Network,
   Router,
   ScrollText,
   Server,
   ShieldCheck,
-  Settings
+  Settings,
+  UserCircle,
+  X
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, bootstrap as loadBootstrap } from './lib/api';
 import type { AlertRow, Asset, BootstrapState, DashboardSummary, Role } from './lib/types';
-import { menuItemsForRole, nextSurface } from './lib/uiModel';
+import { menuItemsForRole, nextSurface, type MenuItem } from './lib/uiModel';
 import { AgentDashboardView } from './views/AgentDashboardView';
 import { AgentLogsView } from './views/AgentLogsView';
 import { AlertsView } from './views/AlertsView';
@@ -43,6 +46,14 @@ const fallbackSummary: DashboardSummary = {
 
 const fallbackAlerts: AlertRow[] = [];
 const fallbackAssets: Asset[] = [];
+
+function focusViewHeadingAfterCommit() {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('.command-view-header h2, .overview-action-rail h2')?.focus();
+    });
+  });
+}
 
 const icons = {
   overview: Gauge,
@@ -137,9 +148,11 @@ export default function App({ bootstrap }: AppProps) {
       }
       popup?.close();
       setActive('logparser');
+      focusViewHeadingAfterCommit();
     } catch {
       popup?.close();
       setActive('logparser');
+      focusViewHeadingAfterCommit();
     }
   }
 
@@ -163,15 +176,18 @@ export default function App({ bootstrap }: AppProps) {
 
   const role = boot.user?.role ?? 'VIEWER';
   const menu = menuItemsForRole(role);
-  const activeView = menu.some((item) => item.id === active) ? active : 'overview';
+  const activeItem = menu.find((item) => item.id === active)
+    ?? menu.find((item) => item.id === 'overview')
+    ?? menu[0];
+  const activeView = activeItem?.id ?? 'overview';
 
   return (
-    <main className="app-shell">
+    <main className="app-shell operations-shell command-shell">
       <aside className="sidebar">
         <div className="brand">
           <Network aria-hidden="true" />
           <div>
-            <h1>Castrelyx Manager</h1>
+            <h1>Castrelyx</h1>
             <span>{role}</span>
           </div>
         </div>
@@ -196,14 +212,26 @@ export default function App({ bootstrap }: AppProps) {
           <span>로그아웃</span>
         </button>
       </aside>
-      <section className="content">
-        <TopBar username={boot.user?.username ?? 'viewer'} />
+      <section className={activeView === 'overview' ? 'content content-operations' : 'content command-content'}>
+        {activeView === 'overview' ? null : (
+          <TopBar
+            active={activeView}
+            currentLabel={activeItem?.label ?? 'Operations'}
+            navigationItems={menu}
+            role={role}
+            username={boot.user?.username ?? 'viewer'}
+            onNavigate={openMenuItem}
+          />
+        )}
         <ViewSwitch
           active={activeView}
           role={role}
+          username={boot.user?.username ?? 'viewer'}
+          navigationItems={menu}
           summary={summary}
           assets={assets}
           alerts={alerts}
+          onNavigate={openMenuItem}
           onCreateAsset={createAsset}
           onUpdateAsset={updateAsset}
           onDeleteAsset={deleteAsset}
@@ -215,23 +243,86 @@ export default function App({ bootstrap }: AppProps) {
   );
 }
 
-function TopBar({ username }: { username: string }) {
+function TopBar({
+  active,
+  currentLabel,
+  navigationItems,
+  role,
+  username,
+  onNavigate
+}: {
+  active: string;
+  currentLabel: string;
+  navigationItems: MenuItem[];
+  role: string;
+  username: string;
+  onNavigate: (id: string) => void;
+}) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  function navigate(itemId: string) {
+    setMobileNavOpen(false);
+    onNavigate(itemId);
+    if (itemId !== 'logparser') {
+      focusViewHeadingAfterCommit();
+    }
+  }
+
   return (
-    <header className="topbar">
-      <div>
-        <span>NMS Control Plane</span>
-        <strong>{username}</strong>
-      </div>
-    </header>
+    <>
+      <header className="topbar command-topbar">
+        <button
+          className="command-mobile-toggle"
+          type="button"
+          aria-controls="command-mobile-navigation"
+          aria-expanded={mobileNavOpen}
+          aria-label={mobileNavOpen ? '메뉴 닫기' : '메뉴 열기'}
+          onClick={() => setMobileNavOpen((open) => !open)}
+        >
+          {mobileNavOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
+        </button>
+        <div className="command-topbar-title">
+          <span>NMS Control Plane</span>
+          <strong>{currentLabel}</strong>
+        </div>
+        <div className="command-topbar-status" aria-label="Session context">
+          <span className="command-session-role">{role}</span>
+          <span className="command-plane-status">Manager Console</span>
+          <span className="command-user"><UserCircle size={17} aria-hidden="true" /> {username}</span>
+        </div>
+      </header>
+      {mobileNavOpen ? (
+        <nav id="command-mobile-navigation" className="command-mobile-nav" aria-label="모바일 메뉴">
+          {navigationItems.map((item) => {
+            const Icon = icons[item.id as keyof typeof icons];
+            return (
+              <button
+                className={active === item.id ? 'active' : ''}
+                key={item.id}
+                type="button"
+                aria-current={active === item.id ? 'page' : undefined}
+                onClick={() => navigate(item.id)}
+              >
+                <Icon size={18} aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      ) : null}
+    </>
   );
 }
 
 function ViewSwitch({
   active,
   role,
+  username,
+  navigationItems,
   summary,
   assets,
   alerts,
+  onNavigate,
   onCreateAsset,
   onUpdateAsset,
   onDeleteAsset,
@@ -240,9 +331,12 @@ function ViewSwitch({
 }: {
   active: string;
   role: Role;
+  username: string;
+  navigationItems: MenuItem[];
   summary: DashboardSummary;
   assets: Asset[];
   alerts: AlertRow[];
+  onNavigate: (id: string) => void;
   onCreateAsset: (payload: { name: string; assetType: string; managementIp?: string; location?: string; description?: string }) => Promise<Asset | void>;
   onUpdateAsset: (id: number, payload: { name: string; location?: string; description?: string }) => Promise<Asset | void>;
   onDeleteAsset: (id: number) => Promise<void>;
@@ -270,6 +364,16 @@ function ViewSwitch({
     case 'settings':
       return <SettingsView />;
     default:
-      return <OverviewView summary={summary} alerts={alerts} assets={assets} />;
+      return (
+        <OverviewView
+          summary={summary}
+          alerts={alerts}
+          assets={assets}
+          username={username}
+          navigationItems={navigationItems}
+          onNavigate={onNavigate}
+          onAcknowledgeAlert={onAcknowledgeAlert}
+        />
+      );
   }
 }

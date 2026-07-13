@@ -1,12 +1,15 @@
 package org.keinus.logparser.infrastructure.persistence.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.keinus.logparser.domain.model.mapping.FieldMapping;
 import org.keinus.logparser.domain.model.mapping.MappingConfiguration;
 import org.keinus.logparser.domain.model.mapping.MappingTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.time.Instant;
@@ -76,6 +79,29 @@ class MappingTemplateRepositoryTest {
         repository.deleteById("template-1");
 
         assertThat(repository.findById("template-1")).isEmpty();
+    }
+
+    @Test
+    void shouldReuseTransactionBoundConnectionWithSingleConnectionPool() {
+        try (HikariDataSource pool = new HikariDataSource()) {
+            pool.setDriverClassName("org.h2.Driver");
+            pool.setJdbcUrl("jdbc:h2:mem:template_tx_" + UUID.randomUUID().toString().replace("-", "")
+                    + ";DB_CLOSE_DELAY=-1;MODE=MySQL");
+            pool.setUsername("sa");
+            pool.setPassword("");
+            pool.setMaximumPoolSize(1);
+            pool.setConnectionTimeout(250);
+
+            SqliteMappingTemplateRepository transactionalRepository =
+                    new SqliteMappingTemplateRepository(pool, new ObjectMapper());
+            transactionalRepository.initTable();
+            TransactionTemplate transaction = new TransactionTemplate(new DataSourceTransactionManager(pool));
+
+            transaction.executeWithoutResult(status -> {
+                transactionalRepository.save(template("transactional", "Transactional"));
+                assertThat(transactionalRepository.findById("transactional")).isPresent();
+            });
+        }
     }
 
     private MappingTemplate template(String id, String name) {

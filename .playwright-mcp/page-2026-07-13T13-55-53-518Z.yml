@@ -1,0 +1,10 @@
+- main [ref=f2e3]:
+  - generic [ref=f2e4]:
+    - heading "Castrelyx Manager" [level=1] [ref=f2e8]
+    - generic [ref=f2e9]:
+      - text: 계정
+      - textbox "계정" [ref=f2e10]: admin
+    - generic [ref=f2e11]:
+      - text: 비밀번호
+      - textbox "비밀번호" [ref=f2e12]
+    - button "로그인" [ref=f2e13] [cursor=pointer]

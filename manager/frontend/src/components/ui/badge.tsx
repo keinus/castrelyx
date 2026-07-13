@@ -3,18 +3,18 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors',
+  'inline-flex items-center gap-1 rounded-[4px] border px-1.5 py-0.5 text-[10px] font-semibold leading-none tracking-[0.03em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-3 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
         default: 'border-transparent bg-primary text-primary-foreground',
-        secondary: 'border-transparent bg-secondary text-secondary-foreground',
-        destructive: 'border-transparent bg-destructive text-destructive-foreground',
-        outline: 'text-foreground',
-        success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-        warning: 'border-amber-200 bg-amber-50 text-amber-700',
-        critical: 'border-red-200 bg-red-50 text-red-700',
-        muted: 'border-slate-200 bg-slate-100 text-slate-600'
+        secondary: 'border-border bg-secondary text-secondary-foreground',
+        destructive: 'border-destructive bg-destructive text-destructive-foreground',
+        outline: 'border-border bg-background text-foreground',
+        success: 'border-[var(--status-green)]/30 bg-[var(--status-green)]/10 text-[var(--status-green)]',
+        warning: 'border-[var(--status-amber)]/30 bg-[var(--status-amber)]/10 text-[var(--status-amber)]',
+        critical: 'border-[var(--status-red)]/30 bg-[var(--status-red)]/10 text-[var(--status-red)]',
+        muted: 'border-[var(--status-muted)]/30 bg-[var(--status-muted)]/10 text-[var(--status-muted)]'
       }
     },
     defaultVariants: {

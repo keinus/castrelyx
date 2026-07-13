@@ -95,6 +95,245 @@ func TestTCPMTLSSenderWritesGzipLengthPrefixedBatchAndRequiresAck(t *testing.T) 
 	}
 }
 
+func TestTCPMTLSSenderReconnectsBeforeReusingIdleConnection(t *testing.T) {
+	caCert, caKey := testCA(t)
+	serverCert := testSignedCert(t, caCert, caKey, "127.0.0.1", x509.ExtKeyUsageServerAuth)
+	clientCert := testSignedCert(t, caCert, caKey, "agent-01", x509.ExtKeyUsageClientAuth)
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan struct{}, 2)
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		for connectionIndex := range 2 {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- struct{}{}
+			var lengthBytes [4]byte
+			if _, err := io.ReadFull(conn, lengthBytes[:]); err != nil {
+				_ = conn.Close()
+				return
+			}
+			payload := make([]byte, int(binary.BigEndian.Uint32(lengthBytes[:])))
+			if _, err := io.ReadFull(conn, payload); err != nil {
+				_ = conn.Close()
+				return
+			}
+			if _, err := conn.Write([]byte("{\"status\":\"accepted\"}\n")); err != nil {
+				_ = conn.Close()
+				return
+			}
+			if connectionIndex == 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				var probe [1]byte
+				_, _ = conn.Read(probe[:])
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	client, err := NewTCPMTLS(listener.Addr().String(), &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      pool,
+		ServerName:   "127.0.0.1",
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := envelope.NewBatch("agent", "agent-01", "default")
+	batch.Add(envelope.Item{Kind: "event", Type: "health", Key: "heartbeat"})
+
+	if err := client.Send(context.Background(), batch); err != nil {
+		t.Fatalf("first Send returned error: %v", err)
+	}
+	client.lastUsed = time.Now().Add(-client.maxIdle - time.Second)
+	if err := client.Send(context.Background(), batch); err != nil {
+		t.Fatalf("second Send returned error: %v", err)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not observe a replacement connection")
+	}
+	if len(accepted) != 2 {
+		t.Fatalf("accepted connections = %d, want 2", len(accepted))
+	}
+}
+
+func TestTCPMTLSSenderReusesConnectionForBurst(t *testing.T) {
+	caCert, caKey := testCA(t)
+	serverCert := testSignedCert(t, caCert, caKey, "127.0.0.1", x509.ExtKeyUsageServerAuth)
+	clientCert := testSignedCert(t, caCert, caKey, "agent-01", x509.ExtKeyUsageClientAuth)
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan struct{}, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer conn.Close()
+		accepted <- struct{}{}
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		for range 2 {
+			var lengthBytes [4]byte
+			if _, err := io.ReadFull(conn, lengthBytes[:]); err != nil {
+				serverDone <- err
+				return
+			}
+			payload := make([]byte, int(binary.BigEndian.Uint32(lengthBytes[:])))
+			if _, err := io.ReadFull(conn, payload); err != nil {
+				serverDone <- err
+				return
+			}
+			if _, err := conn.Write([]byte("{\"status\":\"accepted\"}\n")); err != nil {
+				serverDone <- err
+				return
+			}
+		}
+		serverDone <- nil
+	}()
+
+	client, err := NewTCPMTLS(listener.Addr().String(), &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      pool,
+		ServerName:   "127.0.0.1",
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := envelope.NewBatch("agent", "agent-01", "default")
+	batch.Add(envelope.Item{Kind: "event", Type: "health", Key: "heartbeat"})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Send(ctx, batch); err != nil {
+		t.Fatalf("first Send returned error: %v", err)
+	}
+	if err := client.Send(ctx, batch); err != nil {
+		t.Fatalf("second Send returned error: %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server failed to read burst: %v", err)
+	}
+	if len(accepted) != 1 {
+		t.Fatalf("accepted connections = %d, want 1", len(accepted))
+	}
+}
+
+func TestTCPMTLSSenderRetriesOnceWhenServerRetiredCachedConnection(t *testing.T) {
+	caCert, caKey := testCA(t)
+	serverCert := testSignedCert(t, caCert, caKey, "127.0.0.1", x509.ExtKeyUsageServerAuth)
+	clientCert := testSignedCert(t, caCert, caKey, "agent-01", x509.ExtKeyUsageClientAuth)
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	firstClosed := make(chan struct{})
+	accepted := make(chan struct{}, 2)
+	serverDone := make(chan error, 1)
+	go func() {
+		for connectionIndex := range 2 {
+			conn, err := listener.Accept()
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			accepted <- struct{}{}
+			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+			var lengthBytes [4]byte
+			if _, err := io.ReadFull(conn, lengthBytes[:]); err != nil {
+				_ = conn.Close()
+				serverDone <- err
+				return
+			}
+			payload := make([]byte, int(binary.BigEndian.Uint32(lengthBytes[:])))
+			if _, err := io.ReadFull(conn, payload); err != nil {
+				_ = conn.Close()
+				serverDone <- err
+				return
+			}
+			if _, err := conn.Write([]byte("{\"status\":\"accepted\"}\n")); err != nil {
+				_ = conn.Close()
+				serverDone <- err
+				return
+			}
+			_ = conn.Close()
+			if connectionIndex == 0 {
+				close(firstClosed)
+			}
+		}
+		serverDone <- nil
+	}()
+
+	client, err := NewTCPMTLS(listener.Addr().String(), &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      pool,
+		ServerName:   "127.0.0.1",
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := envelope.NewBatch("agent", "agent-01", "default")
+	batch.Add(envelope.Item{Kind: "event", Type: "health", Key: "heartbeat"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Send(ctx, batch); err != nil {
+		t.Fatalf("first Send returned error: %v", err)
+	}
+	<-firstClosed
+	if err := client.Send(ctx, batch); err != nil {
+		t.Fatalf("Send did not recover from a retired cached connection: %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server failed: %v", err)
+	}
+	if len(accepted) != 2 {
+		t.Fatalf("accepted connections = %d, want 2", len(accepted))
+	}
+}
+
 func TestTCPMTLSSenderReturnsErrorForNack(t *testing.T) {
 	caCert, caKey := testCA(t)
 	serverCert := testSignedCert(t, caCert, caKey, "127.0.0.1", x509.ExtKeyUsageServerAuth)

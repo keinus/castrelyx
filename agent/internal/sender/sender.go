@@ -27,6 +27,8 @@ var (
 	ErrCertificateExpired = errors.New("TLS peer certificate is expired")
 )
 
+const tcpMTLSOperationTimeout = 30 * time.Second
+
 type Client struct {
 	endpoint   string
 	httpClient *http.Client
@@ -36,8 +38,10 @@ type TCPMTLSClient struct {
 	addr      string
 	tlsConfig *tls.Config
 	timeout   time.Duration
+	maxIdle   time.Duration
 	mu        sync.Mutex
 	conn      *tls.Conn
+	lastUsed  time.Time
 }
 
 type DeliveryError struct {
@@ -86,6 +90,10 @@ func New(endpoint string, tlsConfig *tls.Config) (*Client, error) {
 }
 
 func NewTCPMTLS(addr string, tlsConfig *tls.Config) (*TCPMTLSClient, error) {
+	return NewTCPMTLSWithMaxIdle(addr, tlsConfig, tcpMTLSOperationTimeout/2)
+}
+
+func NewTCPMTLSWithMaxIdle(addr string, tlsConfig *tls.Config, maxIdle time.Duration) (*TCPMTLSClient, error) {
 	if addr == "" {
 		return nil, errors.New("tcp ingest address is required")
 	}
@@ -95,10 +103,17 @@ func NewTCPMTLS(addr string, tlsConfig *tls.Config) (*TCPMTLSClient, error) {
 	if tlsConfig == nil {
 		return nil, errors.New("tls config is required")
 	}
+	if maxIdle <= 0 || maxIdle >= tcpMTLSOperationTimeout {
+		return nil, fmt.Errorf("tcp ingest max idle must be positive and less than %s", tcpMTLSOperationTimeout)
+	}
 	return &TCPMTLSClient{
 		addr:      addr,
 		tlsConfig: tlsConfig,
-		timeout:   30 * time.Second,
+		timeout:   tcpMTLSOperationTimeout,
+		// The Logparser retires an idle client connection after its read
+		// timeout (30 seconds by default). Reconnect well before that boundary
+		// while still reusing the connection for a queued burst.
+		maxIdle: maxIdle,
 	}, nil
 }
 
@@ -143,9 +158,22 @@ func (c *TCPMTLSClient) Send(ctx context.Context, batch envelope.Batch) error {
 		return &DeliveryError{Code: "frame_too_large", Err: fmt.Errorf("encoded batch is %d bytes", len(payload)), permanent: true}
 	}
 
-	tlsConn, err := c.connection(ctx)
-	if err != nil {
+	reused, retryable, err := c.sendEncoded(ctx, payload)
+	if err == nil || !reused || !retryable {
 		return err
+	}
+
+	// The server may have retired a cached idle TLS connection immediately
+	// before this write. Retry exactly once on a fresh connection. Schema 1.1
+	// batch IDs let the Logparser deduplicate the rare ACK-loss case.
+	_, _, err = c.sendEncoded(ctx, payload)
+	return err
+}
+
+func (c *TCPMTLSClient) sendEncoded(ctx context.Context, payload []byte) (bool, bool, error) {
+	tlsConn, reused, err := c.connection(ctx)
+	if err != nil {
+		return false, false, err
 	}
 
 	if deadline, ok := ctx.Deadline(); ok {
@@ -158,30 +186,31 @@ func (c *TCPMTLSClient) Send(ctx context.Context, batch envelope.Batch) error {
 	binary.BigEndian.PutUint32(lengthPrefix[:], uint32(len(payload)))
 	if _, err := tlsConn.Write(lengthPrefix[:]); err != nil {
 		c.closeConnection()
-		return err
+		return reused, true, err
 	}
 	if _, err := tlsConn.Write(payload); err != nil {
 		c.closeConnection()
-		return err
+		return reused, true, err
 	}
 
 	line, err := bufio.NewReaderSize(io.LimitReader(tlsConn, 16*1024), 4096).ReadString('\n')
 	if err != nil {
 		c.closeConnection()
 		if errors.Is(err, io.EOF) {
-			return errors.New("tcp ingest closed before ack")
+			return reused, true, errors.New("tcp ingest closed before ack")
 		}
-		return err
+		return reused, true, err
 	}
 
 	var ack ackResponse
 	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &ack); err != nil {
 		c.closeConnection()
-		return fmt.Errorf("invalid tcp ingest ack: %w", err)
+		return reused, false, fmt.Errorf("invalid tcp ingest ack: %w", err)
 	}
+	c.lastUsed = time.Now()
 	switch ack.Status {
 	case "accepted":
-		return nil
+		return reused, false, nil
 	case "error":
 		if ack.Code == "" {
 			ack.Code = "unknown"
@@ -193,29 +222,32 @@ func (c *TCPMTLSClient) Send(ctx context.Context, batch envelope.Batch) error {
 		if permanent {
 			c.closeConnection()
 		}
-		return &DeliveryError{Code: ack.Code, Err: fmt.Errorf("tcp ingest nack: %s", ack.Message), permanent: permanent}
+		return reused, false, &DeliveryError{Code: ack.Code, Err: fmt.Errorf("tcp ingest nack: %s", ack.Message), permanent: permanent}
 	default:
 		c.closeConnection()
-		return fmt.Errorf("unexpected tcp ingest ack status %q", ack.Status)
+		return reused, false, fmt.Errorf("unexpected tcp ingest ack status %q", ack.Status)
 	}
 }
 
-func (c *TCPMTLSClient) connection(ctx context.Context) (*tls.Conn, error) {
+func (c *TCPMTLSClient) connection(ctx context.Context) (*tls.Conn, bool, error) {
 	if c.conn != nil {
-		return c.conn, nil
+		if c.maxIdle <= 0 || c.lastUsed.IsZero() || time.Since(c.lastUsed) < c.maxIdle {
+			return c.conn, true, nil
+		}
+		c.closeConnection()
 	}
 	dialer := &net.Dialer{Timeout: c.timeout, KeepAlive: 30 * time.Second}
 	rawConn, err := dialer.DialContext(ctx, "tcp", c.addr)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tlsConn := tls.Client(rawConn, c.tlsConfig)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		_ = rawConn.Close()
-		return nil, classifyTransportError(err)
+		return nil, false, classifyTransportError(err)
 	}
 	c.conn = tlsConn
-	return tlsConn, nil
+	return tlsConn, false, nil
 }
 
 func (c *TCPMTLSClient) closeConnection() {
@@ -223,6 +255,7 @@ func (c *TCPMTLSClient) closeConnection() {
 		_ = c.conn.Close()
 		c.conn = nil
 	}
+	c.lastUsed = time.Time{}
 }
 
 func encodeGzipBatch(batch envelope.Batch) ([]byte, error) {

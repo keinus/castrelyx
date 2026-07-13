@@ -36,6 +36,7 @@ type Config struct {
 	IngestTransport             string
 	TCPIngestAddr               string
 	TCPIngestServerName         string
+	TCPIngestMaxIdle            time.Duration
 	EnabledCollectors           []string
 	CollectorIntervals          map[string]time.Duration
 	CollectorFullIntervals      map[string]time.Duration
@@ -75,6 +76,7 @@ func Load(path string) (Config, error) {
 		MaxBatchBytes:               4 * 1024 * 1024,
 		MaxItemBytes:                512 * 1024,
 		IngestTransport:             "https",
+		TCPIngestMaxIdle:            15 * time.Second,
 		EnabledCollectors:           defaultCollectors(),
 		CollectorIntervals:          defaultCollectorIntervals(),
 		CollectorFullIntervals:      defaultCollectorFullIntervals(),
@@ -180,6 +182,12 @@ func Load(path string) (Config, error) {
 			cfg.TCPIngestAddr = value
 		case "tcp_ingest_server_name":
 			cfg.TCPIngestServerName = value
+		case "tcp_ingest_max_idle":
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid tcp_ingest_max_idle: %w", err)
+			}
+			cfg.TCPIngestMaxIdle = d
 		case "max_spool_record_bytes":
 			n, err := parseBytes(value)
 			if err != nil {
@@ -322,6 +330,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.SenderFlushInterval <= 0 {
 		return Config{}, errors.New("sender_flush_interval must be positive")
+	}
+	if cfg.TCPIngestMaxIdle <= 0 || cfg.TCPIngestMaxIdle >= 30*time.Second {
+		return Config{}, errors.New("tcp_ingest_max_idle must be positive and less than 30s")
 	}
 	if cfg.MaxSpoolRecord <= 0 || cfg.MaxSpoolBytes < cfg.MaxSpoolRecord || cfg.MaxSpoolRecords <= 0 || cfg.MaxSpoolAge <= 0 {
 		return Config{}, errors.New("spool limits must be positive and max_spool_bytes must cover one record")

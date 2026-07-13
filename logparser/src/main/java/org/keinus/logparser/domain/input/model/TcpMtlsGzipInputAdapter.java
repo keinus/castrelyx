@@ -318,6 +318,10 @@ public class TcpMtlsGzipInputAdapter extends InputAdapter {
                     frameLength = input.readInt();
                 } catch (java.io.EOFException e) {
                     return;
+                } catch (java.net.SocketTimeoutException e) {
+                    // Idle connection retirement is expected. The agent will
+                    // reconnect before sending its next batch.
+                    return;
                 }
                 if (frameLength <= 0 || frameLength > adapterConfig.maxFrameBytes) {
                     writeNack(output, "bad_frame", "invalid frame length");

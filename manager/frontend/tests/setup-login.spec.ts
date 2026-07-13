@@ -31,8 +31,8 @@ test('login flow enters the NMS console', async ({ page }) => {
   await page.getByLabel('비밀번호').fill('correct-password');
   await page.getByRole('button', { name: '로그인' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Castrelyx Manager' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '자산' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Castrelyx' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Assets' })).toBeVisible();
   await page.getByRole('button', { name: '로그아웃' }).click();
   await expect(page.getByRole('button', { name: '로그인' })).toBeVisible();
 });

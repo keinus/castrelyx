@@ -19,12 +19,12 @@ describe('manager UI model', () => {
   it('keeps viewer read-only while operator and admin can mutate operations', () => {
     expect(menuItemsForRole('ADMIN').map((item) => item.id)).toEqual([
       'overview',
-      'assets',
-      'traffic',
-      'agent',
-      'agentLogs',
-      'snmp',
       'alerts',
+      'traffic',
+      'assets',
+      'agentLogs',
+      'agent',
+      'snmp',
       'castrelsign',
       'logparser',
       'settings'

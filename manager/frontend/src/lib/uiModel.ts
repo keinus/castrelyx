@@ -14,16 +14,16 @@ export function nextSurface(state: Pick<BootstrapState, 'setupRequired' | 'authe
 
 export function menuItemsForRole(role: Role): MenuItem[] {
   const items = [
-    ['overview', '개요'],
-    ['assets', '자산'],
-    ['traffic', 'Traffic'],
-    ['agent', 'Agent'],
-    ['agentLogs', 'Agent Logs'],
+    ['overview', 'Operations'],
+    ['alerts', 'Incidents'],
+    ['traffic', 'Network'],
+    ['assets', 'Assets'],
+    ['agentLogs', 'Hunt'],
+    ['agent', 'Collection'],
     ['snmp', 'SNMP'],
-    ['alerts', '알림'],
     ['castrelsign', 'CastrelSign'],
     ['logparser', 'LogParser'],
-    ['settings', '설정']
+    ['settings', 'Settings']
   ] as const;
   if (role === 'VIEWER') {
     return items.filter(([id]) => id !== 'settings').map(([id, label]) => ({ id, label }));

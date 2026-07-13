@@ -122,6 +122,8 @@ Updater artifact도 기본 최대 128 MiB까지 temp file로 stream하면서 SHA
 
 이 probation은 replacement binary의 `main` 진입 이후에 동작한다. loader/CPU instruction/package-init 단계 실패까지 덮는 완전한 watchdog은 교체 대상 밖에 고정된 old-version launcher가 rollback marker와 health mark를 소유해야 하며, 현재 구조의 잔여 hardening 범위로 남는다.
 
+Client certificate 갱신은 collection/sender와 별도인 identity loop가 담당한다. 시작 시 원격 renewal/enrollment가 실패하더라도 기존 certificate/private key/CA의 key pair, configured agent CN, 명시적 clientAuth, 단일 self-signed P-256 CA chain과 root validity horizon을 모두 검증할 수 있을 때만 degraded startup을 허용한다. 따라서 peer 검증이나 client identity를 우회하지 않으며, 전송은 실패한 채 durable spool에 남고 host observation은 계속된다. Identity loop는 장애 시 1분부터 최대 15분까지 지수 backoff, 정상 시 1시간 cadence로 재검사한다. 새 응답은 staging에서 key/agent/usage/chain/expiry를 검증하고 CA 추가·교체는 명시적 trust migration 없이는 거부한다. CA, client certificate, metadata 각각의 restricted backup과 client-target 기반 transaction marker를 durable 기록한 뒤 원자 교체하며, commit 도중 중단되면 다음 시작에서 이전 bundle 전체를 복원한다. Process mutex와 canonical target별 OS file lock으로 service, 별도 `-once`, 동일 target을 공유하는 config의 key 생성/recovery/commit도 직렬화한다. 저장된 metadata의 agent/HTTPS/expiry가 certificate와 맞지 않으면 configured manager ingest URL을 사용한다. 검증·commit 성공 결과 뒤에만 sentinel 오류를 반환해 systemd/SCM failure policy로 재시작하며 sender·remote task·updater의 정적 TLS config를 새 identity로 일괄 교체한다.
+
 #### 3.1.5 `tcp_mtls` ingest
 
 `tcp_mtls`는 enrollment/certificate renewal은 CastrelSign HTTPS에 유지하고 telemetry만 Logparser의 TCP/mTLS endpoint로 보낸다. frame은 4-byte big-endian compressed length와 gzip JSON payload이며, newline JSON ACK/NACK를 받는다. Agent는 gzip `BestSpeed`를 사용하고 성공한 TLS connection을 재사용한다.
@@ -920,7 +922,7 @@ Windows host에서는 privacy와 민감정보 노출을 조심해야 한다. 기
 
 ### 7.1 Agent 구현 기본 수집 주기
 
-다음 값은 현재 설정 parser와 runtime에 구현된 기본값이다. `batch_interval` 30초는 scheduler wake-up 기준이며, 각 collector는 `collector_interval_<name>`이 지난 경우에만 실행된다.
+다음 값은 현재 설정 parser와 runtime에 구현된 기본값이다. `batch_interval` 30초는 scheduler wake-up 기준이며, 각 collector는 `collector_interval_<name>`이 지난 경우에만 실행된다. TCP/mTLS sender는 짧은 backlog burst에서는 연결을 재사용하되 `tcp_ingest_max_idle`(기본 15초)이 지나면 선제 재연결한다. 이 값은 Logparser input adapter의 `timeoutMs`보다 작게 유지해야 하며, 이미 서버가 닫은 재사용 연결은 동일 schema 1.1 batch를 새 연결로 한 번만 즉시 재시도한다.
 
 | Collector | 실행 주기 | Full snapshot 주기 | 비고 |
 |---|---:|---:|---|

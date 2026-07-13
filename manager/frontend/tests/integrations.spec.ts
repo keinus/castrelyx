@@ -26,7 +26,7 @@ test('CastrelSign and LogParser have dedicated navigation panels', async ({ page
   await expect(popup.getByText('RUNNING')).toBeVisible();
   await popup.close();
 
-  await page.getByRole('button', { name: '알림' }).click();
+  await page.getByRole('button', { name: 'Incidents' }).click();
   await expect(page.getByText('CPU threshold exceeded')).toBeVisible();
 });
 
@@ -46,7 +46,7 @@ test('operator can acknowledge and resolve alerts', async ({ page }) => {
   await mockApi(page, 'OPERATOR');
 
   await page.goto('/');
-  await page.getByRole('button', { name: '알림' }).click();
+  await page.getByRole('button', { name: 'Incidents' }).click();
   await page.getByRole('button', { name: '확인' }).click();
   await page.getByLabel('status').selectOption('ACKNOWLEDGED');
   await expect(page.getByRole('cell', { name: 'ACKNOWLEDGED' })).toBeVisible();

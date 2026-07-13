@@ -5,7 +5,7 @@ test('admin can reach asset metric dashboard and see create action', async ({ pa
   await mockApi(page, 'ADMIN');
 
   await page.goto('/');
-  await page.getByRole('button', { name: '자산' }).click();
+  await page.getByRole('button', { name: 'Assets' }).click();
 
   await expect(page.getByRole('heading', { name: '자산 관리' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '자산 관제 스캔' })).toBeVisible();
@@ -35,7 +35,7 @@ test('admin can create a manual asset from the asset view', async ({ page }) => 
   await mockApi(page, 'ADMIN');
 
   await page.goto('/');
-  await page.getByRole('button', { name: '자산' }).click();
+  await page.getByRole('button', { name: 'Assets' }).click();
   await page.getByLabel('자산 추가').click();
   await page.getByLabel('자산명').fill('branch-fw');
   await page.getByLabel('관리 IP').fill('10.0.0.2');
@@ -50,7 +50,7 @@ test('asset metrics can be queried by host identity and health', async ({ page }
   await mockApi(page, 'ADMIN');
 
   await page.goto('/');
-  await page.getByRole('button', { name: '자산' }).click();
+  await page.getByRole('button', { name: 'Assets' }).click();
   await page.getByLabel('자산 검색').fill('nas');
 
   await expect(assetRow(page, 'nas')).toBeVisible();
@@ -66,11 +66,11 @@ test('viewer can inspect assets but does not see mutation actions or settings', 
   await mockApi(page, 'VIEWER');
 
   await page.goto('/');
-  await page.getByRole('button', { name: '자산' }).click();
+  await page.getByRole('button', { name: 'Assets' }).click();
 
   await expect(assetRow(page, 'edge-router')).toBeVisible();
   await expect(page.getByLabel('자산 추가')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '설정' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings' })).toHaveCount(0);
 });
 
 function assetRow(page: import('@playwright/test').Page, name: string) {

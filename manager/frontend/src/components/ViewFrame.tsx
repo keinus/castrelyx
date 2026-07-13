@@ -8,10 +8,10 @@ type ViewFrameProps = {
 
 export function ViewFrame({ title, actions, children }: ViewFrameProps) {
   return (
-    <section className="view-frame">
-      <div className="view-header">
-        <h2>{title}</h2>
-        <div className="view-actions">{actions}</div>
+    <section className="view-frame command-view">
+      <div className="view-header command-view-header">
+        <h2 tabIndex={-1}>{title}</h2>
+        <div className="view-actions command-view-actions">{actions}</div>
       </div>
       {children}
     </section>

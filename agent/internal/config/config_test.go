@@ -137,6 +137,7 @@ tls_server_name: castrelsign.castrelyx.local
 ingest_transport: tcp_mtls
 tcp_ingest_addr: logparser.castrelyx.local:9443
 tcp_ingest_server_name: logparser.castrelyx.local
+tcp_ingest_max_idle: 8s
 `)
 
 	if err := os.WriteFile(path, input, 0o600); err != nil {
@@ -156,6 +157,28 @@ tcp_ingest_server_name: logparser.castrelyx.local
 	}
 	if cfg.TCPIngestServerName != "logparser.castrelyx.local" {
 		t.Fatalf("TCPIngestServerName = %q", cfg.TCPIngestServerName)
+	}
+	if cfg.TCPIngestMaxIdle != 8*time.Second {
+		t.Fatalf("TCPIngestMaxIdle = %s", cfg.TCPIngestMaxIdle)
+	}
+}
+
+func TestLoadRejectsTcpMTLSMaxIdleAtOperationTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	input := []byte(`
+manager_url: https://castrelsign.castrelyx.local
+enrollment_token: bootstrap-secret
+agent_id: agent-01
+ingest_transport: tcp_mtls
+tcp_ingest_addr: logparser.castrelyx.local:9443
+tcp_ingest_max_idle: 30s
+`)
+	if err := os.WriteFile(path, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "tcp_ingest_max_idle") {
+		t.Fatalf("Load error = %v, want tcp_ingest_max_idle validation error", err)
 	}
 }
 

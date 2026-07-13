@@ -8,6 +8,7 @@ tls_server_name: manager.example.com
 ingest_transport: tcp_mtls
 tcp_ingest_addr: logparser.example.com:9443
 tcp_ingest_server_name: logparser.example.com
+tcp_ingest_max_idle: 15s
 batch_interval: 30s
 sender_flush_interval: 2s
 spool_dir: ./spool
