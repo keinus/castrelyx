@@ -14,7 +14,7 @@ describe('App shell', () => {
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
     expect(await screen.findByRole('heading', { name: 'Castrelyx' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Action Rail Command Center' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Operations 커맨드 센터' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Network' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hunt' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();

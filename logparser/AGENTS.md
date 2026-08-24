@@ -61,7 +61,7 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 6. `ConfigValidationService.validateInputAdapter()`에 상세 검증을 추가합니다.
 7. SQLite trigger가 type을 제한하면 `V1__Initial_schema.sql`과 신규 migration을 함께 갱신합니다.
 8. 어댑터 단위 테스트, configuration model/service 테스트, factory 테스트가 필요하면 추가합니다.
-9. `README.md`, `readme/logparser-user-manual.md`, `readme/diagram_samples.md`를 현재 동작과 맞춥니다.
+9. `readme/logparser_schema.md`, `README.md`, `readme/logparser-user-manual.md`, `readme/diagram_samples.md`를 현재 동작과 맞춥니다.
 
 현재 입력 type/alias는 다음을 기준으로 합니다.
 
@@ -92,7 +92,7 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 6. `ConfigValidationService.validateOutputAdapter()`에 상세 검증을 추가합니다.
 7. SQLite trigger가 type을 제한하면 `V1__Initial_schema.sql`과 신규 migration을 함께 갱신합니다.
 8. 출력 어댑터 단위 테스트, configuration model/service 테스트, factory 테스트를 추가합니다.
-9. 사용자 문서와 다이어그램을 갱신합니다.
+9. `readme/logparser_schema.md`, 사용자 문서와 다이어그램을 갱신합니다.
 
 현재 출력 type/alias는 다음을 기준으로 합니다.
 
@@ -124,6 +124,16 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 - parser, transform, output 동작을 입력 어댑터 내부에 넣지 않습니다.
 - `messagetype`은 파이프라인 연결 키입니다. 새 흐름을 추가할 때 입력, parser, output의 message type 연결을 함께 검증합니다.
 - Live Tail은 dispatcher 단계에서 브로드캐스트합니다. output adapter 구현에 Live Tail 전용 처리를 넣지 않습니다.
+
+## 설정 argument 문서 지침
+
+`readme/logparser_schema.md`는 REST API로 저장하는 input, output, parser, transform, structured transform argument의 기준 문서입니다.
+
+- persistence entity의 실제 JSON property 이름과 `configParams` JSON 문자열 인코딩 방식을 우선 기록합니다.
+- metadata schema와 실제 런타임 소비 필드가 다르면 둘 다 적고, 운영 payload에는 런타임에서 동작하는 이름을 안내합니다.
+- 기본값은 annotation 표기가 아니라 실제 entity 초기값과 adapter/parser/transform 구현의 fallback을 확인합니다.
+- parser/transform type, field mapping target, alias, validation, DB trigger가 바뀌면 같은 변경에서 문서를 갱신합니다.
+- 저장만 되고 현재 런타임에서 사용되지 않는 필드도 삭제하지 말고 미사용 상태를 명시합니다.
 
 ## Schema mapping template 지침
 

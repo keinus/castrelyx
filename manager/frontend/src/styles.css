@@ -8893,14 +8893,14 @@ tr:last-child td {
   max-width: 780px;
   margin: 3px 0 0;
   color: var(--ar-muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
 .ar-fleet-range {
   flex: none;
   color: #91a4b1;
-  font: 9px "IBM Plex Mono", ui-monospace, monospace;
+  font: 11px "IBM Plex Mono", ui-monospace, monospace;
   white-space: nowrap;
 }
 
@@ -8928,7 +8928,7 @@ tr:last-child td {
 
 .ar-fleet-summary-card > span {
   color: #8195a3;
-  font: 9px "IBM Plex Mono", ui-monospace, monospace;
+  font: 12px "IBM Plex Mono", ui-monospace, monospace;
   letter-spacing: .04em;
   text-transform: uppercase;
 }
@@ -8945,14 +8945,14 @@ tr:last-child td {
 
 .ar-fleet-summary-card > strong small {
   color: #9aadb9;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
 .ar-fleet-summary-card > em {
   overflow: hidden;
   color: #748896;
-  font: 9px "IBM Plex Mono", ui-monospace, monospace;
+  font: 11px "IBM Plex Mono", ui-monospace, monospace;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8976,14 +8976,14 @@ tr:last-child td {
 
 .ar-fleet-summary-io > strong {
   color: #d8e4ea;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .ar-fleet-summary-io > strong b {
   display: inline-block;
   min-width: 22px;
   color: var(--ar-cyan);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -9008,7 +9008,7 @@ tr:last-child td {
   padding: 0 9px;
   border-right: 1px solid var(--ar-border);
   color: #8296a4;
-  font-size: 9px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -9018,7 +9018,7 @@ tr:last-child td {
 
 .ar-resource-matrix-counts strong {
   color: #dbe7ec;
-  font: 11px "IBM Plex Mono", ui-monospace, monospace;
+  font: 12px "IBM Plex Mono", ui-monospace, monospace;
   font-weight: 500;
 }
 
@@ -9075,7 +9075,7 @@ tr:last-child td {
   background: transparent;
   color: #869aa7;
   cursor: pointer;
-  font: 9px "IBM Plex Mono", ui-monospace, monospace;
+  font: 12px "IBM Plex Mono", ui-monospace, monospace;
   text-align: left;
 }
 
@@ -9148,12 +9148,12 @@ tr:last-child td {
 
 .ar-resource-asset-button > span {
   color: #9aadb9;
-  font: 9px "IBM Plex Mono", ui-monospace, monospace;
+  font: 11px "IBM Plex Mono", ui-monospace, monospace;
 }
 
 .ar-resource-asset-button > small {
   color: #6f8492;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .ar-resource-health {
@@ -9161,7 +9161,7 @@ tr:last-child td {
   align-items: center;
   gap: 6px;
   color: #9eb0bc;
-  font-size: 10px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -9235,7 +9235,7 @@ tr:last-child td {
 .ar-resource-io > span b {
   min-width: 18px;
   color: var(--ar-cyan);
-  font: 8px "IBM Plex Mono", ui-monospace, monospace;
+  font: 10px "IBM Plex Mono", ui-monospace, monospace;
   font-weight: 600;
 }
 
@@ -9243,7 +9243,7 @@ tr:last-child td {
   min-width: 0;
   overflow: hidden;
   color: #d8e3e9;
-  font: 10px "IBM Plex Mono", ui-monospace, monospace;
+  font: 12px "IBM Plex Mono", ui-monospace, monospace;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9253,7 +9253,7 @@ tr:last-child td {
   grid-column: 1 / -1;
   overflow: hidden;
   color: #718693;
-  font: 8px "IBM Plex Mono", ui-monospace, monospace;
+  font: 10px "IBM Plex Mono", ui-monospace, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9267,8 +9267,8 @@ tr:last-child td {
 }
 
 .ar-resource-missing small {
-  color: #718693;
-  font-size: 8px;
+  color: #8496a3;
+  font-size: 11px;
 }
 
 .ar-resource-freshness {
@@ -9280,13 +9280,13 @@ tr:last-child td {
 }
 
 .ar-resource-freshness > strong {
-  font: 10px "IBM Plex Mono", ui-monospace, monospace;
+  font: 11px "IBM Plex Mono", ui-monospace, monospace;
   font-weight: 500;
 }
 
 .ar-resource-freshness > small {
   color: #718693;
-  font: 8px "IBM Plex Mono", ui-monospace, monospace;
+  font: 10px "IBM Plex Mono", ui-monospace, monospace;
 }
 
 .ar-resource-freshness.stale > strong {
@@ -9345,7 +9345,7 @@ tr:last-child td {
   display: block;
   margin-bottom: 8px;
   color: #8195a3;
-  font: 8px "IBM Plex Mono", ui-monospace, monospace;
+  font: 11px "IBM Plex Mono", ui-monospace, monospace;
   text-transform: uppercase;
 }
 
@@ -9481,7 +9481,7 @@ tr:last-child td {
 
   .ar-resource-mobile-card-header > button span {
     color: #8296a4;
-    font: 9px "IBM Plex Mono", ui-monospace, monospace;
+    font: 10px "IBM Plex Mono", ui-monospace, monospace;
   }
 
   .ar-resource-mobile-card-grid {
@@ -9508,7 +9508,7 @@ tr:last-child td {
   .ar-resource-mobile-card-grid h4 {
     margin: 0 0 8px;
     color: #8195a3;
-    font: 8px "IBM Plex Mono", ui-monospace, monospace;
+    font: 9px "IBM Plex Mono", ui-monospace, monospace;
     font-weight: 500;
     text-transform: uppercase;
   }
@@ -9527,7 +9527,7 @@ tr:last-child td {
   }
 
   .ar-resource-mobile-card .ar-resource-io > span strong {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .ar-resource-mobile-card > footer {
@@ -9602,7 +9602,7 @@ tr:last-child td {
 
   .ar-fleet-range {
     margin-top: 2px;
-    font-size: 8px;
+    font-size: 9px;
   }
 
   .ar-resource-matrix-heading {
@@ -9633,7 +9633,7 @@ tr:last-child td {
   }
 
   .ar-fleet-summary-io > strong {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .ar-resource-mobile-cards {
@@ -9660,7 +9660,7 @@ tr:last-child td {
   }
 
   .ar-resource-mobile-card .ar-resource-io > small {
-    font-size: 7px;
+    font-size: 9px;
   }
 
   .ar-resource-matrix-footer {

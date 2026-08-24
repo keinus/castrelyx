@@ -4,6 +4,8 @@ Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프�
 
 설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다.
 
+전체 input/output adapter, parser, transform, structured transform 설정 argument와 실제 런타임 기본값은 [`readme/logparser_schema.md`](readme/logparser_schema.md)를 기준으로 합니다.
+
 ## 현재 구현 요약
 
 - 입력: File, TCP, TCP/TLS, UDP, HTTP, HTTPS, Kafka, SNMP, RabbitMQ, RabbitMQ/TLS, Castrelyx TCP mTLS gzip, Fake

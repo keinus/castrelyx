@@ -42,3 +42,5 @@ dlq/
 *.sqlite3
 *.log
 *.tmp
+
+_pwshot_tmp/
