@@ -15,6 +15,7 @@
     
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/css/pipeline-studio.css">
 
     <style>
         /* Fluid Typography: Adjust base size based on viewport */
@@ -117,7 +118,7 @@
     <aside class="w-20 lg:w-72 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 z-20 transition-all duration-300 ease-in-out">
         <!-- Logo -->
         <div class="h-16 flex items-center justify-center lg:justify-start lg:px-6 border-b border-slate-800 bg-slate-900 overflow-hidden whitespace-nowrap">
-            <span class="material-icons-round text-blue-500 text-3xl lg:mr-3 lg:text-2xl">hub</span>
+            <span class="material-icons-round text-blue-500 text-3xl lg:mr-3 lg:text-2xl">filter_none</span>
             <div class="hidden lg:block opacity-0 lg:opacity-100 transition-opacity duration-300">
                 <h1 class="font-bold text-white text-lg tracking-tight">LogParser</h1>
                 <p class="text-xs text-slate-500 font-mono">v0.2.3-stable</p>
@@ -126,6 +127,48 @@
 
         <!-- Navigation -->
         <nav class="flex-1 overflow-y-auto py-4 overflow-x-hidden">
+            <ul class="studio-primary-nav">
+                <li>
+                    <a href="#" onclick="App.switchView('pipeline-studio'); return false" id="nav-pipeline-studio" title="Pipelines">
+                        <span class="material-icons-round">account_tree</span>
+                        <span>Pipelines</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('live-tail'); return false" title="Live tail">
+                        <span class="material-icons-round">tune</span>
+                        <span>Live tail</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('overview'); return false" title="Activity">
+                        <span class="material-icons-round">data_usage</span>
+                        <span>Activity</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" onclick="App.switchView('settings'); return false" title="Settings">
+                        <span class="material-icons-round">settings</span>
+                        <span>Settings</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/markdown-viewer.html?path=README.md" title="Docs">
+                        <span class="material-icons-round">library_books</span>
+                        <span>Docs</span>
+                    </a>
+                </li>
+            </ul>
+
+            <div class="legacy-navigation">
+            <ul class="space-y-1 mb-6">
+                <li>
+                    <a href="#" onclick="App.switchView('pipeline-studio'); return false" class="flex items-center justify-center lg:justify-start lg:px-6 py-3 text-sm font-medium hover:bg-slate-800 transition-colors" title="Pipeline Studio">
+                        <span class="material-icons-round text-2xl lg:text-lg lg:mr-3">account_tree</span>
+                        <span class="hidden lg:inline-block">Pipeline Studio</span>
+                    </a>
+                </li>
+            </ul>
             <div class="hidden lg:block px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Observability</div>
             <!-- Mobile Divider -->
             <div class="lg:hidden h-px bg-slate-800 mx-4 mb-4"></div>
@@ -210,7 +253,13 @@
                     </a>
                 </li>
             </ul>
+            </div>
         </nav>
+
+        <div class="studio-sidebar-footer">
+            <a href="/markdown-viewer.html?path=README.md"><span class="material-icons-round">help_outline</span><span>Help</span></a>
+            <div class="studio-user-row"><span class="studio-user-avatar">SE</span><span class="studio-user-name">seceng</span><span class="material-icons-round">expand_less</span></div>
+        </div>
 
         <!-- Status Footer -->
         <div class="p-2 lg:p-4 border-t border-slate-800 bg-slate-900 overflow-hidden">
@@ -235,7 +284,7 @@
     <main class="flex-1 flex flex-col h-screen overflow-hidden bg-slate-950 relative">
         
         <!-- Top Header -->
-        <header class="h-14 lg:h-16 flex items-center justify-between px-4 lg:px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10 transition-all">
+        <header id="legacy-app-header" class="h-14 lg:h-16 flex items-center justify-between px-4 lg:px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10 transition-all">
             <div class="flex items-center overflow-hidden">
                 <h2 id="page-title" class="text-lg lg:text-xl font-semibold text-white mr-4 truncate">Overview</h2>
                 <div class="hidden sm:block h-6 w-px bg-slate-700 mx-2"></div>
@@ -267,8 +316,42 @@
             </div>
         </header>
 
+        <header id="studio-app-header" class="studio-app-header" aria-label="Pipeline Studio controls">
+            <div class="studio-header-title">Pipeline Studio</div>
+            <div class="studio-header-context">
+                <label class="studio-header-field">
+                    <span>Message type</span>
+                    <span class="studio-message-select-wrap">
+                        <select id="studio-message-type" aria-label="Current message type"></select>
+                        <span class="material-icons-round" aria-hidden="true">lock</span>
+                    </span>
+                </label>
+                <button id="studio-new-pipeline" class="studio-icon-button" type="button" title="Create message type" aria-label="Create message type">
+                    <span class="material-icons-round">add</span>
+                </button>
+                <div class="studio-header-divider"></div>
+                <div id="studio-draft-state" class="studio-draft-state"><span>Draft</span><i></i><strong>Valid</strong></div>
+            </div>
+            <div class="studio-header-actions">
+                <button id="studio-validate" class="studio-button studio-button-secondary" type="button">Validate</button>
+                <button id="studio-save-all" class="studio-button studio-button-primary" type="button">Save changes</button>
+                <button id="studio-deploy" class="studio-button studio-button-primary" type="button">Deploy</button>
+            </div>
+        </header>
+
         <!-- Scrollable Content Area -->
         <div id="content-area" class="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative scroll-smooth">
+            <section id="view-pipeline-studio" class="hidden studio-view" aria-label="Pipeline Studio">
+                <div class="studio-layout">
+                    <aside class="studio-pipeline-panel" aria-label="Pipeline stages">
+                        <div id="studio-pipeline-rail" class="studio-pipeline-rail"></div>
+                    </aside>
+                    <section class="studio-detail-panel">
+                        <div id="studio-settings" class="studio-settings-panel"></div>
+                        <div id="studio-test" class="studio-test-panel"></div>
+                    </section>
+                </div>
+            </section>
             
             <!-- OVERVIEW VIEW -->
             <div id="view-overview" class="space-y-4 lg:space-y-6">
@@ -670,6 +753,7 @@
     <!-- Scripts -->
     <script src="/js/api.js"></script>
     <script src="/js/mapper.js"></script>
+    <script src="/js/pipeline-studio.js"></script>
     <script src="/js/app.js"></script>
 </body>
 </html>

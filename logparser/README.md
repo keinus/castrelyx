@@ -2,7 +2,7 @@
 
 Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 parser, transform, structured mapping, output 단계를 연결합니다.
 
-설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다.
+설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 관리 UI의 기본 화면인 Pipeline Studio에서는 하나의 `messagetype`에 연결된 Input, Parser, Transform, Structured Transform, Output을 한 화면에서 생성·수정·삭제·테스트·배포할 수 있습니다.
 
 전체 input/output adapter, parser, transform, structured transform 설정 argument와 실제 런타임 기본값은 [`readme/logparser_schema.md`](readme/logparser_schema.md)를 기준으로 합니다.
 

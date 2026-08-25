@@ -44,3 +44,13 @@ dlq/
 *.tmp
 
 _pwshot_tmp/
+*.class
+manager/bin/main/static/
+manager/bin/test/
+manager/bin/
+.agents/
+.codex-audit/
+.codex-deploy/
+.mypy_cache/
+.playwright-mcp/
+*/bin/

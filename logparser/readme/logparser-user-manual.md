@@ -25,6 +25,7 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Parser -> Transfor
 
 | 메뉴 | 용도 |
 | --- | --- |
+| Pipelines | 하나의 `messagetype`에 연결된 Input → Parser → Transform → Structured Transform → Output을 한 화면에서 관리합니다. 기본 진입 화면입니다. |
 | Overview | pipeline 상태와 처리량을 확인합니다. |
 | Pipeline View | 입력, parser, transform, output 연결 상태를 봅니다. |
 | Live Tail | 처리 중 이벤트를 WebSocket으로 확인합니다. |
@@ -37,6 +38,30 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Parser -> Transfor
 | Actions | reload, validate, restart 같은 pipeline 작업을 실행합니다. |
 
 스크린샷 자산은 `readme/manual-assets/` 아래에 있으며, 화면의 예시 값은 실제 운영 설정과 다를 수 있습니다.
+
+### 2.1 Pipeline Studio
+
+Pipeline Studio는 상단에서 하나의 case-sensitive `Message type`을 선택한 뒤 다음 세 영역을 함께 보여줍니다.
+
+| 영역 | 동작 |
+| --- | --- |
+| 왼쪽 pipeline | Input부터 Output까지 top-down 순서, 활성 상태, 핵심 endpoint를 표시합니다. Parser와 Transform은 drag로 순서를 변경합니다. |
+| 오른쪽 설정 | 선택한 canonical type의 실제 REST argument를 편집합니다. `configParams`는 화면에서 펼쳐서 편집하고 저장할 때 JSON 문자열로 직렬화합니다. |
+| 아래쪽 테스트 | 현재 sample과 draft를 사용해 선택 단계 이후의 JSON, filter 판정, transform diff, structured 결과, output 직렬화와 destination을 표시합니다. |
+
+각 단계의 `Add`로 component를 생성하고, node를 선택해 수정·활성화·복제·삭제할 수 있습니다. Output의 Scope는 현재 message type 또는 `all`을 선택할 수 있습니다. `Save changes`는 현재 component 또는 mapping을 저장하고, `Deploy`는 저장 상태를 검증한 뒤 `/api/v1/pipeline/validate-and-reload`를 호출합니다.
+
+테스트 지원 범위는 backend 기능과 구분됩니다.
+
+| 단계 | 테스트 처리 |
+| --- | --- |
+| Parser | `/api/v1/parsers/test`를 사용합니다. |
+| Structured Transform | 임시 mapping을 포함해 `/api/v1/structure/simulate`를 사용합니다. |
+| Input | listener나 외부 연결을 열지 않고 수신 envelope와 source metadata를 preview합니다. 실제 연결 검사는 전용 API가 필요합니다. |
+| Transform | Filter, Group fields, Remove fields를 현재 draft에 대해 브라우저 메모리에서 simulation합니다. |
+| Output | 외부 전송 없이 직렬화된 payload와 destination summary까지만 preview합니다. |
+
+지원되지 않는 연결/전송 테스트는 성공으로 표시하지 않으며 결과 상태에 `previewed locally` 또는 `not attempted`를 명시합니다.
 
 ## 3. Overview와 Pipeline View
 

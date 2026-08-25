@@ -3,7 +3,7 @@ const App = (function() {
     
     // State
     const state = {
-        currentView: 'overview',
+        currentView: 'pipeline-studio',
         currentAdapterType: 'input', // input, parser, transform, output
         currentListFilter: 'all',    // all, enabled, disabled
         refreshInterval: null,
@@ -22,6 +22,13 @@ const App = (function() {
     // --- Initialization ---
     async function init() {
         console.log('Initializing LogParser UI...');
+
+        // Visual review mode keeps the studio self-contained and avoids contacting
+        // backend endpoints that are intentionally unavailable from a static preview.
+        if (new URLSearchParams(window.location.search).get('studioDemo') === '1') {
+            switchView('pipeline-studio');
+            return;
+        }
         
         // Initial Data Load
         await Promise.all([
@@ -29,6 +36,8 @@ const App = (function() {
             loadMetadata(),
             initChart()
         ]);
+
+        switchView('pipeline-studio');
         
         // Start Polling
         startPolling();
@@ -51,6 +60,7 @@ const App = (function() {
     // --- Navigation ---
     function switchView(viewName) {
         state.currentView = viewName;
+        document.body.classList.toggle('pipeline-studio-active', viewName === 'pipeline-studio');
         
         // Update Sidebar Active State
         document.querySelectorAll('aside nav a').forEach(el => {
@@ -75,6 +85,7 @@ const App = (function() {
         // Update Header Title
         const titles = {
             'overview': 'Overview',
+            'pipeline-studio': 'Pipeline Studio',
             'live-tail': 'Live Data Tail',
             'pipeline-visual': 'Pipeline Visualization',
             'inputs': 'Data Sources',
@@ -102,6 +113,8 @@ const App = (function() {
             
             if (viewName === 'overview') {
                 initChart(); // Re-render chart if canvas was destroyed/hidden
+            } else if (viewName === 'pipeline-studio') {
+                if (window.PipelineStudio) window.PipelineStudio.mount();
             } else if (viewName === 'pipeline-visual') {
                  renderTopology();
             } else if (viewName === 'schema-map') {
