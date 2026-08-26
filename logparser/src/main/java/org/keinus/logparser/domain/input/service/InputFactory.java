@@ -6,8 +6,6 @@ import java.util.Map;
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.input.model.InputAdapter;
 
-import lombok.extern.slf4j.Slf4j;
-
 /**
  * 설정에 따라 적절한 {@link InputAdapter} 구현체를 동적으로 생성하는 팩토리 클래스입니다.
  * <p>
@@ -21,7 +19,6 @@ import lombok.extern.slf4j.Slf4j;
  * @see org.keinus.logparser.domain.input.model.InputAdapter
  * @see org.keinus.logparser.domain.configuration.model.InputAdapterConfig
  */
-@Slf4j
 public class InputFactory {
 	private static final Map<String, String> TYPE_ALIASES = Map.ofEntries(
 		Map.entry("file", "FileInputAdapter"),
@@ -52,16 +49,30 @@ public class InputFactory {
 	 * @throws IllegalStateException 어댑터 생성 실패 시
 	 */
 	public static InputAdapter getInputAdapter(InputAdapterConfig config) {
+		if (config == null) {
+			throw new IllegalArgumentException("Input adapter config must not be null");
+		}
 		String type = normalizeType(config.getType());
+		if (type.isBlank()) {
+			throw new IllegalArgumentException("Input adapter type must not be blank");
+		}
 		try {
 			Class<?> cls = Class.forName("org.keinus.logparser.domain.input.model." + type);
 			return (InputAdapter) cls.getDeclaredConstructor(InputAdapterConfig.class).newInstance(config);
 		}
-		catch (InstantiationException | IllegalAccessException | IllegalArgumentException
-			| InvocationTargetException | NoSuchMethodException
-			| SecurityException | ClassNotFoundException e) {
-			log.error("Invalid Input Adapter. {}", e.getMessage());
-			throw new IllegalStateException("Invalid Input Adapter.");
+		catch (InvocationTargetException e) {
+			Throwable cause = e.getTargetException();
+			String detail = cause.getMessage() == null || cause.getMessage().isBlank()
+					? cause.getClass().getSimpleName()
+					: cause.getMessage();
+			throw new IllegalStateException(
+					"Failed to initialize input adapter " + type + ": " + detail,
+					cause);
+		}
+		catch (ReflectiveOperationException | ClassCastException | IllegalArgumentException | SecurityException e) {
+			throw new IllegalStateException(
+					"Unsupported or invalid input adapter type '" + config.getType() + "'",
+					e);
 		}
 	}
 

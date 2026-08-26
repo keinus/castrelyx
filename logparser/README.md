@@ -106,6 +106,8 @@ flowchart LR
 
 `messagetype`은 입력, parser, transform, output을 연결하는 주요 키입니다. 출력 어댑터의 `messagetype`을 비워 두면 `OutputFactory`가 `all`로 정규화하고, 모든 message type을 받을 수 있습니다.
 
+입력 또는 출력 어댑터의 초기화나 런타임 처리에서 예외가 발생하면 해당 어댑터만 DB에서 자동으로 `enabled=false`로 전환됩니다. 실패한 입력 스레드나 출력 sink는 런타임 등록에서 제거하고, 다른 어댑터와 파이프라인 처리는 계속합니다. 원인을 수정한 뒤 관리 UI나 enable API로 해당 어댑터를 다시 활성화해야 합니다.
+
 ## 입력 어댑터
 
 | Type | Alias | 필수 설정 | 설명 |

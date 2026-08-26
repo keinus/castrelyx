@@ -11,6 +11,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.keinus.logparser.domain.configuration.model.OutputAdapterConfig;
+import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.model.LogEvent;
 import org.keinus.logparser.domain.output.model.OutputAdapter;
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
@@ -35,6 +36,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ApplicationProperties appProp;
+    private final ConfigManagementService configManagementService;
 
     private final Map<String, CopyOnWriteArrayList<AdapterEntry>> specificAdapterMap = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<AdapterEntry> globalAdapterList = new CopyOnWriteArrayList<>();
@@ -132,8 +134,9 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
             Double averageLatencyMs
     ) {}
 
-    public OutputAdapterComponent(ApplicationProperties appProp) {
+    public OutputAdapterComponent(ApplicationProperties appProp, ConfigManagementService configManagementService) {
         this.appProp = appProp;
+        this.configManagementService = configManagementService;
     }
 
     @Override
@@ -228,6 +231,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
                     e.getMessage(),
                     e
             );
+            disableFailedAdapter(entry.adapter.getId(), entry.adapter.getClass().getSimpleName(), entry, e);
             return false;
         }
     }
@@ -261,6 +265,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
                     addAdapterInternal(adapter);
                 } catch (Exception e) {
                     log.error("Failed to initialize OutputAdapter {}: {}", config.getType(), e.getMessage(), e);
+                    disableFailedAdapter(config.getId(), config.getType(), null, e);
                 }
             }
         } finally {
@@ -326,6 +331,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
             log.info("Added output adapter: id={}, type={}", adapter.getId(), adapter.getClass().getSimpleName());
         } catch (Exception e) {
             log.error("Failed to add output adapter", e);
+            disableFailedAdapter(config.getId(), config.getType(), null, e);
         } finally {
             lock.writeLock().unlock();
         }
@@ -334,26 +340,11 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
     public void removeAdapter(Long id) {
         lock.writeLock().lock();
         try {
-            AdapterEntry entry = adapterIdMap.remove(id);
+            AdapterEntry entry = adapterIdMap.get(id);
             if (entry == null) {
                 return;
             }
-
-            String messageType = entry.adapter.getMessageType();
-            if (isGlobalType(messageType)) {
-                globalAdapterList.remove(entry);
-            } else {
-                List<AdapterEntry> entries = specificAdapterMap.get(messageType);
-                if (entries != null) {
-                    entries.remove(entry);
-                    if (entries.isEmpty()) {
-                        specificAdapterMap.remove(messageType);
-                    }
-                }
-            }
-
-            allAdapters.remove(entry);
-            entry.close();
+            removeAdapterEntryLocked(entry);
             log.info("Removed output adapter: id={}", id);
         } finally {
             lock.writeLock().unlock();
@@ -367,5 +358,54 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
 
     private String getDisplayMessageType(String messageType) {
         return messageType != null ? messageType : DEFAULT_MESSAGE_TYPE;
+    }
+
+    private void disableFailedAdapter(Long adapterId, String adapterType, AdapterEntry entry, Exception failure) {
+        if (entry != null) {
+            lock.writeLock().lock();
+            try {
+                removeAdapterEntryLocked(entry);
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }
+
+        if (adapterId == null) {
+            log.error("Cannot persist OFF state for failed output adapter {} because it has no id", adapterType);
+            return;
+        }
+
+        try {
+            configManagementService.disableOutputAdapter(adapterId);
+            log.warn("Output adapter id={} type={} was set to OFF after failure: {}",
+                    adapterId, adapterType, failure.getMessage());
+        } catch (Exception disableException) {
+            log.error("Failed to persist OFF state for output adapter id={} type={}",
+                    adapterId, adapterType, disableException);
+        }
+    }
+
+    private void removeAdapterEntryLocked(AdapterEntry entry) {
+        Long adapterId = entry.adapter.getId();
+        if (adapterId != null) {
+            adapterIdMap.remove(adapterId, entry);
+        }
+
+        String messageType = entry.adapter.getMessageType();
+        if (isGlobalType(messageType)) {
+            globalAdapterList.remove(entry);
+        } else {
+            List<AdapterEntry> entries = specificAdapterMap.get(messageType);
+            if (entries != null) {
+                entries.remove(entry);
+                if (entries.isEmpty()) {
+                    specificAdapterMap.remove(messageType);
+                }
+            }
+        }
+
+        if (allAdapters.remove(entry)) {
+            entry.close();
+        }
     }
 }

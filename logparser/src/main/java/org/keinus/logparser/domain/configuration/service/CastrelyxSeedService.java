@@ -3,6 +3,8 @@ package org.keinus.logparser.domain.configuration.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import lombok.RequiredArgsConstructor;
@@ -27,15 +29,16 @@ public class CastrelyxSeedService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final String SEED_MARKER_KEY = "castrelyx.seed.castrelyx-agent-clickhouse.version";
     public static final String MAPPING_SEED_MARKER_KEY = "castrelyx.seed.castrelyx-agent-mapping.version";
-    private static final String SEED_MARKER_VALUE = "4";
+    private static final String SEED_MARKER_VALUE = "6";
     private static final String MAPPING_SEED_MARKER_VALUE = "1";
     private static final String MESSAGE_TYPE = "castrelyx-agent-item";
     private static final String INPUT_TYPE = "TcpMtlsGzipInputAdapter";
     private static final String OUTPUT_TYPE = "ClickHouseOutputAdapter";
 
-    private static final String INPUT_CONFIG_PARAMS = """
-            {"keyStorePath":"/var/lib/castrelsign/certs/server.p12","keyStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","trustStorePath":"/var/lib/castrelsign/certs/truststore.p12","trustStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","maxFrameBytes":10485760,"maxConnections":32,"tlsReloadIntervalMs":5000,"ackMode":"queueAccepted"}
-            """;
+    private static final Path LEGACY_CONTAINER_DATA_DIR = Path.of("/var/lib/castrelsign");
+    private static final String LEGACY_KEY_STORE_PATH = "/var/lib/castrelsign/certs/server.p12";
+    private static final String LEGACY_TRUST_STORE_PATH = "/var/lib/castrelsign/certs/truststore.p12";
+    private static final String CASTRELSIGN_DATA_DIR_ENV = "CASTRELSIGN_DATA_DIR";
 
     private static final String OUTPUT_CONFIG_PARAMS = """
             {"endpointUrl":"http://clickhouse:8123","database":"castrelyx","usernameEnv":"CLICKHOUSE_USER","passwordEnv":"CLICKHOUSE_PASSWORD","tableName":"castrelyx_agent_events","batchSize":100,"flushIntervalMs":5000,"incompleteGroupTimeoutMs":30000,"maxPendingGroups":2048,"maxPendingItems":50000,"maxPendingBytes":67108864,"incompleteChunkDlqDir":"/root/logparser/data/incomplete-chunks","maxIncompleteChunkDlqBytes":134217728,"maxIncompleteChunkDlqRecords":1000,"autoCreateSchema":true}
@@ -106,7 +109,7 @@ public class CastrelyxSeedService {
                     .host("0.0.0.0")
                     .port(9443)
                     .enabled(true)
-                    .configParams(INPUT_CONFIG_PARAMS)
+                    .configParams(defaultInputConfigParams(resolveCastrelyxDataDir()))
                     .build();
             inputAdapterRepository.save(created);
             log.info("Seeded enabled Castrelyx TCP/mTLS gzip input adapter");
@@ -114,10 +117,11 @@ public class CastrelyxSeedService {
         }
 
         String merged = mergeMissingConfig(existing.getConfigParams(), INPUT_MIGRATION_DEFAULTS, INPUT_TYPE);
+        merged = migrateLegacyInputPaths(merged, resolveCastrelyxDataDir());
         if (!merged.equals(existing.getConfigParams())) {
             existing.setConfigParams(merged);
             inputAdapterRepository.save(existing);
-            log.info("Added missing Castrelyx TCP/mTLS safety defaults without replacing operator settings");
+            log.info("Updated Castrelyx TCP/mTLS defaults without replacing operator settings");
         }
     }
 
@@ -171,6 +175,73 @@ public class CastrelyxSeedService {
         } catch (Exception e) {
             throw new IllegalStateException(adapterType + " configParams is invalid; refusing destructive seed replacement", e);
         }
+    }
+
+    static Path resolveCastrelyxDataDir() {
+        String configuredDataDir = System.getenv(CASTRELSIGN_DATA_DIR_ENV);
+        if (configuredDataDir != null && !configuredDataDir.isBlank()) {
+            return Path.of(configuredDataDir).toAbsolutePath().normalize();
+        }
+        if (Files.isDirectory(LEGACY_CONTAINER_DATA_DIR)) {
+            return LEGACY_CONTAINER_DATA_DIR;
+        }
+        return Path.of(System.getProperty("user.home"), "castrelsign").toAbsolutePath().normalize();
+    }
+
+    static String defaultInputConfigParams(Path dataDir) {
+        ObjectNode config = OBJECT_MAPPER.createObjectNode();
+        Path certDir = dataDir.resolve("certs");
+        config.put("keyStorePath", certDir.resolve("server.p12").toString());
+        config.put("keyStorePasswordEnv", "CASTRELSIGN_KEYSTORE_PASSWORD");
+        config.put("trustStorePath", certDir.resolve("truststore.p12").toString());
+        config.put("trustStorePasswordEnv", "CASTRELSIGN_KEYSTORE_PASSWORD");
+        config.put("maxFrameBytes", 10_485_760);
+        config.put("maxConnections", 32);
+        config.put("tlsReloadIntervalMs", 5_000);
+        config.put("ackMode", "queueAccepted");
+        return config.toString();
+    }
+
+    static String migrateLegacyInputPaths(String currentConfig, Path resolvedDataDir) {
+        Path normalizedDataDir = resolvedDataDir.toAbsolutePath().normalize();
+        if (LEGACY_CONTAINER_DATA_DIR.equals(normalizedDataDir)) {
+            return currentConfig;
+        }
+        try {
+            JsonNode parsed = OBJECT_MAPPER.readTree(currentConfig);
+            if (!(parsed instanceof ObjectNode current)) {
+                throw new IllegalStateException(INPUT_TYPE + " configParams must be a JSON object");
+            }
+            Path certDir = normalizedDataDir.resolve("certs");
+            boolean changed = replaceLegacyPath(
+                    current,
+                    "keyStorePath",
+                    LEGACY_KEY_STORE_PATH,
+                    certDir.resolve("server.p12"));
+            changed |= replaceLegacyPath(
+                    current,
+                    "trustStorePath",
+                    LEGACY_TRUST_STORE_PATH,
+                    certDir.resolve("truststore.p12"));
+            return changed ? OBJECT_MAPPER.writeValueAsString(current) : currentConfig;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(INPUT_TYPE + " configParams is invalid; refusing path migration", e);
+        }
+    }
+
+    private static boolean replaceLegacyPath(
+            ObjectNode config,
+            String fieldName,
+            String legacyPath,
+            Path replacementPath) {
+        String currentValue = config.path(fieldName).asText("");
+        if (!legacyPath.equals(currentValue)) {
+            return false;
+        }
+        config.put(fieldName, replacementPath.toString());
+        return true;
     }
 
     private MappingConfiguration defaultAgentMapping() {

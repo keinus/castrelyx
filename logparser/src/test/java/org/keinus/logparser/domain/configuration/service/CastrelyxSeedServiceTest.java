@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,7 +54,7 @@ class CastrelyxSeedServiceTest {
         assertEquals("castrelyx-agent-item", inputCaptor.getValue().getMessagetype());
         assertEquals(9443, inputCaptor.getValue().getPort());
         assertTrue(inputCaptor.getValue().getEnabled());
-        assertTrue(inputCaptor.getValue().getConfigParams().contains("/var/lib/castrelsign/certs/server.p12"));
+        assertTrue(inputCaptor.getValue().getConfigParams().contains("server.p12"));
         assertTrue(inputCaptor.getValue().getConfigParams().contains("CASTRELSIGN_KEYSTORE_PASSWORD"));
         assertTrue(inputCaptor.getValue().getConfigParams().contains("\"maxConnections\":32"));
         assertTrue(inputCaptor.getValue().getConfigParams().contains("\"tlsReloadIntervalMs\":5000"));
@@ -179,13 +180,39 @@ class CastrelyxSeedServiceTest {
         verify(configSettingsRepository).save(argThat(entity ->
                 Long.valueOf(99L).equals(entity.getId())
                         && CastrelyxSeedService.SEED_MARKER_KEY.equals(entity.getConfigKey())
-                        && "4".equals(entity.getConfigValue())));
+                        && "6".equals(entity.getConfigValue())));
+    }
+
+    @Test
+    void buildsPortableInputPathsFromCastrelyxDataDirectory() throws Exception {
+        Path dataDir = Path.of("test-home", "castrelsign");
+
+        var config = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(CastrelyxSeedService.defaultInputConfigParams(dataDir));
+
+        assertEquals(dataDir.resolve("certs/server.p12").toString(), config.get("keyStorePath").asText());
+        assertEquals(dataDir.resolve("certs/truststore.p12").toString(), config.get("trustStorePath").asText());
+        assertEquals("CASTRELSIGN_KEYSTORE_PASSWORD", config.get("keyStorePasswordEnv").asText());
+    }
+
+    @Test
+    void migratesLegacyContainerPathsToResolvedLocalDataDirectory() throws Exception {
+        Path dataDir = Path.of("test-home", "castrelsign").toAbsolutePath().normalize();
+        String currentConfig = """
+                {"keyStorePath":"/var/lib/castrelsign/certs/server.p12","keyStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD","trustStorePath":"/var/lib/castrelsign/certs/truststore.p12","trustStorePasswordEnv":"CASTRELSIGN_KEYSTORE_PASSWORD"}
+                """;
+
+        var config = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(CastrelyxSeedService.migrateLegacyInputPaths(currentConfig, dataDir));
+
+        assertEquals(dataDir.resolve("certs/server.p12").toString(), config.get("keyStorePath").asText());
+        assertEquals(dataDir.resolve("certs/truststore.p12").toString(), config.get("trustStorePath").asText());
     }
 
     @Test
     void seedsDefaultAgentMappingWhenMarkerExistsButMappingIsMissing() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("6").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY))
                 .thenReturn(Optional.of(ConfigSettingsEntity.builder().build()));
         when(mappingRepository.findByMessageType("castrelyx-agent-item")).thenReturn(Optional.empty());
@@ -207,7 +234,7 @@ class CastrelyxSeedServiceTest {
     @Test
     void seedsDefaultAgentMappingWhenMissing() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("6").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(mappingRepository.findByMessageType("castrelyx-agent-item")).thenReturn(Optional.empty());
 
@@ -247,7 +274,7 @@ class CastrelyxSeedServiceTest {
     @Test
     void doesNotOverwriteExistingAgentMapping() {
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.SEED_MARKER_KEY))
-                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("4").build()));
+                .thenReturn(Optional.of(ConfigSettingsEntity.builder().configValue("6").build()));
         when(configSettingsRepository.findByConfigKey(CastrelyxSeedService.MAPPING_SEED_MARKER_KEY)).thenReturn(Optional.empty());
         when(mappingRepository.findByMessageType("castrelyx-agent-item"))
                 .thenReturn(Optional.of(new MappingConfiguration()));

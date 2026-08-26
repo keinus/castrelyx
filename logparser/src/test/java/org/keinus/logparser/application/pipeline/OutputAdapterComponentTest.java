@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.keinus.logparser.domain.configuration.model.OutputAdapterConfig;
+import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.model.LogEvent;
 import org.keinus.logparser.domain.output.model.OutputAdapter;
 import org.keinus.logparser.domain.output.model.OutputDeliveryException;
@@ -26,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,11 +36,14 @@ class OutputAdapterComponentTest {
     @Mock
     private ApplicationProperties appProp;
 
+    @Mock
+    private ConfigManagementService configManagementService;
+
     private OutputAdapterComponent outputAdapterComponent;
 
     @BeforeEach
     void setUp() {
-        outputAdapterComponent = new OutputAdapterComponent(appProp);
+        outputAdapterComponent = new OutputAdapterComponent(appProp, configManagementService);
     }
 
     @Test
@@ -257,8 +262,51 @@ class OutputAdapterComponentTest {
             assertEquals(1, summary.failed());
             assertTrue(summary.hasFailures());
             assertEquals(1, successCount.get(), "Second adapter should still receive the message");
+            verify(configManagementService).disableOutputAdapter(1L);
+            assertEquals(1, outputAdapterComponent.getAdapterMetrics().size());
+            assertEquals(2L, outputAdapterComponent.getAdapterMetrics().get(0).adapterId());
 
             outputAdapterComponent.close();
+        }
+    }
+
+    @Test
+    void testInitializationFailureDisablesOnlyFailedAdapter() throws Exception {
+        OutputAdapterConfig failingConfig = new OutputAdapterConfig();
+        failingConfig.setId(1L);
+        failingConfig.setType("FailingAdapter");
+        failingConfig.setMessagetype("test");
+        failingConfig.setEnabled(true);
+
+        OutputAdapterConfig workingConfig = new OutputAdapterConfig();
+        workingConfig.setId(2L);
+        workingConfig.setType("WorkingAdapter");
+        workingConfig.setMessagetype("test");
+        workingConfig.setEnabled(true);
+
+        when(appProp.getOutput()).thenReturn(List.of(failingConfig, workingConfig));
+        OutputAdapter workingAdapter = new OutputAdapter(Map.of("messagetype", "test", "id", "2")) {
+            @Override
+            public void send(LogEvent logEvent) {}
+
+            @Override
+            public void close() throws IOException {}
+        };
+
+        try (MockedStatic<OutputFactory> mockedFactory = mockStatic(OutputFactory.class)) {
+            mockedFactory.when(() -> OutputFactory.getOutputAdapter(any())).thenAnswer(invocation -> {
+                OutputAdapterConfig config = invocation.getArgument(0);
+                if (config.getId().equals(1L)) {
+                    throw new IllegalStateException("forced initialization failure");
+                }
+                return workingAdapter;
+            });
+
+            outputAdapterComponent.startPipeline();
+
+            verify(configManagementService).disableOutputAdapter(1L);
+            assertEquals(1, outputAdapterComponent.getAdapterMetrics().size());
+            assertEquals(2L, outputAdapterComponent.getAdapterMetrics().get(0).adapterId());
         }
     }
 

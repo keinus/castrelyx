@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
+import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.input.model.InputAdapter;
 import org.keinus.logparser.domain.input.service.InputFactory;
 import org.keinus.logparser.infrastructure.util.ThreadManager;
@@ -49,15 +50,17 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
     private final ThreadManager threadManager;
     private final MessageDispatcher dispatcher;
     private final ApplicationProperties appProp;
+    private final ConfigManagementService configManagementService;
 
     // 타임아웃 및 대기 시간 상수
     private static final long NO_DATA_SLEEP_MS = 100;  // 데이터가 없을 때 대기 시간
 
     public InputAdapterComponent(ApplicationProperties appProp, ThreadManager threadManager,
-            MessageDispatcher dispatcher) {
+            MessageDispatcher dispatcher, ConfigManagementService configManagementService) {
         this.appProp = appProp;
         this.threadManager = threadManager;
         this.dispatcher = dispatcher;
+        this.configManagementService = configManagementService;
     }
 
     private void initializeInputAdapters() {
@@ -96,6 +99,7 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
 
             } catch (Exception e) {
                 log.error("InputAdapter {} initialize error: {}", param.getMessagetype(), e.getMessage(), e);
+                disableFailedAdapter(param.getId(), param.getType(), null, e);
             }
         }
     }
@@ -140,6 +144,7 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
             threadManager.executeWithName(threadName, lamda);
         } catch (Exception ex) {
             log.error("Failed to start thread: {}", threadName, ex);
+            disableFailedAdapter(adapter.getId(), adapter.getClass().getSimpleName(), adapter, ex);
         }
     }
 
@@ -160,7 +165,7 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
             log.info("Added and started input adapter: id={}, type={}", adapter.getId(), adapter.getMessageType());
         } catch (Exception e) {
             log.error("Failed to add input adapter", e);
-            throw new RuntimeException("Failed to add input adapter", e);
+            disableFailedAdapter(config.getId(), config.getType(), null, e);
         }
     }
 
@@ -233,16 +238,14 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
                      Thread.currentThread().interrupt();
                      break;
                 }
-                // 예외 발생 시에도 스레드를 종료하지 않고 계속 실행
-                log.error("Error in input adapter loop for {}, continuing...",
+                log.error("Error in input adapter loop for {}; disabling the adapter and continuing the pipeline",
                         mInputAdapter.getClass().getSimpleName(), e);
-                try {
-                    Thread.sleep(1000); // 짧은 대기 후 재시도
-                } catch (InterruptedException ie) {
-                    log.info("Input adapter thread interrupted during error sleep, stopping: {}", mInputAdapter.getClass().getSimpleName());
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+                disableFailedAdapter(
+                        mInputAdapter.getId(),
+                        mInputAdapter.getClass().getSimpleName(),
+                        mInputAdapter,
+                        e);
+                break;
             }
         }
 
@@ -283,5 +286,33 @@ public class InputAdapterComponent implements ApplicationListener<ApplicationRea
 
     private String getThreadName(InputAdapter adapter) {
         return INPUT_THREAD_PREFIX + adapter.getId() + "-" + adapter.getMessageType();
+    }
+
+    private void disableFailedAdapter(Long adapterId, String adapterType, InputAdapter adapter, Exception failure) {
+        if (adapter != null) {
+            if (adapterId != null) {
+                adapterMap.remove(adapterId, adapter);
+            }
+            try {
+                adapter.close();
+            } catch (Exception closeException) {
+                log.warn("Failed to close disabled input adapter id={}: {}",
+                        adapterId, closeException.getMessage(), closeException);
+            }
+        }
+
+        if (adapterId == null) {
+            log.error("Cannot persist OFF state for failed input adapter {} because it has no id", adapterType);
+            return;
+        }
+
+        try {
+            configManagementService.disableInputAdapter(adapterId);
+            log.warn("Input adapter id={} type={} was set to OFF after failure: {}",
+                    adapterId, adapterType, failure.getMessage());
+        } catch (Exception disableException) {
+            log.error("Failed to persist OFF state for input adapter id={} type={}",
+                    adapterId, adapterType, disableException);
+        }
     }
 }

@@ -21,6 +21,8 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Parser -> Transfor
 
 `messagetype`은 입력, parser, transform, output을 연결하는 키입니다. 출력 어댑터의 `messagetype`을 비우면 runtime 생성 시 `all`로 정규화되어 모든 message type을 받을 수 있습니다.
 
+입력 또는 출력 어댑터가 초기화나 런타임 처리 중 예외를 발생시키면 Logparser는 그 어댑터만 자동으로 OFF(`enabled=false`) 처리합니다. 실패한 어댑터는 현재 런타임에서도 제거되며 다른 어댑터와 파이프라인은 계속 동작합니다. 설정이나 외부 연결 문제를 해결한 다음 Sources 또는 Destinations 화면에서 다시 활성화합니다.
+
 ## 2. 화면 구성
 
 | 메뉴 | 용도 |

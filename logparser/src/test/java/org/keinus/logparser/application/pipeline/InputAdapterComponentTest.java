@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
+import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.input.model.InputAdapter;
 import org.keinus.logparser.domain.input.service.InputFactory;
 import org.keinus.logparser.domain.model.LogEvent;
@@ -37,6 +38,9 @@ class InputAdapterComponentTest {
     @Mock
     private MessageDispatcher messageDispatcher;
 
+    @Mock
+    private ConfigManagementService configManagementService;
+
     @Test
     void startPipelineRebuildsRegistryWithoutKeepingStaleAdapters() throws Exception {
         InputAdapterConfig config1 = config(1L, "alpha");
@@ -44,7 +48,8 @@ class InputAdapterComponentTest {
 
         TestInputAdapter adapter1 = new TestInputAdapter(config1);
         TestInputAdapter adapter2 = new TestInputAdapter(config2);
-        InputAdapterComponent component = new InputAdapterComponent(appProp, threadManager, messageDispatcher);
+        InputAdapterComponent component = new InputAdapterComponent(
+                appProp, threadManager, messageDispatcher, configManagementService);
 
         when(appProp.getInput())
                 .thenReturn(List.of(config1))
@@ -80,7 +85,8 @@ class InputAdapterComponentTest {
         InputAdapterConfig config = config(10L, "alpha");
 
         TestInputAdapter adapter = new TestInputAdapter(config);
-        InputAdapterComponent component = new InputAdapterComponent(appProp, threadManager, messageDispatcher);
+        InputAdapterComponent component = new InputAdapterComponent(
+                appProp, threadManager, messageDispatcher, configManagementService);
         when(appProp.getInput()).thenReturn(List.of(config));
 
         try (MockedStatic<InputFactory> mockedFactory = mockStatic(InputFactory.class)) {
@@ -95,6 +101,59 @@ class InputAdapterComponentTest {
         }
     }
 
+    @Test
+    void initializationFailureDisablesOnlyFailedAdapterAndStartsRemainingAdapters() throws Exception {
+        InputAdapterConfig failingConfig = config(1L, "failing");
+        InputAdapterConfig workingConfig = config(2L, "working");
+        TestInputAdapter workingAdapter = new TestInputAdapter(workingConfig);
+        InputAdapterComponent component = new InputAdapterComponent(
+                appProp, threadManager, messageDispatcher, configManagementService);
+        when(appProp.getInput()).thenReturn(List.of(failingConfig, workingConfig));
+
+        try (MockedStatic<InputFactory> mockedFactory = mockStatic(InputFactory.class)) {
+            mockedFactory.when(() -> InputFactory.getInputAdapter(any())).thenAnswer(invocation -> {
+                InputAdapterConfig config = invocation.getArgument(0);
+                if (config.getId().equals(1L)) {
+                    throw new IllegalStateException("forced initialization failure");
+                }
+                return workingAdapter;
+            });
+
+            component.startPipeline();
+
+            verify(configManagementService).disableInputAdapter(1L);
+            assertEquals(Set.of(2L), component.getRegisteredAdapterIds());
+            verify(threadManager).executeWithName(eq("InputAdapter-2-working"), any());
+        }
+    }
+
+    @Test
+    void runtimeFailureDisablesAdapterAndStopsItsLoop() throws Exception {
+        InputAdapterConfig failingConfig = config(3L, "runtime-failure");
+        TestInputAdapter failingAdapter = new TestInputAdapter(failingConfig) {
+            @Override
+            public LogEvent run() {
+                throw new IllegalStateException("forced runtime failure");
+            }
+        };
+        InputAdapterComponent component = new InputAdapterComponent(
+                appProp, threadManager, messageDispatcher, configManagementService);
+        when(appProp.getInput()).thenReturn(List.of(failingConfig));
+        org.mockito.ArgumentCaptor<Runnable> runnableCaptor = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+
+        try (MockedStatic<InputFactory> mockedFactory = mockStatic(InputFactory.class)) {
+            mockedFactory.when(() -> InputFactory.getInputAdapter(any())).thenReturn(failingAdapter);
+            component.startPipeline();
+            verify(threadManager).executeWithName(eq("InputAdapter-3-runtime-failure"), runnableCaptor.capture());
+
+            runnableCaptor.getValue().run();
+
+            verify(configManagementService).disableInputAdapter(3L);
+            assertEquals(0, component.getRegisteredAdapterCount());
+            assertTrue(failingAdapter.closed.get());
+        }
+    }
+
     private InputAdapterConfig config(Long id, String messageType) {
         InputAdapterConfig config = new InputAdapterConfig();
         config.setId(id);
@@ -104,7 +163,7 @@ class InputAdapterComponentTest {
         return config;
     }
 
-    private static final class TestInputAdapter extends InputAdapter {
+    private static class TestInputAdapter extends InputAdapter {
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private TestInputAdapter(InputAdapterConfig config) throws IOException {
