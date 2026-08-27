@@ -10,6 +10,8 @@ import org.keinus.logparser.domain.model.mapping.MappingConfiguration;
 import org.keinus.logparser.infrastructure.persistence.entity.*;
 import org.keinus.logparser.infrastructure.persistence.repository.*;
 import org.keinus.logparser.interfaces.exception.ConfigNotFoundException;
+import org.keinus.logparser.interfaces.exception.ConfigConflictException;
+import org.keinus.logparser.interfaces.dto.request.ProcessingStepOrderRequest;
 import org.keinus.logparser.interfaces.dto.response.PipelineTopologyDto;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -121,6 +123,7 @@ public class ConfigManagementService {
 
     public ParserEntity createParser(ParserEntity entity) {
         log.info("Creating parser: type={}, messagetype={}", entity.getType(), entity.getMessagetype());
+        normalizeParser(entity);
         assertValid("Parser", validationService.validateParser(entity));
         ParserEntity saved = parserRepository.save(entity);
         eventPublisher.publishEvent(new ParserChangedEvent(this, ParserChangedEvent.ChangeType.CREATED, convertToConfig(saved)));
@@ -132,6 +135,7 @@ public class ConfigManagementService {
         ParserEntity existing = getParser(id);
         entity.setId(existing.getId());
         entity.setVersion(existing.getVersion());
+        normalizeParser(entity);
         assertValid("Parser", validationService.validateParser(entity));
         ParserEntity saved = parserRepository.save(entity);
         eventPublisher.publishEvent(new ParserChangedEvent(this, ParserChangedEvent.ChangeType.UPDATED, convertToConfig(saved)));
@@ -172,6 +176,7 @@ public class ConfigManagementService {
         log.info("Updating parser priority: id={}, newPriority={}", id, newPriority);
         ParserEntity entity = getParser(id);
         entity.setPriority(newPriority);
+        normalizeParser(entity);
         ParserEntity saved = parserRepository.save(entity);
         eventPublisher.publishEvent(new ParserChangedEvent(this, ParserChangedEvent.ChangeType.PRIORITY_CHANGED, convertToConfig(saved)));
         return saved;
@@ -245,6 +250,71 @@ public class ConfigManagementService {
     @Transactional(readOnly = true)
     public List<TransformEntity> getEnabledTransforms() {
         return transformRepository.findByEnabledTrue();
+    }
+
+    @Transactional
+    public void reorderProcessingSteps(String messageType, ProcessingStepOrderRequest request) {
+        if (messageType == null || messageType.isBlank() || request == null || request.getSteps() == null) {
+            throw new IllegalArgumentException("messageType and steps are required");
+        }
+
+        List<ParserEntity> parsers = parserRepository.findByMessagetype(messageType);
+        List<TransformEntity> transforms = transformRepository.findByMessagetype(messageType);
+        int expectedCount = parsers.size() + transforms.size();
+        if (request.getSteps().size() != expectedCount) {
+            throw new ConfigConflictException("PROCESSING_STEPS",
+                    "The submitted step list does not match the current pipeline");
+        }
+
+        Map<String, ParserEntity> parserById = parsers.stream()
+                .collect(java.util.stream.Collectors.toMap(entity -> String.valueOf(entity.getId()), entity -> entity));
+        Map<String, TransformEntity> transformById = transforms.stream()
+                .collect(java.util.stream.Collectors.toMap(entity -> String.valueOf(entity.getId()), entity -> entity));
+        java.util.Set<String> seen = new java.util.HashSet<>();
+
+        int priority = 10;
+        for (ProcessingStepOrderRequest.StepRef ref : request.getSteps()) {
+            if (ref == null || ref.getKind() == null || ref.getId() == null) {
+                throw new ConfigConflictException("PROCESSING_STEPS", "Every step requires kind and id");
+            }
+            String kind = ref.getKind().trim().toUpperCase(java.util.Locale.ROOT);
+            String key = kind + ":" + ref.getId();
+            if (!seen.add(key)) {
+                throw new ConfigConflictException("PROCESSING_STEPS", "Duplicate step: " + key);
+            }
+
+            if ("PARSER".equals(kind)) {
+                ParserEntity parser = parserById.get(String.valueOf(ref.getId()));
+                if (parser == null) {
+                    throw new ConfigConflictException("PROCESSING_STEPS", "Parser does not belong to message type");
+                }
+                parser.setPriority(priority);
+            } else if ("TRANSFORM".equals(kind)) {
+                TransformEntity transform = transformById.get(String.valueOf(ref.getId()));
+                if (transform == null) {
+                    throw new ConfigConflictException("PROCESSING_STEPS", "Transform does not belong to message type");
+                }
+                transform.setPriority(priority);
+            } else {
+                throw new ConfigConflictException("PROCESSING_STEPS", "Unsupported step kind: " + ref.getKind());
+            }
+            priority += 10;
+        }
+
+        if (seen.size() != expectedCount) {
+            throw new ConfigConflictException("PROCESSING_STEPS",
+                    "The submitted step list is missing one or more current steps");
+        }
+
+        parserRepository.saveAll(parsers);
+        transformRepository.saveAll(transforms);
+        if (!parsers.isEmpty()) {
+            eventPublisher.publishEvent(new ParserChangedEvent(
+                    this, ParserChangedEvent.ChangeType.PRIORITY_CHANGED, parsers.get(0).getId()));
+        } else if (!transforms.isEmpty()) {
+            eventPublisher.publishEvent(new TransformChangedEvent(
+                    this, TransformChangedEvent.ChangeType.PRIORITY_CHANGED, transforms.get(0).getId()));
+        }
     }
 
     // ==================== OutputAdapter Management ====================
@@ -411,7 +481,11 @@ public class ConfigManagementService {
 
         // Sort Processing by priority
         topologyMap.values().forEach(dto -> 
-            dto.getProcessing().sort(Comparator.comparingInt(s -> s.getPriority() != null ? s.getPriority() : 999))
+            dto.getProcessing().sort(Comparator
+                    .comparing((PipelineTopologyDto.PipelineStageDto stage) ->
+                            stage.getPriority() != null ? stage.getPriority() : Integer.MAX_VALUE)
+                    .thenComparing(stage -> "PARSER".equals(stage.getKind()) ? 0 : 1)
+                    .thenComparing(stage -> stage.getId() != null ? stage.getId() : Long.MAX_VALUE))
         );
 
         // 5. Outputs
@@ -459,6 +533,8 @@ public class ConfigManagementService {
                 .name(entity.getType())
                 .detail("Prio: " + entity.getPriority())
                 .badge(badge)
+                .kind("PARSER")
+                .sourceField(entity.getSourceField())
                 .enabled(entity.getEnabled())
                 .priority(entity.getPriority())
                 .build();
@@ -476,6 +552,7 @@ public class ConfigManagementService {
                 .name(entity.getType())
                 .detail("Prio: " + entity.getPriority())
                 .badge(badge)
+                .kind("TRANSFORM")
                 .enabled(entity.getEnabled())
                 .priority(entity.getPriority())
                 .build();
@@ -624,10 +701,25 @@ public class ConfigManagementService {
         config.setType(entity.getType());
         config.setMessagetype(entity.getMessagetype());
         config.setParam(entity.getParam());
+        config.setSourceField(entity.getSourceField());
         config.setPriority(entity.getPriority());
         config.setEnabled(entity.getEnabled());
         config.setContinueOnFailure(entity.getContinueOnFailure());
         return config;
+    }
+
+    private void normalizeParser(ParserEntity entity) {
+        if (entity.getSourceField() != null) {
+            entity.setSourceField(entity.getSourceField().trim());
+            if (entity.getSourceField().isEmpty()) {
+                entity.setSourceField(null);
+            }
+        }
+        if (entity.getPriority() == null) {
+            entity.setPriority(0);
+        } else if (entity.getPriority() < 0) {
+            throw new IllegalArgumentException("Priority must be zero or greater");
+        }
     }
 
     private TransformConfig convertToConfig(TransformEntity entity) {

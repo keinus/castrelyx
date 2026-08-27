@@ -32,6 +32,8 @@ public class PipelineTopologyDto {
         private String name;
         private String detail;
         private String badge;
+        private String kind;
+        private String sourceField;
         private boolean enabled;
         private Integer priority;
     }

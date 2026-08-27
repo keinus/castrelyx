@@ -30,9 +30,12 @@ public class ParserAdapterConfig {
     @Description("파서별 설정 파라미터")
     private String param;
 
-    @Range(min = 0, max = 100)
+    @Description("파서 입력으로 사용할 event field (비어 있으면 originalText)")
+    private String sourceField;
+
+    @Range(min = 0)
     @Default("0")
-    @Description("파서 처리 우선순위 (낮을수록 먼저 실행)")
+    @Description("공통 processing step 순서 (낮을수록 먼저 실행)")
     private Integer priority;
 
     @Default("true")
@@ -40,13 +43,21 @@ public class ParserAdapterConfig {
     private Boolean enabled;
 
     @Default("false")
-    @Description("파싱 실패 시 다음 파서 시도 여부")
+    @Description("파싱 실패 시 다음 processing step 실행 여부")
     private Boolean continueOnFailure;
 
     /**
      * 파서 타입별 설정 검증
      */
     public void validate() {
+        if (sourceField != null) {
+            sourceField = sourceField.trim();
+            if (sourceField.isEmpty()) {
+                sourceField = null;
+            } else if (sourceField.length() > 255 || !sourceField.matches("[A-Za-z0-9_.-]+")) {
+                throw new IllegalArgumentException("sourceField must be a top-level field name");
+            }
+        }
         switch (type) {
             case "GrokParser":
             case "RegexParser":

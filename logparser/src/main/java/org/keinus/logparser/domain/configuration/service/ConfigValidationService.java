@@ -326,6 +326,17 @@ public class ConfigValidationService {
             errors.add("Message type is required");
         }
 
+        if (entity.getSourceField() != null) {
+            String sourceField = entity.getSourceField().trim();
+            if (sourceField.length() > 255 || !sourceField.matches("[A-Za-z0-9_.-]+")) {
+                errors.add("sourceField must be a top-level field name");
+            }
+        }
+
+        if (entity.getPriority() != null && entity.getPriority() < 0) {
+            errors.add("Priority must be zero or greater");
+        }
+
         String type = normalizeType(entity.getType());
         if ("grok".equals(type) || "grokparser".equals(type) || "regex".equals(type) || "regexparser".equals(type)) {
             if (entity.getParam() == null || entity.getParam().trim().isEmpty()) {

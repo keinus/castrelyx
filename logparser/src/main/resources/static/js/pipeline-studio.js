@@ -23,10 +23,9 @@ const PipelineStudio = (function() {
 
     const STAGES = [
         { key: 'input', number: 1, label: 'Input', icon: 'cell_tower' },
-        { key: 'parser', number: 2, label: 'Parser', icon: 'data_object' },
-        { key: 'transform', number: 3, label: 'Transform', icon: 'device_hub' },
-        { key: 'structured', number: 4, label: 'Structured Transform', icon: 'table_chart' },
-        { key: 'output', number: 5, label: 'Output', icon: 'output' }
+        { key: 'processing', number: 2, label: 'Processing Steps', icon: 'account_tree' },
+        { key: 'structured', number: 3, label: 'Structured Transform', icon: 'table_chart' },
+        { key: 'output', number: 4, label: 'Output', icon: 'output' }
     ];
 
     const TYPE_DEFS = {
@@ -233,7 +232,8 @@ const PipelineStudio = (function() {
     function parserDef(type, label, icon, description, needsPattern = false) {
         const fields = [
             field('priority', 'Order', 'number', { default: 10, min: 0, tab: 'behavior' }),
-            field('continueOnFailure', 'Continue on failure', 'boolean', { default: false, tab: 'behavior', help: 'When enabled, the next parser is attempted after this parser fails.' })
+            field('sourceField', 'Input field', 'text', { tab: 'behavior', list: 'studio-source-fields', placeholder: 'Raw event (originalText)', help: 'Optional event field to parse. Leave empty to parse the original log text. You may also enter a field not shown in the list.' }),
+            field('continueOnFailure', 'Continue on failure', 'boolean', { default: false, tab: 'behavior', help: 'When enabled, processing continues with the next step after this parser fails.' })
         ];
         if (needsPattern) {
             fields.unshift(field('param', type === 'GrokParser' ? 'Grok pattern' : 'Java regular expression', 'textarea', { required: true, wide: true, tab: 'pattern' }));
@@ -322,7 +322,7 @@ const PipelineStudio = (function() {
             const node = event.target.closest('[data-node-stage]');
             if (!node || event.target.closest('input, [role="button"]')) return;
             event.preventDefault();
-            selectComponent(node.dataset.nodeStage, node.dataset.nodeId);
+            selectComponent(node.dataset.nodeComponentStage || node.dataset.nodeStage, node.dataset.nodeId);
         });
         document.getElementById('studio-settings')?.addEventListener('click', handleSettingsClick);
         document.getElementById('studio-settings')?.addEventListener('input', handleFormInput);
@@ -435,10 +435,10 @@ const PipelineStudio = (function() {
                 return;
             }
         }
-        for (const stage of ['input', 'parser', 'transform']) {
+        for (const stage of ['input', 'processing']) {
             const first = stageItems(stage)[0];
             if (first) {
-                selectComponent(stage, first.id, true);
+                selectComponent(first.componentStage || stage, first.id, true);
                 return;
             }
         }
@@ -447,6 +447,19 @@ const PipelineStudio = (function() {
 
     function stageItems(stage) {
         if (stage === 'structured') return [{ id: 'mapping', type: 'StructuredMapping' }];
+        if (stage === 'processing') {
+            return [
+                ...stageItems('parser').map(item => ({ ...item, componentStage: 'parser' })),
+                ...stageItems('transform').map(item => ({ ...item, componentStage: 'transform' }))
+            ]
+                .sort((a, b) => {
+                    const byPriority = Number(a.priority || 0) - Number(b.priority || 0);
+                    if (byPriority !== 0) return byPriority;
+                    const byKind = String(a.componentStage).localeCompare(String(b.componentStage));
+                    if (byKind !== 0) return byKind;
+                    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+                });
+        }
         const items = state.data[stage] || [];
         return items
             .filter(item => stage === 'output'
@@ -553,15 +566,19 @@ const PipelineStudio = (function() {
             const body = items.length
                 ? items.map(item => renderNode(stage, item)).join('')
                 : `<div class="studio-empty-stage">No ${escapeHtml(stage.label.toLowerCase())} configured for this message type.</div>`;
+            const addButton = stage.key === 'processing'
+                ? `<button class="studio-stage-add" type="button" data-add-stage="parser" aria-label="Add parser"><span class="material-icons-round">add</span>Parser</button>
+                   <button class="studio-stage-add" type="button" data-add-stage="transform" aria-label="Add transform"><span class="material-icons-round">add</span>Transform</button>`
+                : `<button class="studio-stage-add" type="button" data-add-stage="${stage.key}" aria-label="Add ${escapeAttr(stage.label)}">
+                            <span class="material-icons-round">add</span>${stage.key === 'structured' ? 'Configure' : 'Add'}
+                        </button>`;
             return `<section class="studio-stage" data-stage="${stage.key}">
                 <div class="studio-stage-frame">
                     <header class="studio-stage-header">
                         <span class="studio-stage-number">${stage.number}</span>
                         <span class="studio-stage-name">${escapeHtml(stage.label)}</span>
                         <span class="studio-stage-count">${stage.key === 'structured' ? '' : items.length}</span>
-                        <button class="studio-stage-add" type="button" data-add-stage="${stage.key}" aria-label="Add ${escapeAttr(stage.label)}">
-                            <span class="material-icons-round">add</span>${stage.key === 'structured' ? 'Configure' : 'Add'}
-                        </button>
+                        ${addButton}
                     </header>
                     <div class="studio-node-list">${body}</div>
                 </div>
@@ -571,31 +588,32 @@ const PipelineStudio = (function() {
     }
 
     function renderNode(stage, item) {
-        const isStructured = stage.key === 'structured';
-        const selected = state.selected && state.selected.stage === stage.key && (isStructured || String(state.selected.id) === String(item.id));
-        const typeDef = isStructured ? null : getTypeDef(stage.key, item.type);
-        const title = isStructured ? 'Event schema' : nodeTitle(stage.key, item, typeDef);
+        const componentStage = item.componentStage || stage.key;
+        const isStructured = componentStage === 'structured';
+        const selected = state.selected && state.selected.stage === componentStage && (isStructured || String(state.selected.id) === String(item.id));
+        const typeDef = isStructured ? null : getTypeDef(componentStage, item.type);
+        const title = isStructured ? 'Event schema' : nodeTitle(componentStage, item, typeDef);
         const icon = isStructured ? 'table_chart' : (typeDef?.icon || stage.icon);
         const enabled = item.enabled !== false;
-        const draggable = ['parser', 'transform'].includes(stage.key);
+        const draggable = ['parser', 'transform'].includes(componentStage);
         const statusControl = isStructured
             ? '<span class="studio-node-always">Always runs</span>'
             : `<label class="studio-switch" title="${enabled ? 'Disable' : 'Enable'} ${escapeAttr(title)}">
-                <input type="checkbox" data-toggle-stage="${stage.key}" data-toggle-id="${escapeAttr(item.id)}" ${enabled ? 'checked' : ''} aria-label="Enable ${escapeAttr(title)}">
+                <input type="checkbox" data-toggle-stage="${componentStage}" data-toggle-id="${escapeAttr(item.id)}" ${enabled ? 'checked' : ''} aria-label="Enable ${escapeAttr(title)}">
                 <span class="studio-switch-track"></span>
             </label>`;
         return `<div class="studio-node ${selected ? 'is-selected' : ''} ${enabled || isStructured ? '' : 'is-disabled'}" role="button" tabindex="0"
-                    data-node-stage="${stage.key}" data-node-id="${escapeAttr(item.id)}" ${draggable ? 'draggable="true"' : ''}>
+                    data-node-stage="${stage.key}" data-node-component-stage="${componentStage}" data-node-id="${escapeAttr(item.id)}" ${draggable ? 'draggable="true"' : ''}>
                 <span class="material-icons-round studio-node-drag" aria-hidden="true">drag_indicator</span>
                 <span class="material-icons-round studio-node-type-icon" aria-hidden="true">${icon}</span>
                 <span class="studio-node-copy">
                     <span class="studio-node-title">${escapeHtml(title)}</span>
-                    <span class="studio-node-summary">${nodeSummary(stage.key, item)}</span>
+                    <span class="studio-node-summary">${nodeSummary(componentStage, item)}</span>
                 </span>
                 <span class="studio-node-actions">
                     ${statusControl}
-                    <span class="studio-node-icon-button" role="button" tabindex="0" data-edit-stage="${stage.key}" data-edit-id="${escapeAttr(item.id)}" aria-label="Edit ${escapeAttr(title)}"><span class="material-icons-round">edit</span></span>
-                    ${isStructured ? '' : `<span class="studio-node-icon-button" role="button" tabindex="0" data-duplicate-stage="${stage.key}" data-duplicate-id="${escapeAttr(item.id)}" aria-label="Duplicate ${escapeAttr(title)}" title="Duplicate"><span class="material-icons-round">more_vert</span></span>`}
+                    <span class="studio-node-icon-button" role="button" tabindex="0" data-edit-stage="${componentStage}" data-edit-id="${escapeAttr(item.id)}" aria-label="Edit ${escapeAttr(title)}"><span class="material-icons-round">edit</span></span>
+                    ${isStructured ? '' : `<span class="studio-node-icon-button" role="button" tabindex="0" data-duplicate-stage="${componentStage}" data-duplicate-id="${escapeAttr(item.id)}" aria-label="Duplicate ${escapeAttr(title)}" title="Duplicate"><span class="material-icons-round">more_vert</span></span>`}
                 </span>
             </div>`;
     }
@@ -614,7 +632,7 @@ const PipelineStudio = (function() {
             if (item.port) return escapeHtml(`:${item.port}${item.type.includes('Tls') || item.type.includes('Mtls') || item.type.includes('Https') ? ' · mTLS required' : ''}`);
             return escapeHtml(item.type);
         }
-        if (stage === 'parser') return escapeHtml(`${item.type} · priority ${item.priority ?? 0}`);
+        if (stage === 'parser') return escapeHtml(`${item.type} · ${item.sourceField ? `input ${item.sourceField}` : 'raw input'} · order ${item.priority ?? 0}`);
         if (stage === 'transform') {
             if (item.type === 'Filter') return `${mapCount(item.filterDrop) + mapCount(item.filterPass)} conditions · priority ${item.priority ?? 0}`;
             if (item.type === 'AddProperty') return `${mapCount(item.addProperties)} groups · priority ${item.priority ?? 0}`;
@@ -756,7 +774,10 @@ const PipelineStudio = (function() {
             const inputType = item.type === 'password' ? 'password' : (item.type === 'url' ? 'url' : (item.type === 'number' || item.type === 'bytes' ? 'number' : 'text'));
             const numberAttrs = ['number', 'bytes'].includes(item.type) ? `${item.min != null ? `min="${item.min}"` : ''} ${item.max != null ? `max="${item.max}"` : ''}` : '';
             const unit = item.type === 'bytes' ? humanBytes(Number(value ?? item.default ?? 0)) : item.unit;
-            control = `<span class="studio-input-wrap"><input class="studio-input ${unit ? 'has-unit' : ''}" type="${inputType}" data-field="${escapeAttr(item.path)}" data-value-type="${['number', 'bytes'].includes(item.type) ? 'number' : 'string'}" value="${escapeAttr(value ?? '')}" ${numberAttrs} ${requiredAttr} ${readonly}>${unit ? `<span class="studio-input-unit">${escapeHtml(unit)}</span>` : ''}</span>`;
+            const listAttr = item.list ? `list="${escapeAttr(item.list)}"` : '';
+            const placeholder = item.placeholder ? `placeholder="${escapeAttr(item.placeholder)}"` : '';
+            const sourceDatalist = item.path === 'sourceField' ? `<datalist id="studio-source-fields"><option value="">Raw event (originalText)</option>${availableSourceFields().map(source => `<option value="${escapeAttr(source)}"></option>`).join('')}</datalist>` : '';
+            control = `<span class="studio-input-wrap"><input class="studio-input ${unit ? 'has-unit' : ''}" type="${inputType}" data-field="${escapeAttr(item.path)}" data-value-type="${['number', 'bytes'].includes(item.type) ? 'number' : 'string'}" value="${escapeAttr(value ?? '')}" ${numberAttrs} ${listAttr} ${placeholder} ${requiredAttr} ${readonly}>${unit ? `<span class="studio-input-unit">${escapeHtml(unit)}</span>` : ''}</span>${sourceDatalist}`;
         }
         return `<div class="${fieldClass}" data-field-shell="${escapeAttr(item.path)}"><label>${escapeHtml(item.label)} ${required}</label>${control}${help}</div>`;
     }
@@ -862,8 +883,9 @@ const PipelineStudio = (function() {
         const options = [{ value: 'raw', label: 'Raw input' }];
         STAGES.forEach(stage => {
             stageItems(stage.key).forEach((item, index) => {
-                const label = stage.key === 'structured' ? 'Structured transform' : (getTypeDef(stage.key, item.type)?.label || humanizeType(item.type));
-                options.push({ value: componentStageKey(stage.key, item.id), label: `${stage.number} ${label}${index > 0 ? ` ${index + 1}` : ''}` });
+                const actualStage = item.componentStage || stage.key;
+                const label = actualStage === 'structured' ? 'Structured transform' : (getTypeDef(actualStage, item.type)?.label || humanizeType(item.type));
+                options.push({ value: componentStageKey(actualStage, item.id), label: `${stage.number} ${label}${index > 0 ? ` ${index + 1}` : ''}` });
             });
         });
         return options;
@@ -946,7 +968,7 @@ const PipelineStudio = (function() {
             return;
         }
         const node = event.target.closest('[data-node-stage]');
-        if (node) selectComponent(node.dataset.nodeStage, node.dataset.nodeId);
+        if (node) selectComponent(node.dataset.nodeComponentStage || node.dataset.nodeStage, node.dataset.nodeId);
     }
 
     function handleSettingsClick(event) {
@@ -1343,14 +1365,22 @@ const PipelineStudio = (function() {
         document.querySelectorAll('.studio-node[draggable="true"]').forEach(node => {
             node.addEventListener('dragstart', event => {
                 event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', JSON.stringify({ stage: node.dataset.nodeStage, id: node.dataset.nodeId }));
+                event.dataTransfer.setData('text/plain', JSON.stringify({
+                    stage: node.dataset.nodeStage,
+                    componentStage: node.dataset.nodeComponentStage || node.dataset.nodeStage,
+                    id: node.dataset.nodeId
+                }));
             });
             node.addEventListener('dragover', event => event.preventDefault());
             node.addEventListener('drop', async event => {
                 event.preventDefault();
                 const source = safeJson(event.dataTransfer.getData('text/plain'), null);
-                if (!source || source.stage !== node.dataset.nodeStage || String(source.id) === String(node.dataset.nodeId)) return;
-                await reorderStage(source.stage, source.id, node.dataset.nodeId);
+                const targetStage = node.dataset.nodeStage;
+                if (!source || source.stage !== targetStage
+                    || (source.componentStage === (node.dataset.nodeComponentStage || node.dataset.nodeStage)
+                        && String(source.id) === String(node.dataset.nodeId))) return;
+                if (targetStage === 'processing') await reorderProcessingSteps(source.componentStage, source.id, node.dataset.nodeComponentStage, node.dataset.nodeId);
+                else await reorderStage(source.componentStage || source.stage, source.id, node.dataset.nodeId);
             });
         });
     }
@@ -1373,6 +1403,35 @@ const PipelineStudio = (function() {
             updates.forEach(update => { update.item.priority = update.priority; });
             showToast(`${stageLabel(stage)} order updated`, 'success');
             if (state.selected?.stage === stage) selectComponent(stage, state.selected.id, true);
+            else renderAll();
+        } catch (error) {
+            showToast(error.message || 'Reorder failed', 'error');
+            if (!state.demo) await loadStudioData({ messageType: state.messageType, selection: state.selected });
+        }
+    }
+
+    async function reorderProcessingSteps(sourceStage, sourceId, targetStage, targetId) {
+        const ordered = stageItems('processing');
+        const from = ordered.findIndex(item => item.componentStage === sourceStage && String(item.id) === String(sourceId));
+        const to = ordered.findIndex(item => item.componentStage === targetStage && String(item.id) === String(targetId));
+        if (from < 0 || to < 0) return;
+        const [moved] = ordered.splice(from, 1);
+        ordered.splice(to, 0, moved);
+        try {
+            if (!state.demo) {
+                await pipelineAPI.reorderProcessingSteps(state.messageType, ordered.map(item => ({
+                    kind: item.componentStage,
+                    id: Number(item.id)
+                })));
+            }
+            ordered.forEach((item, index) => {
+                const priority = (index + 1) * 10;
+                item.priority = priority;
+                const sourceItem = state.data[item.componentStage]?.find(candidate => String(candidate.id) === String(item.id));
+                if (sourceItem) sourceItem.priority = priority;
+            });
+            showToast('Processing step order updated', 'success');
+            if (state.selected?.stage === 'parser' || state.selected?.stage === 'transform') selectComponent(state.selected.stage, state.selected.id, true);
             else renderAll();
         } catch (error) {
             showToast(error.message || 'Reorder failed', 'error');
@@ -1476,22 +1535,24 @@ const PipelineStudio = (function() {
         }
 
         let fields = parsedInput && typeof parsedInput === 'object' ? deepClone(parsedInput) : { raw: rawText };
-        const parsers = stageItems('parser').filter(item => item.enabled !== false);
-        for (const parser of parsers) {
-            if (!state.demo && stage === 'parser' && String(parser.id) === String(id)) {
-                const activeDraft = state.selected?.stage === 'parser' && String(state.selected.id) === String(parser.id) ? state.draft : normalizeEntity(parser);
-                fields = await parserAPI.test({ type: activeDraft.type, param: activeDraft.param || null, sampleData: rawText });
-            } else fields = localParse(parser, rawText, fields);
-            if (stage === 'parser' && String(parser.id) === String(id)) return { payload: fields, status: `${getTypeDef('parser', parser.type)?.label || parser.type} produced ${Object.keys(fields || {}).length} fields`, count: 1 };
-        }
-
-        const transforms = stageItems('transform').filter(item => item.enabled !== false);
-        for (const transform of transforms) {
-            const active = state.selected?.stage === 'transform' && String(state.selected.id) === String(transform.id) ? state.draft : normalizeEntity(transform);
-            const outcome = localTransform(active, fields);
-            fields = outcome.fields;
-            if (stage === 'transform' && String(transform.id) === String(id)) return { payload: fields, status: outcome.status, count: outcome.dropped ? 0 : 1 };
-            if (outcome.dropped) return { payload: { dropped: true, matched: outcome.matched }, status: outcome.status, count: 0 };
+        const processing = stageItems('processing').filter(item => item.enabled !== false);
+        for (const step of processing) {
+            const actualStage = step.componentStage;
+            if (actualStage === 'parser') {
+                const activeDraft = state.selected?.stage === 'parser' && String(state.selected.id) === String(step.id) ? state.draft : normalizeEntity(step);
+                const sourceText = resolveParserInput(activeDraft, rawText, fields);
+                if (!state.demo && stage === 'parser' && String(step.id) === String(id) && sourceText != null) {
+                    const parsed = await parserAPI.test({ type: activeDraft.type, param: activeDraft.param || null, sampleData: sourceText });
+                    fields = { ...fields, ...(parsed || {}) };
+                } else fields = localParse(activeDraft, sourceText, fields);
+                if (stage === 'parser' && String(step.id) === String(id)) return { payload: fields, status: `${getTypeDef('parser', step.type)?.label || step.type} produced ${Object.keys(fields || {}).length} fields`, count: 1 };
+            } else {
+                const active = state.selected?.stage === 'transform' && String(state.selected.id) === String(step.id) ? state.draft : normalizeEntity(step);
+                const outcome = localTransform(active, fields);
+                fields = outcome.fields;
+                if (stage === 'transform' && String(step.id) === String(id)) return { payload: fields, status: outcome.status, count: outcome.dropped ? 0 : 1 };
+                if (outcome.dropped) return { payload: { dropped: true, matched: outcome.matched }, status: outcome.status, count: 0 };
+            }
         }
 
         if (stage === 'structured' || stage === 'output') {
@@ -1514,7 +1575,16 @@ const PipelineStudio = (function() {
         return { payload: fields, status: 'Draft stage evaluated', count: 1 };
     }
 
+    function resolveParserInput(parser, rawText, fields) {
+        if (!parser.sourceField || !String(parser.sourceField).trim()) return rawText;
+        const value = fields?.[String(parser.sourceField).trim()];
+        if (value == null) return null;
+        if (typeof value === 'string') return value;
+        return JSON.stringify(value);
+    }
+
     function localParse(parser, rawText, current) {
+        if (rawText == null) return current;
         if (parser.type === 'JsonParser') return safeJson(rawText, current);
         if (parser.type === 'HttpParser') {
             const parts = rawText.split(/\r?\n\r?\n/);
@@ -1649,6 +1719,18 @@ const PipelineStudio = (function() {
 
     function safeConfig(item) {
         return typeof item?.configParams === 'string' ? safeJson(item.configParams, {}) : (item?.configParams || {});
+    }
+
+    function availableSourceFields() {
+        const fields = new Set();
+        const sample = safeJson(state.sampleInput, null);
+        if (sample && typeof sample === 'object' && !Array.isArray(sample)) {
+            Object.keys(sample).forEach(key => fields.add(key));
+        }
+        stageItems('parser').forEach(item => {
+            if (item.sourceField) fields.add(item.sourceField);
+        });
+        return [...fields].sort((a, b) => a.localeCompare(b));
     }
 
     function configValue(item, key) {

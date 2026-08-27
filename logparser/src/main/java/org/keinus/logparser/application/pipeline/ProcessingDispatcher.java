@@ -22,6 +22,7 @@ public class ProcessingDispatcher implements Runnable {
     private final BlockingQueue<LogEvent> inputQueue;
     private final ParseService parseService;
     private final TransformService transformService;
+    private final ProcessingStepService processingStepService;
     private final StructuredTransformService structuredTransformService;
     private final LiveTailService liveTailService;
     private final OutputAdapterComponent outputAdapterComponent;
@@ -43,9 +44,66 @@ public class ProcessingDispatcher implements Runnable {
             AtomicLong totalMessagesDropped,
             AtomicLong totalMessagesFailed,
             AtomicLong processedMessageCount) {
+        this(
+                inputQueue,
+                parseService,
+                transformService,
+                null,
+                structuredTransformService,
+                liveTailService,
+                outputAdapterComponent,
+                running,
+                inFlightMessages,
+                totalMessagesDropped,
+                totalMessagesFailed,
+                processedMessageCount
+        );
+    }
+
+    public ProcessingDispatcher(
+            BlockingQueue<LogEvent> inputQueue,
+            ProcessingStepService processingStepService,
+            StructuredTransformService structuredTransformService,
+            LiveTailService liveTailService,
+            OutputAdapterComponent outputAdapterComponent,
+            AtomicBoolean running,
+            AtomicInteger inFlightMessages,
+            AtomicLong totalMessagesDropped,
+            AtomicLong totalMessagesFailed,
+            AtomicLong processedMessageCount) {
+        this(
+                inputQueue,
+                null,
+                null,
+                processingStepService,
+                structuredTransformService,
+                liveTailService,
+                outputAdapterComponent,
+                running,
+                inFlightMessages,
+                totalMessagesDropped,
+                totalMessagesFailed,
+                processedMessageCount
+        );
+    }
+
+    private ProcessingDispatcher(
+            BlockingQueue<LogEvent> inputQueue,
+            ParseService parseService,
+            TransformService transformService,
+            ProcessingStepService processingStepService,
+            StructuredTransformService structuredTransformService,
+            LiveTailService liveTailService,
+            OutputAdapterComponent outputAdapterComponent,
+            AtomicBoolean running,
+            AtomicInteger inFlightMessages,
+            AtomicLong totalMessagesDropped,
+            AtomicLong totalMessagesFailed,
+            AtomicLong processedMessageCount) {
         this.inputQueue = inputQueue;
         this.parseService = parseService;
         this.transformService = transformService;
+        this.processingStepService = processingStepService;
         this.structuredTransformService = structuredTransformService;
         this.liveTailService = liveTailService;
         this.outputAdapterComponent = outputAdapterComponent;
@@ -82,19 +140,33 @@ public class ProcessingDispatcher implements Runnable {
 
     private void processEvent(LogEvent logEvent) {
         try {
-            boolean parseResult = parseService.parse(logEvent);
-            if (!parseResult) {
-                logEvent.markAsError("Parsing failed");
-                totalMessagesFailed.incrementAndGet();
-                log.error("Failed to parse log event: {}", logEvent);
-                return;
-            }
-            logEvent.markAsParsed();
+            if (processingStepService != null) {
+                ProcessingStepService.ProcessingResult result = processingStepService.process(logEvent);
+                if (result == ProcessingStepService.ProcessingResult.FAILED) {
+                    totalMessagesFailed.incrementAndGet();
+                    log.error("Failed to process log event through processing steps: {}", logEvent);
+                    return;
+                }
+                if (result == ProcessingStepService.ProcessingResult.FILTERED) {
+                    log.debug("Log event filtered out by processing step");
+                    return;
+                }
+                logEvent.markAsParsed();
+            } else {
+                boolean parseResult = parseService.parse(logEvent);
+                if (!parseResult) {
+                    logEvent.markAsError("Parsing failed");
+                    totalMessagesFailed.incrementAndGet();
+                    log.error("Failed to parse log event: {}", logEvent);
+                    return;
+                }
+                logEvent.markAsParsed();
 
-            boolean transformResult = transformService.transform(logEvent);
-            if (!transformResult) {
-                log.debug("Log event filtered out by transform service");
-                return;
+                boolean transformResult = transformService.transform(logEvent);
+                if (!transformResult) {
+                    log.debug("Log event filtered out by transform service");
+                    return;
+                }
             }
 
             if (structuredTransformService != null) {

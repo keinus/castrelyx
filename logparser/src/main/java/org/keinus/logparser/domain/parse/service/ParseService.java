@@ -3,7 +3,9 @@ package org.keinus.logparser.domain.parse.service;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.keinus.logparser.domain.configuration.model.ParserAdapterConfig;
@@ -20,8 +22,64 @@ import org.keinus.logparser.infrastructure.config.ApplicationProperties;
 @Service
 public class ParseService {
     private static final Logger LOGGER = LoggerFactory.getLogger( ParseService.class );
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private record ParserBinding(IParser parser, boolean continueOnFailure, String parserType) {}
+
+    /**
+     * A parser instance bound to one processing step.  The parser implementation
+     * still receives a LogEvent, which keeps the existing parser contract intact.
+     */
+    public static final class ParserStep {
+        private final IParser parser;
+        private final String parserType;
+        private final String sourceField;
+        private final boolean continueOnFailure;
+
+        private ParserStep(IParser parser, String parserType, String sourceField, boolean continueOnFailure) {
+            this.parser = parser;
+            this.parserType = parserType;
+            this.sourceField = sourceField;
+            this.continueOnFailure = continueOnFailure;
+        }
+
+        public boolean continueOnFailure() {
+            return continueOnFailure;
+        }
+
+        public String parserType() {
+            return parserType;
+        }
+
+        public boolean execute(LogEvent logEvent) {
+            if (sourceField == null || sourceField.isBlank()) {
+                return parser.parse(logEvent);
+            }
+
+            Object sourceValue = logEvent.getField(sourceField);
+            if (sourceValue == null) {
+                return false;
+            }
+
+            String sourceText;
+            try {
+                sourceText = sourceValue instanceof String
+                        ? (String) sourceValue
+                        : sourceValue instanceof Map<?, ?> || sourceValue instanceof Iterable<?>
+                                ? OBJECT_MAPPER.writeValueAsString(sourceValue)
+                                : String.valueOf(sourceValue);
+            } catch (Exception e) {
+                return false;
+            }
+
+            LogEvent sourceEvent = new LogEvent(sourceText, logEvent.getSourceHost(), logEvent.getMessageType());
+            boolean parsed = parser.parse(sourceEvent);
+            if (parsed) {
+                logEvent.setFields(sourceEvent.getFields());
+            }
+            return parsed;
+        }
+    }
 
     private MergingHashMap<ParserBinding> parsers = new MergingHashMap<>();
     private final DatabaseConfigLoader databaseConfigLoader;
@@ -49,6 +107,21 @@ public class ParseService {
     public synchronized void reload(List<ParserAdapterConfig> parserList) {
         this.parsers = buildParsers(parserList);
         LOGGER.info("Parser reload completed: {} parsers loaded", parserList == null ? 0 : parserList.size());
+    }
+
+    /** Creates one initialized parser step for the unified processing chain. */
+    public ParserStep createStep(ParserAdapterConfig config) {
+        IParser parserInterface = loadLibrary(config.getType());
+        if (parserInterface == null) {
+            return null;
+        }
+        parserInterface.init(config.getParam());
+        return new ParserStep(
+                parserInterface,
+                config.getType(),
+                config.getSourceField() == null ? null : config.getSourceField().trim(),
+                Boolean.TRUE.equals(config.getContinueOnFailure())
+        );
     }
 
     private IParser loadLibrary(String parserClassName) {

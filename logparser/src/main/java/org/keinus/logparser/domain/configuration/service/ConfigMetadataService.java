@@ -215,11 +215,14 @@ public class ConfigMetadataService {
         return switch (type) {
             case "GrokParser", "RegexParser" -> new AdapterSchema(
                     type,
-                    List.of(
-                            new FieldSchema("param", "String", true, "Pattern to match")
+                    Arrays.asList(
+                            new FieldSchema("param", "String", true, "Pattern to match"),
+                            new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText")
                     )
             );
-            default -> new AdapterSchema(type, List.of());
+            default -> new AdapterSchema(type, List.of(
+                    new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText")
+            ));
         };
     }
 

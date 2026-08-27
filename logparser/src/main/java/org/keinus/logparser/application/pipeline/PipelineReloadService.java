@@ -1,21 +1,20 @@
 package org.keinus.logparser.application.pipeline;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.configuration.service.ConfigValidationService;
 import org.keinus.logparser.domain.configuration.service.DatabaseConfigLoader;
-import org.keinus.logparser.domain.parse.service.ParseService;
 import org.keinus.logparser.domain.transformation.service.StructuredTransformService;
+import org.keinus.logparser.domain.parse.service.ParseService;
 import org.keinus.logparser.domain.transformation.service.TransformService;
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class PipelineReloadService {
     private static final long PIPELINE_DRAIN_TIMEOUT_MS = 30_000;
@@ -27,6 +26,7 @@ public class PipelineReloadService {
     private final MessageDispatcher messageDispatcher;
     private final InputAdapterComponent inputAdapterComponent;
     private final OutputAdapterComponent outputAdapterComponent;
+    private final ProcessingStepService processingStepService;
     private final ParseService parseService;
     private final TransformService transformService;
     private final StructuredTransformService structuredTransformService;
@@ -34,6 +34,55 @@ public class PipelineReloadService {
     private final AtomicBoolean reloadInProgress = new AtomicBoolean(false);
     private final AtomicInteger reloadProgress = new AtomicInteger(0);
     private volatile PipelineStatus currentStatus = PipelineStatus.RUNNING;
+
+    @Autowired
+    public PipelineReloadService(
+            ConfigValidationService validationService,
+            ConfigManagementService configManagementService,
+            DatabaseConfigLoader databaseConfigLoader,
+            ApplicationProperties applicationProperties,
+            MessageDispatcher messageDispatcher,
+            InputAdapterComponent inputAdapterComponent,
+            OutputAdapterComponent outputAdapterComponent,
+            ProcessingStepService processingStepService,
+            StructuredTransformService structuredTransformService) {
+        this.validationService = validationService;
+        this.configManagementService = configManagementService;
+        this.databaseConfigLoader = databaseConfigLoader;
+        this.applicationProperties = applicationProperties;
+        this.messageDispatcher = messageDispatcher;
+        this.inputAdapterComponent = inputAdapterComponent;
+        this.outputAdapterComponent = outputAdapterComponent;
+        this.processingStepService = processingStepService;
+        this.parseService = null;
+        this.transformService = null;
+        this.structuredTransformService = structuredTransformService;
+    }
+
+    /** Backward-compatible constructor retained for unit/integration clients using the old split reload services. */
+    public PipelineReloadService(
+            ConfigValidationService validationService,
+            ConfigManagementService configManagementService,
+            DatabaseConfigLoader databaseConfigLoader,
+            ApplicationProperties applicationProperties,
+            MessageDispatcher messageDispatcher,
+            InputAdapterComponent inputAdapterComponent,
+            OutputAdapterComponent outputAdapterComponent,
+            ParseService parseService,
+            TransformService transformService,
+            StructuredTransformService structuredTransformService) {
+        this.validationService = validationService;
+        this.configManagementService = configManagementService;
+        this.databaseConfigLoader = databaseConfigLoader;
+        this.applicationProperties = applicationProperties;
+        this.messageDispatcher = messageDispatcher;
+        this.inputAdapterComponent = inputAdapterComponent;
+        this.outputAdapterComponent = outputAdapterComponent;
+        this.processingStepService = null;
+        this.parseService = parseService;
+        this.transformService = transformService;
+        this.structuredTransformService = structuredTransformService;
+    }
 
     public void reloadConfiguration() {
         DatabaseConfigLoader.PipelineConfiguration targetConfiguration = loadValidatedConfiguration();
@@ -126,8 +175,12 @@ public class PipelineReloadService {
     private void applyConfiguration(DatabaseConfigLoader.PipelineConfiguration configuration) {
         log.info("Applying new runtime configuration");
         applicationProperties.applyConfiguration(configuration);
-        parseService.reload(configuration.getParser());
-        transformService.reload(configuration.getTransform());
+        if (processingStepService != null) {
+            processingStepService.reload(configuration.getParser(), configuration.getTransform());
+        } else {
+            parseService.reload(configuration.getParser());
+            transformService.reload(configuration.getTransform());
+        }
         structuredTransformService.reload();
     }
 

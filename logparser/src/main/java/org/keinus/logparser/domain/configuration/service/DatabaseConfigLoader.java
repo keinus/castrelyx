@@ -176,6 +176,7 @@ public class DatabaseConfigLoader {
             config.setType(entity.getType());
             config.setMessagetype(entity.getMessagetype());
             config.setParam(entity.getParam());
+            config.setSourceField(entity.getSourceField());
             config.setPriority(entity.getPriority());
             config.setContinueOnFailure(entity.getContinueOnFailure());
             configs.add(config);

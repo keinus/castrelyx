@@ -10,6 +10,7 @@ import org.keinus.logparser.domain.configuration.service.ConfigManagementService
 import org.keinus.logparser.interfaces.dto.response.OutputAdapterMetricsDto;
 import org.keinus.logparser.interfaces.dto.response.PipelineTopologyDto;
 import org.keinus.logparser.interfaces.dto.response.ThreadDetailDto;
+import org.keinus.logparser.interfaces.dto.request.ProcessingStepOrderRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -48,6 +49,17 @@ public class PipelineController {
     @GetMapping("/topology")
     public ResponseEntity<List<PipelineTopologyDto>> getPipelineTopology() {
         return ResponseEntity.ok(configManagementService.getPipelineTopology());
+    }
+
+    @PutMapping("/{messageType}/processing-steps/order")
+    public ResponseEntity<Map<String, String>> reorderProcessingSteps(
+            @PathVariable String messageType,
+            @RequestBody ProcessingStepOrderRequest request) {
+        configManagementService.reorderProcessingSteps(messageType, request);
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Processing step order updated"
+        ));
     }
 
     @GetMapping("/status")

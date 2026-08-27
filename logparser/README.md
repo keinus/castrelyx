@@ -1,8 +1,8 @@
 # Logparser
 
-Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 parser, transform, structured mapping, output 단계를 연결합니다.
+Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 processing steps(parser/transform), structured mapping, output 단계를 연결합니다.
 
-설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 관리 UI의 기본 화면인 Pipeline Studio에서는 하나의 `messagetype`에 연결된 Input, Parser, Transform, Structured Transform, Output을 한 화면에서 생성·수정·삭제·테스트·배포할 수 있습니다.
+설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 관리 UI의 기본 화면인 Pipeline Studio에서는 하나의 `messagetype`에 연결된 Input, Processing Steps, Structured Transform, Output을 한 화면에서 생성·수정·삭제·테스트·배포할 수 있습니다.
 
 전체 input/output adapter, parser, transform, structured transform 설정 argument와 실제 런타임 기본값은 [`readme/logparser_schema.md`](readme/logparser_schema.md)를 기준으로 합니다.
 
@@ -97,14 +97,13 @@ docker compose up --build
 flowchart LR
   Input["InputAdapter"] --> MessageDispatcher["MessageDispatcher"]
   MessageDispatcher --> ProcessingDispatcher["ProcessingDispatcher"]
-  ProcessingDispatcher --> Parser["Parser"]
-  Parser --> Transform["Transform Rules"]
-  Transform --> Structure["Structured Mapping"]
+  ProcessingDispatcher --> Steps["Processing Steps\nParser + Transform"]
+  Steps --> Structure["Structured Mapping"]
   Structure --> Output["OutputAdapter"]
   ProcessingDispatcher --> LiveTail["LiveTailService /ws/tail"]
 ```
 
-`messagetype`은 입력, parser, transform, output을 연결하는 주요 키입니다. 출력 어댑터의 `messagetype`을 비워 두면 `OutputFactory`가 `all`로 정규화하고, 모든 message type을 받을 수 있습니다.
+`messagetype`은 입력, processing step, output을 연결하는 주요 키입니다. 출력 어댑터의 `messagetype`을 비워 두면 `OutputFactory`가 `all`로 정규화하고, 모든 message type을 받을 수 있습니다.
 
 입력 또는 출력 어댑터의 초기화나 런타임 처리에서 예외가 발생하면 해당 어댑터만 DB에서 자동으로 `enabled=false`로 전환됩니다. 실패한 입력 스레드나 출력 sink는 런타임 등록에서 제거하고, 다른 어댑터와 파이프라인 처리는 계속합니다. 원인을 수정한 뒤 관리 UI나 enable API로 해당 어댑터를 다시 활성화해야 합니다.
 
@@ -239,6 +238,10 @@ SNMPv3는 `securityName`과 security level별 passphrase를 요구합니다. pas
 
 ## Parser와 Transform
 
+Parser와 transform은 같은 processing step 목록에서 `priority` 오름차순으로 실행됩니다. 낮은 값이 먼저 실행되며, 같은 값이면 parser가 먼저이고 그 다음 id 오름차순입니다. Pipeline Studio에서 두 종류의 카드를 서로 드래그해 순서를 바꿀 수 있습니다. Parser의 `continueOnFailure=true`는 다음 parser가 아니라 다음 processing step으로 진행한다는 의미입니다.
+
+Parser는 기본적으로 `originalText`를 입력으로 사용합니다. 선택 사항인 `sourceField`를 지정하면 앞선 step이 만든 `LogEvent.fields`의 top-level 값을 parser 입력으로 사용합니다. 문자열은 그대로, 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환하며 값이 없으면 해당 parser step이 실패합니다. parser 결과는 원래 event field map에 병합됩니다.
+
 | Type | 필수 설정 | 설명 |
 | --- | --- | --- |
 | `JsonParser` | 없음 | JSON 원문을 field map으로 파싱합니다. |
@@ -253,6 +256,8 @@ SNMPv3는 `securityName`과 security level별 passphrase를 요구합니다. pas
 | `Filter` | `filterPass` 또는 `filterDrop` | 조건에 맞는 이벤트를 통과 또는 제거합니다. |
 | `AddProperty` | `addProperties` | 이벤트에 필드를 추가합니다. |
 | `RemoveProperty` | `removeProperties` | 이벤트에서 필드를 제거합니다. |
+
+순서 일괄 변경 API는 `PUT /api/v1/pipeline/{messageType}/processing-steps/order`이며, 요청에는 `{"steps":[{"kind":"PARSER","id":3},{"kind":"TRANSFORM","id":7}]}` 형태로 현재 목록 전체를 전달합니다.
 
 ## 출력 어댑터
 
@@ -352,6 +357,7 @@ schema `1.1` event는 legacy `batchSize` buffer와 분리해 처리합니다.
 | `GET/PUT/DELETE` | `/api/v1/parsers/{id}` | parser 조회/수정/삭제 |
 | `GET/POST` | `/api/v1/transforms` | transform 목록/생성 |
 | `GET/PUT/DELETE` | `/api/v1/transforms/{id}` | transform 조회/수정/삭제 |
+| `PUT` | `/api/v1/pipeline/{messageType}/processing-steps/order` | parser/transform 공통 실행 순서 일괄 변경 |
 | `GET/POST` | `/api/v1/output-adapters` | 출력 어댑터 목록/생성 |
 | `GET/PUT/DELETE` | `/api/v1/output-adapters/{id}` | 출력 어댑터 조회/수정/삭제 |
 | `GET/POST` | `/api/v1/structure/templates` | Schema mapping template 목록/생성 |

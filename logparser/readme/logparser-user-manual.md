@@ -16,10 +16,10 @@
 기본 흐름은 다음과 같습니다.
 
 ```text
-Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Parser -> Transform -> Structured Mapping -> Output Adapter
+Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Processing Steps (Parser/Transform) -> Structured Mapping -> Output Adapter
 ```
 
-`messagetype`은 입력, parser, transform, output을 연결하는 키입니다. 출력 어댑터의 `messagetype`을 비우면 runtime 생성 시 `all`로 정규화되어 모든 message type을 받을 수 있습니다.
+`messagetype`은 입력, processing step(parser/transform), output을 연결하는 키입니다. 출력 어댑터의 `messagetype`을 비우면 runtime 생성 시 `all`로 정규화되어 모든 message type을 받을 수 있습니다.
 
 입력 또는 출력 어댑터가 초기화나 런타임 처리 중 예외를 발생시키면 Logparser는 그 어댑터만 자동으로 OFF(`enabled=false`) 처리합니다. 실패한 어댑터는 현재 런타임에서도 제거되며 다른 어댑터와 파이프라인은 계속 동작합니다. 설정이나 외부 연결 문제를 해결한 다음 Sources 또는 Destinations 화면에서 다시 활성화합니다.
 
@@ -27,7 +27,7 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Parser -> Transfor
 
 | 메뉴 | 용도 |
 | --- | --- |
-| Pipelines | 하나의 `messagetype`에 연결된 Input → Parser → Transform → Structured Transform → Output을 한 화면에서 관리합니다. 기본 진입 화면입니다. |
+| Pipelines | 하나의 `messagetype`에 연결된 Input → Processing Steps → Structured Transform → Output을 한 화면에서 관리합니다. 기본 진입 화면입니다. |
 | Overview | pipeline 상태와 처리량을 확인합니다. |
 | Pipeline View | 입력, parser, transform, output 연결 상태를 봅니다. |
 | Live Tail | 처리 중 이벤트를 WebSocket으로 확인합니다. |
@@ -47,7 +47,7 @@ Pipeline Studio는 상단에서 하나의 case-sensitive `Message type`을 선�
 
 | 영역 | 동작 |
 | --- | --- |
-| 왼쪽 pipeline | Input부터 Output까지 top-down 순서, 활성 상태, 핵심 endpoint를 표시합니다. Parser와 Transform은 drag로 순서를 변경합니다. |
+| 왼쪽 pipeline | Input부터 Output까지 top-down 순서, 활성 상태, 핵심 endpoint를 표시합니다. Processing Steps에서 parser와 transform을 함께 drag해 순서를 변경합니다. |
 | 오른쪽 설정 | 선택한 canonical type의 실제 REST argument를 편집합니다. `configParams`는 화면에서 펼쳐서 편집하고 저장할 때 JSON 문자열로 직렬화합니다. |
 | 아래쪽 테스트 | 현재 sample과 draft를 사용해 선택 단계 이후의 JSON, filter 판정, transform diff, structured 결과, output 직렬화와 destination을 표시합니다. |
 
@@ -64,6 +64,8 @@ Pipeline Studio는 상단에서 하나의 case-sensitive `Message type`을 선�
 | Output | 외부 전송 없이 직렬화된 payload와 destination summary까지만 preview합니다. |
 
 지원되지 않는 연결/전송 테스트는 성공으로 표시하지 않으며 결과 상태에 `previewed locally` 또는 `not attempted`를 명시합니다.
+
+Processing Steps는 카드의 `priority` 순서로 parser와 transform을 교차 실행합니다. parser 성공 후에도 다음 step이 계속 실행되며, parser가 실패했을 때 `continueOnFailure=true`이면 다음 processing step으로 진행합니다. transform이 이벤트를 drop하면 후속 step과 output은 실행되지 않습니다.
 
 ## 3. Overview와 Pipeline View
 
@@ -305,6 +307,8 @@ Parsers 화면 또는 `/api/v1/parsers` API에서 parser를 관리합니다.
 
 `GrokParser`와 `RegexParser`는 `param`이 필요합니다. parser 테스트 API는 `/api/v1/parsers/test`입니다.
 
+Parser의 선택 필드 `sourceField`를 지정하면 원문 대신 앞선 step이 만든 event field를 parser 입력으로 사용합니다. 빈 값은 `originalText`이며, 문자열은 그대로 전달하고 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환합니다. field가 없거나 null이면 parser step이 실패합니다. Pipeline Studio의 parser 설정에서 `Input field`로 지정할 수 있습니다.
+
 ## 7. Event Rules: Transform
 
 Event Rules 화면 또는 `/api/v1/transforms` API에서 transform을 관리합니다.
@@ -315,7 +319,15 @@ Event Rules 화면 또는 `/api/v1/transforms` API에서 transform을 관리합�
 | `AddProperty` | `addProperties` | field 추가 |
 | `RemoveProperty` | `removeProperties` | field 제거 |
 
-Transform은 parser 뒤에 적용됩니다. 입력 adapter 내부에서 parser나 transform을 대신 수행하지 않습니다.
+Transform은 parser와 동일한 Processing Steps 목록에서 priority에 따라 실행됩니다. 입력 adapter 내부에서 parser나 transform을 대신 수행하지 않습니다.
+
+Processing Steps의 전체 순서는 `PUT /api/v1/pipeline/{messageType}/processing-steps/order`에 다음처럼 저장합니다.
+
+```json
+{"steps":[{"kind":"PARSER","id":3},{"kind":"TRANSFORM","id":7}]}
+```
+
+현재 message type의 parser/transform을 모두 포함해야 하며, 서버가 양쪽 priority를 transaction으로 재번호화합니다. 목록이 동시에 변경되면 `409 Conflict`가 반환되므로 최신 pipeline을 다시 읽어야 합니다.
 
 ## 8. Schema Map
 
@@ -499,6 +511,7 @@ Pipeline 제어 API는 다음과 같습니다.
 | `GET` | `/api/v1/pipeline/reload-progress` | reload 진행 상태 |
 | `POST` | `/api/v1/pipeline/cancel-reload` | reload 취소 |
 | `GET` | `/api/v1/pipeline/threads` | thread detail 조회 |
+| `PUT` | `/api/v1/pipeline/{messageType}/processing-steps/order` | parser/transform 공통 실행 순서 저장 |
 
 설정을 추가하거나 수정한 뒤 `auto-reload`가 켜져 있으면 일정 지연 후 자동 reload가 실행됩니다. 즉시 반영하려면 Actions에서 reload를 실행합니다.
 

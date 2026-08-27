@@ -9,9 +9,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.keinus.logparser.application.service.LiveTailService;
 import org.keinus.logparser.domain.model.LogEvent;
-import org.keinus.logparser.domain.parse.service.ParseService;
 import org.keinus.logparser.domain.transformation.service.StructuredTransformService;
-import org.keinus.logparser.domain.transformation.service.TransformService;
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
 import org.keinus.logparser.infrastructure.util.ThreadManager;
 import org.keinus.logparser.infrastructure.util.ThreadUtil;
@@ -36,8 +34,7 @@ public class MessageDispatcher {
     private final BlockingQueue<LogEvent> inputMessageQueue;
     private final OutputAdapterComponent outputAdapterComponent;
     private final ThreadManager threadManager;
-    private final ParseService parseService;
-    private final TransformService transformService;
+    private final ProcessingStepService processingStepService;
     private final StructuredTransformService structuredTransformService;
     private final LiveTailService liveTailService;
     private final ApplicationProperties applicationProperties;
@@ -57,8 +54,7 @@ public class MessageDispatcher {
 
     public MessageDispatcher(
             ThreadManager threadManager,
-            ParseService parseService,
-            TransformService transformService,
+            ProcessingStepService processingStepService,
             StructuredTransformService structuredTransformService,
             LiveTailService liveTailService,
             ApplicationProperties applicationProperties,
@@ -66,8 +62,7 @@ public class MessageDispatcher {
             @Value("${log.message.queue-size:10000}") int queueSize
     ) {
         this.threadManager = threadManager;
-        this.parseService = parseService;
-        this.transformService = transformService;
+        this.processingStepService = processingStepService;
         this.structuredTransformService = structuredTransformService;
         this.liveTailService = liveTailService;
         this.applicationProperties = applicationProperties;
@@ -104,8 +99,7 @@ public class MessageDispatcher {
             String threadName = "ProcessingThread-" + (i + 1);
             ProcessingDispatcher processingDispatcher = new ProcessingDispatcher(
                     inputMessageQueue,
-                    parseService,
-                    transformService,
+                    processingStepService,
                     structuredTransformService,
                     liveTailService,
                     outputAdapterComponent,

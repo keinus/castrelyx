@@ -55,13 +55,14 @@ annotation의 `@Default`는 값을 자동 주입하지 않습니다. REST payloa
 파이프라인 순서는 다음과 같습니다.
 
 ```text
-Input -> Parser -> Transform -> Structured transform -> Output
+Input -> Processing Steps (Parser/Transform) -> Structured transform -> Output
 ```
 
-- `messagetype`은 input, parser, transform, output을 연결하는 case-sensitive key입니다.
+- `messagetype`은 input, processing step(parser/transform), output을 연결하는 case-sensitive key입니다.
 - Input, parser, transform은 정확히 같은 `messagetype`에만 적용됩니다.
 - Output의 `messagetype`은 REST CRUD에서 필수입니다. 모든 이벤트를 받으려면 생략하거나 빈 값으로 두지 말고 `all`을 지정합니다.
-- Parser와 transform은 `priority` 오름차순, 같은 priority에서는 `id` 오름차순으로 실행됩니다.
+- Parser와 transform은 하나의 processing step chain으로 합쳐져 `priority` 오름차순으로 실행됩니다. 같은 priority에서는 parser가 먼저이고, 그 다음 id 오름차순입니다. 기존 설정 migration은 parser를 먼저 배치합니다.
+- Parser `continueOnFailure=true`는 실패 후 다음 parser가 아니라 다음 processing step으로 진행합니다. transform이 `false`를 반환하면 이벤트를 drop합니다.
 - `enabled=false`인 input, parser, transform, output은 DB에는 남지만 런타임 설정에서 제외됩니다.
 - Structured transform은 별도 `enabled` 없이 모든 이벤트에 중앙 적용됩니다. 저장 mapping이 없으면 기본 structured event를 만듭니다.
 
@@ -323,9 +324,10 @@ TLS protocol은 `TLSv1.3`/`TLSv1.2`, client auth는 `need`, store type은 PKCS12
 | `type` | String | 예 | canonical parser class 이름 사용 |
 | `messagetype` | String | 예 | input과 동일한 연결 key |
 | `param` | String | Grok/Regex만 예 | parser pattern |
+| `sourceField` | String | 아니오 | 비어 있으면 `originalText`, 지정하면 event field의 top-level 값을 parser 입력으로 사용 |
 | `priority` | Integer | 아니오 | entity 기본 `0`; 낮을수록 먼저 실행 |
 | `enabled` | Boolean | 아니오 | entity 기본 `true` |
-| `continueOnFailure` | Boolean | 아니오 | `false`; 실패 시 다음 parser를 시도할지 여부 |
+| `continueOnFailure` | Boolean | 아니오 | `false`; 실패 시 다음 processing step으로 진행할지 여부 |
 
 DB trigger와 validator는 `json`, `grok`, `regex`, `rfc3164`, `rfc5424`, `http` 같은 alias도 허용하지만 `ParseService`는 alias를 class 이름으로 정규화하지 않습니다. 정상 런타임 등록을 위해 아래 canonical type만 사용합니다.
 
@@ -352,6 +354,16 @@ Parser test endpoint는 다음 object를 받습니다.
 
 `POST /api/v1/parsers/test`는 저장하지 않고 즉시 parser를 초기화해 결과 field map을 반환합니다.
 
+`sourceField` 입력 규칙은 다음과 같습니다.
+
+- 미지정/blank: 기존처럼 `originalText` 사용
+- String: 그대로 전달
+- 숫자/boolean: 문자열로 변환
+- Map/List: JSON 문자열로 직렬화
+- 필드가 없거나 null: parser step 실패
+
+성공한 parser 결과는 원래 event의 top-level field map에 병합됩니다. nested path(JSONPath/SpEL)는 지원하지 않습니다.
+
 ## 5. Transform
 
 ### 5.1 Transform 공통 REST 필드
@@ -360,7 +372,7 @@ Parser test endpoint는 다음 object를 받습니다.
 | --- | --- | --- | --- |
 | `type` | String | 예 | `Filter`, `AddProperty`, `RemoveProperty` 중 하나 |
 | `messagetype` | String | 예 | parser/input과 같은 연결 key |
-| `priority` | Integer | 아니오 | entity 기본 `0`; 낮을수록 먼저 실행 |
+| `priority` | Integer | 아니오 | parser와 공유하는 processing step 순서; 낮을수록 먼저 실행 |
 | `enabled` | Boolean | 아니오 | entity 기본 `true` |
 | `filterPass` | String(JSON) | Filter 조건부 | `Map<String,String>` |
 | `filterDrop` | String(JSON) | Filter 조건부 | `Map<String,String>` |
@@ -370,7 +382,28 @@ Parser test endpoint는 다음 object를 받습니다.
 
 DB trigger와 validator는 `filter`, `add_property`, `remove_property`도 허용하지만 `TransformService`는 alias를 class 이름으로 정규화하지 않습니다. canonical type만 사용합니다.
 
-### 5.2 Filter
+### 5.2 Processing step 순서 변경
+
+Parser와 transform을 교차 배치하려면 다음 API에 현재 message type의 전체 step 목록을 전달합니다.
+
+```http
+PUT /api/v1/pipeline/{messageType}/processing-steps/order
+Content-Type: application/json
+```
+
+```json
+{
+  "steps": [
+    {"kind": "PARSER", "id": 3},
+    {"kind": "TRANSFORM", "id": 7},
+    {"kind": "PARSER", "id": 4}
+  ]
+}
+```
+
+목록은 중복 없이 해당 message type의 parser/transform을 모두 포함해야 하며, 서버는 양쪽 `priority`를 하나의 transaction에서 `10, 20, 30...`으로 재번호화합니다. 현재 목록이 변경된 경우 `409 Conflict`가 반환됩니다.
+
+### 5.3 Filter
 
 `filterPass` 또는 `filterDrop` 중 하나 이상이 필요합니다. 각 map value는 허용/차단 값의 comma-separated 문자열입니다.
 
@@ -389,7 +422,7 @@ DB trigger와 validator는 `filter`, `add_property`, `remove_property`도 허용
 - Pass 조건은 모든 field가 존재하고 각각 허용 값에 포함되어야 합니다.
 - 비교는 `toString()` 결과에 대한 exact, case-sensitive 비교입니다.
 
-### 5.3 AddProperty
+### 5.4 AddProperty
 
 기존 flat field를 새 nested object 아래로 **이동**합니다.
 
@@ -405,7 +438,7 @@ DB trigger와 validator는 `filter`, `add_property`, `remove_property`도 허용
 
 위 설정은 `network` object를 만들고 지정 field를 그 아래에 넣은 뒤 원래 top-level field를 제거합니다. 같은 이름의 기존 target field는 덮어씁니다. source field가 없으면 nested value는 `null`입니다.
 
-### 5.4 RemoveProperty
+### 5.5 RemoveProperty
 
 ```json
 {
@@ -809,4 +842,3 @@ schema 1.1 chunk event는 `source_id + batch_id + chunk_index`별로 `chunk_item
 - `SchemaDefinitionService`
 - `StructuredTransformController` endpoint DTO
 - mapping/template repository schema와 cache invalidation
-

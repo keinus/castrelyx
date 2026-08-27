@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.keinus.logparser.domain.event.InputAdapterChangedEvent;
+import org.keinus.logparser.domain.event.ParserChangedEvent;
 import org.keinus.logparser.domain.model.mapping.MappingConfiguration;
 import org.keinus.logparser.infrastructure.persistence.entity.InputAdapterEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.ParserEntity;
@@ -11,6 +12,7 @@ import org.keinus.logparser.infrastructure.persistence.entity.TransformEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.OutputAdapterEntity;
 import org.keinus.logparser.infrastructure.persistence.repository.*;
 import org.keinus.logparser.interfaces.exception.ConfigNotFoundException;
+import org.keinus.logparser.interfaces.dto.request.ProcessingStepOrderRequest;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.ArgumentCaptor;
@@ -162,6 +164,39 @@ class ConfigManagementServiceTest {
         
         assertNotNull(saved);
         verify(transformRepository).save(transform);
+    }
+
+    @Test
+    void reorderProcessingStepsUpdatesParserAndTransformTogether() {
+        ParserEntity parser = new ParserEntity();
+        parser.setId(1L);
+        parser.setMessagetype("test");
+        parser.setType("RegexParser");
+        parser.setPriority(20);
+        TransformEntity transform = new TransformEntity();
+        transform.setId(2L);
+        transform.setMessagetype("test");
+        transform.setType("Filter");
+        transform.setPriority(10);
+        when(parserRepository.findByMessagetype("test")).thenReturn(List.of(parser));
+        when(transformRepository.findByMessagetype("test")).thenReturn(List.of(transform));
+
+        ProcessingStepOrderRequest request = new ProcessingStepOrderRequest();
+        ProcessingStepOrderRequest.StepRef transformRef = new ProcessingStepOrderRequest.StepRef();
+        transformRef.setKind("TRANSFORM");
+        transformRef.setId(2L);
+        ProcessingStepOrderRequest.StepRef parserRef = new ProcessingStepOrderRequest.StepRef();
+        parserRef.setKind("PARSER");
+        parserRef.setId(1L);
+        request.setSteps(List.of(transformRef, parserRef));
+
+        service.reorderProcessingSteps("test", request);
+
+        assertEquals(20, parser.getPriority());
+        assertEquals(10, transform.getPriority());
+        verify(parserRepository).saveAll(List.of(parser));
+        verify(transformRepository).saveAll(List.of(transform));
+        verify(eventPublisher, times(1)).publishEvent(any(ParserChangedEvent.class));
     }
 
     @Test

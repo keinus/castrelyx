@@ -33,6 +33,9 @@ public class ParserEntity {
     @Column(name = "param", columnDefinition = "TEXT")
     private String param;
 
+    @Column(name = "source_field", length = 255)
+    private String sourceField;
+
     @Column(name = "priority")
     @Builder.Default
     private Integer priority = 0;

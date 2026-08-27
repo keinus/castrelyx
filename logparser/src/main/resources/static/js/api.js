@@ -298,6 +298,10 @@ const pipelineAPI = {
     getTopology() {
         return api.get('/pipeline/topology');
     },
+
+    reorderProcessingSteps(messageType, steps) {
+        return api.put(`/pipeline/${encodeURIComponent(messageType)}/processing-steps/order`, { steps });
+    },
     
     getLiveTailStatus() {
         return api.get('/pipeline/livetail/status');

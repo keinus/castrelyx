@@ -3,8 +3,6 @@ package org.keinus.logparser.application.pipeline;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.keinus.logparser.domain.event.*;
-import org.keinus.logparser.domain.parse.service.ParseService;
-import org.keinus.logparser.domain.transformation.service.TransformService;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -15,8 +13,7 @@ public class PipelineConfigEventListener {
 
     private final InputAdapterComponent inputAdapterComponent;
     private final OutputAdapterComponent outputAdapterComponent;
-    private final ParseService parseService;
-    private final TransformService transformService;
+    private final ProcessingStepService processingStepService;
     private final MessageDispatcher messageDispatcher;
 
     @EventListener
@@ -70,16 +67,13 @@ public class PipelineConfigEventListener {
     @EventListener
     public void handleParserChanged(ParserChangedEvent event) {
         log.info("Handling ParserChangedEvent: type={}, id={}", event.getChangeType(), event.getParserId());
-        // For simple implementation, reload all parsers
-        // Ideally, ParseService should support granular updates
-        parseService.reload();
+        processingStepService.reload();
     }
 
     @EventListener
     public void handleTransformChanged(TransformChangedEvent event) {
         log.info("Handling TransformChangedEvent: type={}, id={}", event.getChangeType(), event.getTransformId());
-        // For simple implementation, reload all transforms
-        transformService.reload();
+        processingStepService.reload();
     }
 
     @EventListener

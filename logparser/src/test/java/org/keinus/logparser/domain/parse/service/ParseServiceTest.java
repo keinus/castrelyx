@@ -118,6 +118,55 @@ class ParseServiceTest {
         assertTrue(event.getFields().isEmpty());
     }
 
+    @Test
+    void parserStepUsesSelectedStringFieldAndPreservesExistingFields() {
+        ParserAdapterConfig config = parserConfig(1L, 0, false, "(key)=(\\w+)");
+        config.setSourceField("body");
+        ParseService.ParserStep step = parseService.createStep(config);
+
+        LogEvent event = new LogEvent("ignored", "localhost", "test");
+        event.setField("existing", "kept");
+        event.setField("body", "key=value");
+
+        assertTrue(step.execute(event));
+        assertEquals("value", event.getField("key"));
+        assertEquals("kept", event.getField("existing"));
+        assertFalse(event.hasError());
+    }
+
+    @Test
+    void parserStepSerializesMapFieldAsJson() {
+        ParserAdapterConfig config = parserConfig(1L, 0, false, null);
+        config.setType("JsonParser");
+        config.setSourceField("payload");
+        ParseService.ParserStep step = parseService.createStep(config);
+
+        LogEvent event = new LogEvent("ignored", "localhost", "test");
+        event.setField("payload", Map.of("nested", "value"));
+
+        assertTrue(step.execute(event));
+        assertEquals("value", event.getField("nested"));
+    }
+
+    @Test
+    void parserStepStringifiesNumberAndListFields() {
+        ParserAdapterConfig numberConfig = parserConfig(1L, 0, false, "(\\d)(\\d+)");
+        numberConfig.setSourceField("payload");
+        ParseService.ParserStep numberStep = parseService.createStep(numberConfig);
+        LogEvent numberEvent = new LogEvent("ignored", "localhost", "test");
+        numberEvent.setField("payload", 123);
+        assertTrue(numberStep.execute(numberEvent));
+        assertEquals("23", numberEvent.getField("1"));
+
+        ParserAdapterConfig listConfig = parserConfig(2L, 0, false, "(key)=(\\w+)");
+        listConfig.setSourceField("payload");
+        ParseService.ParserStep listStep = parseService.createStep(listConfig);
+        LogEvent listEvent = new LogEvent("ignored", "localhost", "test");
+        listEvent.setField("payload", List.of("key=value"));
+        assertTrue(listStep.execute(listEvent));
+        assertEquals("value", listEvent.getField("key"));
+    }
+
     private ParserAdapterConfig parserConfig(Long id, int priority, boolean continueOnFailure, String pattern) {
         ParserAdapterConfig config = new ParserAdapterConfig();
         config.setId(id);

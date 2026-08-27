@@ -10,6 +10,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.keinus.logparser.domain.configuration.model.TransformConfig;
+import org.keinus.logparser.domain.configuration.model.TransformParamConfig;
 import org.keinus.logparser.domain.configuration.service.DatabaseConfigLoader;
 import org.keinus.logparser.domain.transformation.model.ITransform;
 import org.keinus.logparser.domain.model.LogEvent;
@@ -25,6 +26,25 @@ public class TransformService {
 
     private Map<String, List<ITransform>> transformer = new HashMap<>();
     private final DatabaseConfigLoader databaseConfigLoader;
+
+    /** One initialized transform instance for the unified processing chain. */
+    public static final class TransformStep {
+        private final ITransform transform;
+        private final String transformType;
+
+        private TransformStep(ITransform transform, String transformType) {
+            this.transform = transform;
+            this.transformType = transformType;
+        }
+
+        public String transformType() {
+            return transformType;
+        }
+
+        public boolean execute(LogEvent logEvent) {
+            return transform.transform(logEvent);
+        }
+    }
 
     private ITransform loadLibrary(String className) {
         if ("Structure".equals(className)) {
@@ -82,6 +102,16 @@ public class TransformService {
     public synchronized void reload(List<TransformConfig> transformList) {
         this.transformer = buildTransformers(transformList);
         LOGGER.info("Transform reload completed: {} transforms loaded", transformList == null ? 0 : transformList.size());
+    }
+
+    /** Creates one initialized transform step for the unified processing chain. */
+    public TransformStep createStep(TransformConfig config) {
+        ITransform transformInterface = loadLibrary(config.getType());
+        if (transformInterface == null) {
+            return null;
+        }
+        transformInterface.init(config.getParam() == null ? new TransformParamConfig() : config.getParam());
+        return new TransformStep(transformInterface, config.getType());
     }
 
     /**
