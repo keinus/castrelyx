@@ -2,6 +2,8 @@ package org.keinus.logparser.domain.parse.service;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.Comparator;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +15,7 @@ import org.keinus.logparser.domain.configuration.service.DatabaseConfigLoader;
 import org.keinus.logparser.infrastructure.util.MergingHashMap;
 import org.keinus.logparser.domain.model.LogEvent;
 import org.keinus.logparser.domain.parse.model.IParser;
+import org.keinus.logparser.domain.parse.model.RegexParser;
 import org.springframework.stereotype.Service;
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
 
@@ -61,24 +64,51 @@ public class ParseService {
                 return false;
             }
 
-            String sourceText;
-            try {
-                sourceText = sourceValue instanceof String
-                        ? (String) sourceValue
-                        : sourceValue instanceof Map<?, ?> || sourceValue instanceof Iterable<?>
-                                ? OBJECT_MAPPER.writeValueAsString(sourceValue)
-                                : String.valueOf(sourceValue);
-            } catch (Exception e) {
+            Map<String, Object> parsedFields = parseSourceValue(parser, sourceValue, logEvent);
+            if (parsedFields == null) {
                 return false;
             }
 
-            LogEvent sourceEvent = new LogEvent(sourceText, logEvent.getSourceHost(), logEvent.getMessageType());
-            boolean parsed = parser.parse(sourceEvent);
-            if (parsed) {
-                logEvent.setFields(sourceEvent.getFields());
-            }
-            return parsed;
+            // A parser configured with sourceField replaces that field with the
+            // parser result.  This keeps the parsed structure attached to the
+            // input field and removes the original scalar/list value.
+            logEvent.removeField(sourceField);
+            logEvent.setField(sourceField, parsedFields);
+            return true;
         }
+    }
+
+    /** Keep test inputs and runtime source fields on the same conversion path. */
+    private static Map<String, Object> parseSourceValue(IParser parser, Object sourceValue, LogEvent target) {
+        Iterable<?> values = parser instanceof RegexParser && sourceValue instanceof Iterable<?> items
+                ? items : Collections.singletonList(sourceValue);
+        Map<String, Object> parsedFields = new HashMap<>();
+        boolean matched = false;
+        for (Object value : values) {
+            if (value == null) {
+                continue;
+            }
+            String text;
+            try {
+                text = value instanceof String ? (String) value
+                        : value instanceof Map<?, ?> || value instanceof Iterable<?>
+                                ? OBJECT_MAPPER.writeValueAsString(value) : String.valueOf(value);
+            } catch (Exception e) {
+                target.markAsError("Failed to serialize parser input: " + e.getMessage());
+                return null;
+            }
+            LogEvent sourceEvent = new LogEvent(text, target.getSourceHost(), target.getMessageType());
+            boolean parsed = parser.parse(sourceEvent);
+            if (sourceEvent.hasError()) {
+                target.markAsError(sourceEvent.getProcessingError());
+                return null;
+            }
+            if (parsed) {
+                matched = true;
+                parsedFields.putAll(sourceEvent.getFields());
+            }
+        }
+        return matched ? parsedFields : null;
     }
 
     private MergingHashMap<ParserBinding> parsers = new MergingHashMap<>();
@@ -183,7 +213,10 @@ public class ParseService {
     /**
      * Tests a parser with the given configuration and sample data.
      */
-    public java.util.Map<String, Object> testParser(String parserType, Object param, String sampleData) {
+    public java.util.Map<String, Object> testParser(String parserType, Object param, Object sampleData) {
+        if (sampleData == null) {
+            throw new IllegalArgumentException("Sample data is required");
+        }
         IParser parser = loadLibrary(parserType);
         if (parser == null) {
             throw new IllegalArgumentException("Invalid parser type: " + parserType);
@@ -195,18 +228,18 @@ public class ParseService {
              throw new IllegalArgumentException("Failed to initialize parser: " + e.getMessage(), e);
         }
         
-        LogEvent event = new LogEvent(sampleData, "test-host", "test-type");
-        boolean success = parser.parse(event);
+        LogEvent event = new LogEvent("", "test-host", "test-type");
+        Map<String, Object> parsedFields = parseSourceValue(parser, sampleData, event);
         
         if (event.hasError()) {
              throw new RuntimeException("Parsing failed: " + event.getProcessingError());
         }
         
-        if (!success) {
+        if (parsedFields == null) {
             return java.util.Collections.emptyMap();
         }
         
-        return event.getFields();
+        return parsedFields;
     }
 
     private MergingHashMap<ParserBinding> buildParsers(List<ParserAdapterConfig> parserList) {

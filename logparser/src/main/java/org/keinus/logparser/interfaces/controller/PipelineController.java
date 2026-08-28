@@ -53,7 +53,7 @@ public class PipelineController {
 
     @PutMapping("/{messageType}/processing-steps/order")
     public ResponseEntity<Map<String, String>> reorderProcessingSteps(
-            @PathVariable String messageType,
+            @PathVariable("messageType") String messageType,
             @RequestBody ProcessingStepOrderRequest request) {
         configManagementService.reorderProcessingSteps(messageType, request);
         return ResponseEntity.ok(Map.of(

@@ -21,64 +21,73 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Processing Steps (
 
 `messagetype`은 입력, processing step(parser/transform), output을 연결하는 키입니다. 출력 어댑터의 `messagetype`을 비우면 runtime 생성 시 `all`로 정규화되어 모든 message type을 받을 수 있습니다.
 
-입력 또는 출력 어댑터가 초기화나 런타임 처리 중 예외를 발생시키면 Logparser는 그 어댑터만 자동으로 OFF(`enabled=false`) 처리합니다. 실패한 어댑터는 현재 런타임에서도 제거되며 다른 어댑터와 파이프라인은 계속 동작합니다. 설정이나 외부 연결 문제를 해결한 다음 Sources 또는 Destinations 화면에서 다시 활성화합니다.
+입력 또는 출력 어댑터가 초기화나 런타임 처리 중 예외를 발생시키면 Logparser는 그 어댑터만 자동으로 OFF(`enabled=false`) 처리합니다. 실패한 어댑터는 현재 런타임에서도 제거되며 다른 어댑터와 파이프라인은 계속 동작합니다. 설정이나 외부 연결 문제를 해결한 다음 Inputs 또는 Outputs 화면에서 다시 활성화합니다.
 
 ## 2. 화면 구성
 
-| 메뉴 | 용도 |
-| --- | --- |
-| Pipelines | 하나의 `messagetype`에 연결된 Input → Processing Steps → Structured Transform → Output을 한 화면에서 관리합니다. 기본 진입 화면입니다. |
-| Overview | pipeline 상태와 처리량을 확인합니다. |
-| Pipeline View | 입력, parser, transform, output 연결 상태를 봅니다. |
-| Live Tail | 처리 중 이벤트를 WebSocket으로 확인합니다. |
-| Sources | 입력 어댑터를 생성, 수정, 삭제, 활성화합니다. |
-| Parsers | parser를 생성하고 테스트합니다. |
-| Event Rules | transform rule을 관리합니다. |
-| Schema Map | structured field mapping을 관리합니다. |
-| Destinations | 출력 어댑터를 생성, 수정, 삭제, 활성화합니다. |
-| Configuration | 공통 설정을 관리합니다. |
-| Actions | reload, validate, restart 같은 pipeline 작업을 실행합니다. |
+모든 화면은 React/shadcn 기반의 동일한 사이드바와 헤더를 사용합니다. 좁은 화면에서는 헤더의 메뉴 버튼으로 사이드바를 열 수 있습니다. 선택한 Message type은 Studio와 Schema Mapping 사이에서 유지됩니다.
 
-스크린샷 자산은 `readme/manual-assets/` 아래에 있으며, 화면의 예시 값은 실제 운영 설정과 다를 수 있습니다.
+| 그룹 | 메뉴 | 용도 |
+| --- | --- | --- |
+| Workspace | Overview | 저장된 경로, 실행 상태, 큐, 출력 전송 지표와 worker thread를 확인합니다. |
+| Workspace | Pipeline Studio | Input → Processing Steps → Structured Mapping → Output을 편집하고 테스트합니다. 기본 진입 화면입니다. |
+| Workspace | Live Tail | dispatcher 이벤트를 WebSocket으로 확인합니다. |
+| Configuration | Inputs / Outputs | 입력·출력 어댑터를 검색, 생성, 수정, 복제, 삭제합니다. |
+| Configuration | Parsers / Transforms | 처리 단계의 속성을 편집합니다. 테스트는 Open pipeline으로 Studio에서 실행합니다. |
+| Configuration | Schema Mapping | field mapping, 조건부 sub-table rule, 전역 template을 관리합니다. |
+| System | Settings | 공통 설정과 reload/restart를 관리합니다. |
+| System | Documentation | 사용자 매뉴얼, 설정 reference, Mermaid·StarUML 다이어그램을 읽습니다. |
+
+이전 `markdown-viewer.html`, `transform.html`, `index_legacy.html` 주소도 공통 UI로 이동합니다. `readme/manual-assets/`의 이전 스크린샷과 메뉴 이름은 현재 화면과 다를 수 있습니다.
 
 ### 2.1 Pipeline Studio
 
-Pipeline Studio는 상단에서 하나의 case-sensitive `Message type`을 선택한 뒤 다음 세 영역을 함께 보여줍니다.
+상단에서 case-sensitive Message type을 선택합니다. + 버튼은 빈 작업 공간을 만들며, 실제 설정은 첫 component를 저장할 때 생성됩니다.
 
 | 영역 | 동작 |
 | --- | --- |
-| 왼쪽 pipeline | Input부터 Output까지 top-down 순서, 활성 상태, 핵심 endpoint를 표시합니다. Processing Steps에서 parser와 transform을 함께 drag해 순서를 변경합니다. |
-| 오른쪽 설정 | 선택한 canonical type의 실제 REST argument를 편집합니다. `configParams`는 화면에서 펼쳐서 편집하고 저장할 때 JSON 문자열로 직렬화합니다. |
-| 아래쪽 테스트 | 현재 sample과 draft를 사용해 선택 단계 이후의 JSON, filter 판정, transform diff, structured 결과, output 직렬화와 destination을 표시합니다. |
+| Pipeline stages | Input부터 Output까지 활성 상태와 주요 설정을 표시합니다. Parser/Transform 옆 위·아래 버튼으로 공통 실행 순서를 저장합니다. |
+| 속성 편집기 | Inputs/Outputs 목록과 같은 컴포넌트입니다. 연결·TLS·인증·큐·배치·DLQ를 탭별 개별 필드로 입력합니다. |
+| Test pipeline | 선택한 현재 draft를 저장 전에도 테스트합니다. 직전 활성 processing step의 결과를 Source로 이어 받습니다. |
 
-각 단계의 `Add`로 component를 생성하고, node를 선택해 수정·활성화·복제·삭제할 수 있습니다. Output의 Scope는 현재 message type 또는 `all`을 선택할 수 있습니다. `Save changes`는 현재 component 또는 mapping을 저장하고, `Deploy`는 저장 상태를 검증한 뒤 `/api/v1/pipeline/validate-and-reload`를 호출합니다.
+SNMP 대상과 OID는 항목별 행으로, HTTP 헤더와 변환 규칙은 key/value 입력으로 편집합니다. 알려지지 않은 기존 설정도 유지하며, Advanced의 Additional attributes에서 개별 속성을 추가할 수 있습니다. 잘못된 기존 JSON은 자동으로 빈 값으로 덮어쓰지 않고 오류로 표시합니다. REST API로 복구한 뒤 다시 여세요.
 
-테스트 지원 범위는 backend 기능과 구분됩니다.
+새 component와 복제본은 Disabled 상태로 시작합니다. 저장 전에 Enabled를 확인하세요. Output의 Message type을 `all`로 설정하면 모든 message type을 받으며 각 Studio 경로에도 표시됩니다. `Save input/output/parser/transform`과 `Save mapping`은 해당 설정을 저장하고 런타임 갱신을 요청합니다. 별도 Deploy 단계는 없습니다.
 
-| 단계 | 테스트 처리 |
+`Validate`는 현재 draft의 필수 필드·범위와 활성 입출력 연결을 로컬에서 검사합니다. 네트워크 연결·인증서·실제 전송 성공을 보장하지 않습니다. `Reload configuration`은 저장된 설정으로 `/api/v1/pipeline/validate-and-reload`를 호출하며 실행 전에 확인창을 표시합니다. 저장되지 않은 변경을 두고 다른 화면이나 Message type으로 이동하면 폐기 여부를 확인합니다.
+
+`Test selected step`은 현재 선택한 component만 테스트합니다.
+
+- 첫 processing step은 Original sample event를 사용합니다. Input preview 실행을 먼저 요구하지 않습니다.
+- 하위 step은 직전 활성 order의 성공한 결과를 사용하며 상위 step을 다시 실행하지 않습니다. Source 펼침 영역에서 해당 결과를 확인할 수 있습니다.
+- Parser의 Source field에 필드를 지정하면 그 값을 파싱하고 해당 필드를 결과 객체로 교체합니다. 하위 테스트에서 이 필드를 비우면 직전 결과 전체를 파싱합니다. **운영 런타임에서 빈 sourceField는 originalText를 사용**하므로 테스트 화면에도 이 차이를 안내합니다.
+- 상위 결과가 없거나 실패·drop 상태이면 하위 테스트를 차단합니다. 비활성 processing step은 상속 순서에서 제외합니다.
+- Sample, 상위 설정, 활성 상태, Order 변경과 상위 테스트 재실행은 관련 하위 결과를 무효화합니다. 테스트한 동일 draft를 저장한 경우에는 새 ID와 시간 필드가 생겨도 결과를 유지합니다.
+- Structured mapping은 마지막 처리 결과를, Output preview는 mapping 결과를 사용합니다. Input preview는 별도로 Sample만 사용합니다.
+- 결과는 화면 메모리에만 보관하며 새로고침이나 Message type 변경 시 초기화됩니다.
+
+| 단계 | 테스트 범위 |
 | --- | --- |
-| Parser | `/api/v1/parsers/test`를 사용합니다. |
-| Structured Transform | 임시 mapping을 포함해 `/api/v1/structure/simulate`를 사용합니다. |
-| Input | listener나 외부 연결을 열지 않고 수신 envelope와 source metadata를 preview합니다. 실제 연결 검사는 전용 API가 필요합니다. |
-| Transform | Filter, Group fields, Remove fields를 현재 draft에 대해 브라우저 메모리에서 simulation합니다. |
-| Output | 외부 전송 없이 직렬화된 payload와 destination summary까지만 preview합니다. |
+| Parser | 실제 `/api/v1/parsers/test`로 draft를 테스트합니다. |
+| Structured mapping | 임시 mapping을 포함해 `/api/v1/structure/simulate`를 호출합니다. |
+| Input | 로컬 payload 미리보기입니다. listener, TLS handshake, gzip 해제, 외부 연결을 테스트하지 않습니다. |
+| Transform | Filter, AddProperty, RemoveProperty를 로컬에서 미리봅니다. |
+| Output | 목적지와 event 미리보기입니다. 외부 전송·ACK·저장을 시도하지 않습니다. |
 
-지원되지 않는 연결/전송 테스트는 성공으로 표시하지 않으며 결과 상태에 `previewed locally` 또는 `not attempted`를 명시합니다.
+Parser와 transform은 공통 `priority` 순서로 교차 실행합니다. Parser 성공 후 다음 step이 계속 실행되며 실패 시 `continueOnFailure=true`이면 입력을 유지하고 다음 단계로 진행합니다. Filter가 이벤트를 drop하면 이후 단계와 output은 실행하지 않습니다.
 
-Processing Steps는 카드의 `priority` 순서로 parser와 transform을 교차 실행합니다. parser 성공 후에도 다음 step이 계속 실행되며, parser가 실패했을 때 `continueOnFailure=true`이면 다음 processing step으로 진행합니다. transform이 이벤트를 drop하면 후속 step과 output은 실행되지 않습니다.
+## 3. Overview
 
-## 3. Overview와 Pipeline View
-
-Overview는 파이프라인 구동 상태, 활성 구성 수, 처리량, 최근 오류를 보는 화면입니다. 처리량이 0이면 다음을 먼저 확인합니다.
+Overview의 Pipelines 탭에서 저장된 message type 경로를 선택하면 Studio로 이동합니다. 기존 Pipeline View는 이 탭으로 통합했습니다. Output delivery와 Worker threads는 실제 서버 지표를 10초마다 갱신합니다. 서버에 연결할 수 없으면 unavailable 또는 오류를 표시하고 가짜 상태나 처리량을 표시하지 않습니다.
 
 | 확인 대상 | 설명 |
 | --- | --- |
-| Sources | 입력 어댑터가 enabled인지 확인합니다. |
-| Parsers | 해당 `messagetype`에 parser가 없으면 원문 이벤트가 그대로 통과할 수 있습니다. |
-| Destinations | output이 enabled이고 `messagetype`이 맞는지 확인합니다. |
-| Actions | 설정 변경 후 pipeline reload가 되었는지 확인합니다. |
+| Inputs | 입력이 Enabled인지, port·TLS·broker 설정이 올바른지 확인합니다. |
+| Parsers / Transforms | Message type과 공통 처리 순서를 확인합니다. |
+| Outputs | 출력 활성 여부와 해당 Message type 또는 all 범위를 확인합니다. |
+| Settings | 저장된 설정의 reload/restart가 필요한 경우 실행합니다. |
 
-Pipeline View는 저장된 설정을 기준으로 topology를 보여줍니다. 실제 topology API는 `/api/v1/pipeline/topology`입니다.
+기존 topology API `/api/v1/pipeline/topology`도 유지됩니다.
 
 ## 4. Live Tail
 
@@ -92,9 +101,11 @@ Live Tail은 처리 중인 이벤트를 `/ws/tail` WebSocket으로 브로드캐�
 
 Live Tail은 output adapter가 아니라 dispatcher 단계의 관찰 경로입니다. output이 실패해도 Live Tail에 이벤트가 보일 수 있고, 반대로 Live Tail이 꺼져 있어도 output은 계속 동작할 수 있습니다.
 
-## 5. Sources: 입력 어댑터
+화면에는 최근 500개 이벤트만 유지합니다. 내용 검색과 Message type 필터, 이벤트 펼치기, 표시 중인 이벤트의 JSONL 내보내기를 지원합니다. Pause 동안 도착한 이벤트는 버리며 Resume은 이후 이벤트부터 표시합니다. 화면을 떠나면 이 브라우저의 연결만 닫습니다. Enable/Disable capture는 모든 뷰어에 영향을 주는 서버 설정이므로 확인 창을 거칩니다.
 
-Sources 화면 또는 `/api/v1/input-adapters` API에서 입력을 관리합니다.
+## 5. Inputs: 입력 어댑터
+
+Inputs 화면 또는 `/api/v1/input-adapters` API에서 입력을 관리합니다.
 
 ### 공통 필드
 
@@ -300,14 +311,22 @@ Parsers 화면 또는 `/api/v1/parsers` API에서 parser를 관리합니다.
 | --- | --- | --- |
 | `JsonParser` | 없음 | JSON 원문을 field map으로 파싱 |
 | `GrokParser` | `param` | Grok pattern 적용 |
-| `RegexParser` | `param` | 정규식 capture group 적용 |
+| `RegexParser` | `param` | 이름 있는 그룹은 필드로 추출. 이름 없는 패턴은 group 1=key, group 2=value |
 | `RFC3164SyslogParser` | 없음 | RFC3164 syslog 파싱 |
 | `RFC5424SyslogParser` | 없음 | RFC5424 syslog 파싱 |
 | `HttpParser` | 없음 | HTTP access log 파싱 |
 
 `GrokParser`와 `RegexParser`는 `param`이 필요합니다. parser 테스트 API는 `/api/v1/parsers/test`입니다.
 
-Parser의 선택 필드 `sourceField`를 지정하면 원문 대신 앞선 step이 만든 event field를 parser 입력으로 사용합니다. 빈 값은 `originalText`이며, 문자열은 그대로 전달하고 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환합니다. field가 없거나 null이면 parser step이 실패합니다. Pipeline Studio의 parser 설정에서 `Input field`로 지정할 수 있습니다.
+Parser의 선택 필드 `sourceField`를 지정하면 원문 대신 앞선 step이 만든 event field를 parser 입력으로 사용합니다. 빈 값은 `originalText`이며, 문자열은 그대로 전달하고 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환합니다. 단, `RegexParser`는 List의 각 항목을 따로 파싱합니다. field가 없거나 null이면 parser step이 실패합니다. 지정한 `sourceField`의 파싱이 성공하면 기존 값을 삭제하고 같은 필드에 결과 Map을 저장합니다. Pipeline Studio의 parser 설정에서 `Source field`로 지정할 수 있습니다.
+
+예를 들어 `Source field`가 `syslog_STRUCTURED_DATA`이면 `["[exampleSDID@32473 iut=\"3\"]"]`의
+배열 전체가 아닌 `[exampleSDID@32473 iut="3"]`에 패턴을 적용합니다.
+`^\[(?<sdid>\w+)@(?<id>\d+)\s+(?<attributes>.*)\]$`는 `sdid`, `id`, `attributes`를 추출하고,
+`attributes` 내부의 `iut="3"`, `eventSource="Application"`도 각각 `iut`, `eventSource` key-value로 병합하며,
+파싱에 성공하면 원래 `syslog_STRUCTURED_DATA` 배열을 삭제한 뒤 같은 필드에 결과 Map을 넣습니다. 여러 항목이 매칭되면 결과를 순서대로 병합하고,
+같은 필드는 마지막으로 매칭된 값이 남습니다. 매칭되지 않은 항목은 건너뛰며, 빈 배열이나
+모든 항목이 불일치하는 배열은 파싱 실패입니다. 테스트 API와 실제 pipeline에 동일하게 적용됩니다.
 
 ## 7. Event Rules: Transform
 
@@ -329,9 +348,9 @@ Processing Steps의 전체 순서는 `PUT /api/v1/pipeline/{messageType}/process
 
 현재 message type의 parser/transform을 모두 포함해야 하며, 서버가 양쪽 priority를 transaction으로 재번호화합니다. 목록이 동시에 변경되면 `409 Conflict`가 반환되므로 최신 pipeline을 다시 읽어야 합니다.
 
-## 8. Schema Map
+## 8. Schema Mapping
 
-Schema Map은 `/api/v1/structure/*` API를 사용합니다.
+Schema Mapping은 `/api/v1/structure/*` API를 사용합니다.
 
 | Method | Path | 설명 |
 | --- | --- | --- |
@@ -347,15 +366,15 @@ Schema Map은 `/api/v1/structure/*` API를 사용합니다.
 
 Castrelyx agent 이벤트처럼 `source_id`, `tenant_id`, `item_kind`, `item_type`, `item_key`, `payload_*` field가 있는 이벤트는 output adapter가 조회용 컬럼을 자동 추출합니다. 별도 structured mapping을 적용하는 경우, mapping 결과가 `LogEvent.toOutputMap()`에 들어가는 구조를 확인합니다.
 
-Schema Map 상단의 Template 영역에서 전역 template을 관리할 수 있습니다. `Save Template`은 현재 화면의 mapping을 template으로 저장하고, `Apply`는 선택한 template을 현재 `messageType`의 mapping으로 덮어씁니다. Template 삭제는 저장된 template만 삭제하며 이미 적용된 message type mapping은 삭제하지 않습니다.
+Schema Mapping의 `Mapping template` 선택 영역에서 전역 template을 관리할 수 있습니다. `Save as template`은 현재 화면의 mapping을 template으로 저장하고, `Apply`는 선택한 template을 현재 `messageType`의 mapping으로 덮어씁니다. 적용 전 확인 창을 표시하며 저장과 동시에 런타임에도 반영됩니다. Template 삭제는 저장된 template만 삭제하며 이미 적용된 message type mapping은 삭제하지 않습니다.
 
 Template에는 `name`, `description`, `sourceMessageType`, `config`가 저장됩니다. `sourceMessageType`은 template을 만든 기준을 남기는 값이고, 실제 적용 대상은 화면의 Message Type 입력값 또는 apply API의 `messageType` query 값입니다. 같은 이름의 template은 중복 생성할 수 없습니다.
 
 적용 동작은 overwrite 방식입니다. 예를 들어 `firewall` template을 `vpn` message type에 적용하면 `vpn`의 기존 structured mapping이 template 내용으로 교체되고, 이후 들어오는 `vpn` 이벤트는 새 mapping cache를 다시 구성해서 처리합니다. 원본 template과 `firewall` mapping은 변경되지 않습니다.
 
-## 9. Destinations: 출력 어댑터
+## 9. Outputs: 출력 어댑터
 
-Destinations 화면 또는 `/api/v1/output-adapters` API에서 출력을 관리합니다.
+Outputs 화면 또는 `/api/v1/output-adapters` API에서 출력을 관리합니다.
 
 ### 공통 필드
 
@@ -471,7 +490,7 @@ ClickHouse 출력은 HTTP API를 사용합니다.
 
 ## 10. Metadata와 Validation API
 
-UI는 metadata API를 사용해 type 목록과 필드 schema를 가져옵니다.
+서버는 다음 metadata API로 type 목록과 필드 schema를 제공합니다. 현재 UI는 `frontend/src/lib/adapter-definitions.ts`의 공통 필드 정의를 Studio와 목록 편집기에서 함께 사용합니다. 새 어댑터나 속성을 추가할 때 서버 metadata와 UI 정의를 함께 갱신해야 합니다.
 
 | Method | Path | 설명 |
 | --- | --- | --- |
@@ -497,7 +516,7 @@ UI는 metadata API를 사용해 type 목록과 필드 schema를 가져옵니다.
 | `POST` | `/api/v1/validate/output` | output 설정 검증 |
 | `GET` | `/api/v1/validate/errors` | 누적 validation error 조회 |
 
-## 11. Actions와 운영 제어
+## 11. Settings와 운영 제어
 
 Pipeline 제어 API는 다음과 같습니다.
 
@@ -513,7 +532,7 @@ Pipeline 제어 API는 다음과 같습니다.
 | `GET` | `/api/v1/pipeline/threads` | thread detail 조회 |
 | `PUT` | `/api/v1/pipeline/{messageType}/processing-steps/order` | parser/transform 공통 실행 순서 저장 |
 
-설정을 추가하거나 수정한 뒤 `auto-reload`가 켜져 있으면 일정 지연 후 자동 reload가 실행됩니다. 즉시 반영하려면 Actions에서 reload를 실행합니다.
+어댑터와 처리 단계의 Save는 저장된 설정을 런타임에 반영합니다. Studio의 `Reload configuration`과 Settings의 Reload는 현재 저장된 설정을 다시 읽으며, 화면의 미저장 변경을 배포하는 동작이 아닙니다. Settings에서 검증 후 Reload와 Restart도 실행할 수 있으며, 실행 전 확인 창을 표시합니다.
 
 ## 12. 문서 API
 
@@ -547,12 +566,12 @@ API:
 
 | 증상 | 확인 지점 |
 | --- | --- |
-| 입력이 들어오지 않음 | Sources enabled, port bind 실패, broker 연결 정보, TLS key/trust store 경로 |
+| 입력이 들어오지 않음 | Inputs enabled, port bind 실패, broker 연결 정보, TLS key/trust store 경로 |
 | TLS 입력이 시작되지 않음 | `configParams` JSON, `keyStorePath`, password env, `clientAuth` 설정과 trust store |
 | TLS RabbitMQ 연결 실패 | broker port, trust store, hostname verification, broker 인증서 SAN/CN |
 | Castrelyx agent batch가 거부됨 | client certificate CN과 batch `source_id` 일치 여부, frame size, gzip JSON 형식 |
 | parser 결과가 비어 있음 | `messagetype` 연결, parser type, `param` pattern |
-| output이 없음 | Destinations enabled, output `messagetype`, target 연결 정보 |
+| output이 없음 | Outputs enabled, output `messagetype`, target 연결 정보 |
 | MariaDB output 실패 | `CASTRELYX_DB_USER`, `CASTRELYX_DB_PASSWORD`, JDBC URL, table 권한, `autoCreateSchema` |
 | ClickHouse output 실패 | endpoint URL scheme, database/table identifier, Basic auth env, HTTP status response |
 | 문서가 열리지 않음 | `/api/v1/docs/*` 허용 root와 확장자 확인 |

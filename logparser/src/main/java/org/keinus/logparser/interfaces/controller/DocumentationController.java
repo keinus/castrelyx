@@ -25,7 +25,7 @@ public class DocumentationController {
 
     @GetMapping("/content")
     public ResponseEntity<DocumentationContentDTO> getDocumentationContent(
-            @RequestParam(defaultValue = "README.md") String path
+            @RequestParam(name = "path", defaultValue = "README.md") String path
     ) throws IOException {
         DocumentationService.DocumentAsset asset = documentationService.readTextDocument(path);
 
@@ -38,7 +38,7 @@ public class DocumentationController {
 
     @GetMapping("/raw")
     public ResponseEntity<ByteArrayResource> getDocumentationAsset(
-            @RequestParam String path
+            @RequestParam("path") String path
     ) throws IOException {
         DocumentationService.DocumentAsset asset = documentationService.readRawDocument(path);
         String filename = Path.of(asset.path()).getFileName().toString();

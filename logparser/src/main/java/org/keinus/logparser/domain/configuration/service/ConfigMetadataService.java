@@ -217,11 +217,11 @@ public class ConfigMetadataService {
                     type,
                     Arrays.asList(
                             new FieldSchema("param", "String", true, "Pattern to match"),
-                            new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText")
+                            new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText; success replaces the selected field with the parser result")
                     )
             );
             default -> new AdapterSchema(type, List.of(
-                    new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText")
+                    new FieldSchema("sourceField", "String", false, "Top-level event field to parse; empty uses originalText; success replaces the selected field with the parser result")
             ));
         };
     }

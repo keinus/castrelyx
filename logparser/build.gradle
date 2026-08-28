@@ -75,3 +75,45 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+// The console has one React/shadcn entry point. Legacy source remains available
+// for regression tests, but its independent shells are not shipped in the jar.
+def skipFrontend = providers.gradleProperty('skipFrontend').map { it.toBoolean() }.getOrElse(false)
+def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm'] : ['npm']
+
+tasks.register('frontendInstall', Exec) {
+	workingDir 'frontend'
+	commandLine npmCommand + ['ci', '--no-audit', '--no-fund']
+	inputs.files('frontend/package.json', 'frontend/package-lock.json')
+	// npm writes this marker after installation. Snapshotting the entire dependency
+	// tree makes Windows builds spend minutes hashing files before npm even starts.
+	outputs.file('frontend/node_modules/.package-lock.json')
+	outputs.upToDateWhen {
+		file('frontend/node_modules/vite/package.json').exists() &&
+		file('frontend/node_modules/typescript/package.json').exists()
+	}
+	onlyIf { !skipFrontend }
+}
+
+tasks.register('frontendBuild', Exec) {
+	dependsOn 'frontendInstall'
+	workingDir 'frontend'
+	commandLine npmCommand + ['run', 'build']
+	inputs.files(fileTree('frontend') { exclude 'node_modules/**', 'dist/**', '*.tsbuildinfo' })
+	outputs.dir(layout.buildDirectory.dir('frontend'))
+	onlyIf { !skipFrontend }
+}
+
+sourceSets.main.resources.exclude('static/index.html', 'static/index_legacy.html',
+	'static/transform.html', 'static/markdown-viewer.html', 'static/favicon.svg',
+	'static/js/**', 'static/css/**')
+
+tasks.named('processResources') {
+	dependsOn 'frontendBuild'
+	from(layout.buildDirectory.dir('frontend')) { into 'static' }
+	doFirst {
+		if (!layout.buildDirectory.file('frontend/index.html').get().asFile.exists()) {
+			throw new GradleException('Frontend bundle missing. Run npm ci && npm run build in frontend before using -PskipFrontend=true.')
+		}
+	}
+}

@@ -45,7 +45,7 @@ sourceField VARCHAR(255) NULL
 - Map/List: Jackson JSON 문자열로 직렬화
 - 미존재/null: parser 실패
 
-Parser 결과는 기존과 같이 event의 최상위 field map에 병합한다. 동일 key가 있으면 parser 결과가 덮어쓴다.
+`sourceField`가 비어 있으면 parser 결과를 기존처럼 event의 최상위 field map에 병합한다. `sourceField`가 지정되면 원래 값을 삭제하고 같은 키에 parser 결과 Map을 저장한다. 동일 key가 있으면 parser 결과가 덮어쓴다.
 
 ## 작업 순서
 
@@ -82,7 +82,7 @@ Parser 결과는 기존과 같이 event의 최상위 field map에 병합한다. 
 
 - [ ] parser 설정으로부터 초기화된 parser 인스턴스와 `sourceField`, `continueOnFailure`를 함께 보관한다.
 - [ ] `sourceField`가 없을 때는 기존 `IParser.parse(LogEvent)`를 그대로 호출한다.
-- [ ] `sourceField`가 있을 때는 field 값을 문자열화한 임시 `LogEvent`에 기존 parser를 실행하고, 성공 결과만 원래 event에 병합한다.
+- [ ] `sourceField`가 있을 때는 field 값을 문자열화한 임시 `LogEvent`에 기존 parser를 실행하고, 성공 시 원래 값을 삭제한 뒤 같은 source field에 결과 Map을 저장한다.
 - [ ] field parser 실패가 `continueOnFailure=true`일 때 원래 event를 ERROR 상태로 오염시키지 않도록 한다.
 - [ ] 기존 `parse(LogEvent)`와 `transform(LogEvent)`는 기존 테스트/호환 호출을 위해 유지하되, 통합 실행기가 사용할 수 있는 단일 binding 실행 메서드를 제공한다.
 - [ ] 기존 parser 구현체 6개의 parsing contract 자체는 변경하지 않는다.
@@ -212,7 +212,7 @@ cd D:\study\castrelyx\logparser
 - 같은 message type에서 parser와 transform을 원하는 순서로 배치할 수 있다.
 - 저장한 순서가 DB reload와 애플리케이션 재시작 후에도 유지된다.
 - sourceField 미설정 parser는 기존 raw parsing 결과와 동일하게 동작한다.
-- sourceField 지정 parser는 앞선 step이 만든 field를 입력으로 사용할 수 있다.
+- sourceField 지정 parser는 앞선 step이 만든 field를 입력으로 사용하고, 성공 결과로 해당 field를 교체한다.
 - parser 실패, transform drop, output 전달의 기존 metric/상태 의미가 깨지지 않는다.
 - 기존 설정 migration이 실패하지 않고 parser-first 초기 순서를 보존한다.
 - 전체 Gradle test/build와 UI smoke 검증이 통과한다.
@@ -220,7 +220,6 @@ cd D:\study\castrelyx\logparser
 ## 비범위
 
 - 별도 workflow/step 테이블 및 버전별 step graph
-- nested path 문법(JSONPath/SpEL)과 배열 요소별 parser 실행
-- parser 결과를 source field 하위에 자동 중첩 저장하는 기능
+- nested path 문법(JSONPath/SpEL)
 - transform 자체의 field 선택 입력 기능
 - parser/transform 전용 신규 테스트 서버 또는 프런트엔드 프레임워크 도입

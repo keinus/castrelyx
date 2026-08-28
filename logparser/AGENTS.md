@@ -16,7 +16,10 @@ Logparser는 Java 21과 Spring Boot 기반 로그 처리 파이프라인입니�
 - `infrastructure/persistence`: SQLite entity/repository와 Flyway migration입니다.
 - `interfaces/controller`: REST API controller입니다.
 - `interfaces/websocket`: Live Tail WebSocket입니다.
-- `src/main/resources/static`: 정적 관리 UI입니다.
+- `frontend/src/components/layout`: 모든 화면이 공유하는 shadcn 사이드바와 헤더입니다.
+- `frontend/src/components/adapters`: Studio와 목록 화면이 공유하는 속성별 어댑터 편집기입니다.
+- `frontend/src/features`: Studio, Overview, Live Tail, 어댑터 목록, Schema Mapping, Settings, Documentation입니다.
+- `src/main/resources/static`: 이전 UI 소스와 회귀 테스트 참조입니다. 새 배포에는 `frontend`의 빌드 결과를 사용합니다.
 - `readme`: 상세 매뉴얼, 다이어그램 샘플, 이미지 자산입니다.
 
 생성 산출물인 `build/`, `.gradle/`, 로컬 DB, 로그 파일은 커밋하지 않습니다. 단, `.gitignore`가 특정 logparser source/test path를 막는 경우에는 필요한 예외를 명시적으로 추가합니다.
@@ -29,11 +32,11 @@ Windows PowerShell 기준입니다.
 .\gradlew bootRun
 .\gradlew test
 .\gradlew build
-docker build -t logparser .
+docker build -f Dockerfile -t logparser ..
 docker compose up --build
 ```
 
-Java 21이 필요합니다. Gradle이 Java를 찾지 못하면 `JAVA_HOME`을 Java 21 설치 경로로 지정한 뒤 다시 실행합니다.
+Java 21과 Node.js 22.12 이상이 필요합니다. Gradle은 `frontend`에서 `npm ci`와 `npm run build`를 실행해 UI를 JAR에 포함합니다. 이미 빌드한 UI를 사용하는 Java 전용 작업은 `-PskipFrontend=true`로 실행할 수 있습니다. Gradle이 Java를 찾지 못하면 `JAVA_HOME`을 Java 21 설치 경로로 지정한 뒤 다시 실행합니다.
 
 ```powershell
 $env:JAVA_HOME='C:\Path\To\Java21'
@@ -45,7 +48,8 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 - 기존 Java/Spring Boot 스타일과 package 경계를 따릅니다.
 - adapter 생성은 factory와 configuration service의 등록 흐름을 기준으로 맞춥니다.
 - API 입력 검증은 configuration model/service에 둡니다.
-- 복잡한 adapter 전용 설정은 `configParams` JSON을 사용하되, validation과 metadata schema를 함께 갱신합니다.
+- 복잡한 adapter 전용 설정의 REST 저장 형식은 `configParams` JSON 문자열을 유지합니다. UI는 이를 속성별 입력으로 제공하며, validation과 metadata schema, `frontend/src/lib/adapter-definitions.ts`를 함께 갱신합니다.
+- 화면별 사이드바나 어댑터 폼을 별도로 만들지 않습니다. 공통 레이아웃과 `AdapterEditor`를 재사용하고, 새 필드도 기존 설정의 미지정 속성을 보존해야 합니다.
 - 네트워크/주기 수집 adapter는 timeout, queue size, worker count, close 처리를 명확히 둡니다.
 - 장시간 blocking 작업은 파이프라인 종료와 reload를 막지 않도록 중단 경로를 둡니다.
 
@@ -145,7 +149,7 @@ Schema Map의 template 기능은 message type별 mapping을 재사용하기 위�
 - apply 동작은 선택한 template의 config를 deep copy한 뒤 대상 `messageType`으로 저장합니다. 기존 message type mapping은 덮어쓰며, template 자체는 변경하지 않습니다.
 - apply 이후에는 `StructuredTransformService.invalidateCache(messageType)`를 호출해야 런타임 structured mapping cache가 오래된 설정을 쓰지 않습니다.
 - REST API는 `StructuredTransformController`의 `/api/v1/structure/templates` 계열 endpoint에서 제공합니다.
-- UI는 `static/js/api.js`, `static/js/app.js`, `static/index.html`의 Schema Map toolbar와 연결합니다. 사용자는 template 생성, 선택, 적용, 수정, 삭제를 같은 화면에서 수행할 수 있어야 합니다.
+- UI는 `frontend/src/features/mapping-editor.tsx`를 Studio와 Schema Mapping에서 공유합니다. 사용자는 template 생성, 선택, 적용, 수정, 삭제를 같은 화면에서 수행할 수 있어야 합니다.
 - 변경 시 `MappingTemplateServiceTest`, `MappingTemplateRepositoryTest`, `StructuredTransformControllerTest`를 함께 갱신합니다.
 - 사용자 문서는 `README.md`, `readme/logparser-user-manual.md`, 흐름 다이어그램은 `readme/diagram_samples.md`에 반영합니다.
 
@@ -156,6 +160,7 @@ Schema Map의 template 기능은 message type별 mapping을 재사용하기 위�
 - factory alias나 reflection 생성 경로가 바뀌면 factory 테스트를 추가합니다.
 - DB migration이나 trigger가 바뀌면 기존 DB와 신규 DB 양쪽을 고려합니다.
 - 완료 전 최소 `.\gradlew test`를 실행합니다. 로컬에 Java가 없으면 정확한 실패 메시지를 남깁니다.
+- UI 변경은 `frontend`에서 `npm test`, `npm run build`와 브라우저의 데스크톱/모바일 화면으로 검증합니다. 테스트 서버는 별도 SQLite DB를 사용해 운영 설정을 건드리지 않습니다.
 
 ## 보안과 설정
 

@@ -11,6 +11,7 @@ import org.keinus.logparser.infrastructure.persistence.entity.*;
 import org.keinus.logparser.infrastructure.persistence.repository.*;
 import org.keinus.logparser.interfaces.exception.ConfigNotFoundException;
 import org.keinus.logparser.interfaces.exception.ConfigConflictException;
+import org.keinus.logparser.interfaces.exception.ConfigValidationException;
 import org.keinus.logparser.interfaces.dto.request.ProcessingStepOrderRequest;
 import org.keinus.logparser.interfaces.dto.response.PipelineTopologyDto;
 import org.springframework.context.ApplicationEventPublisher;
@@ -634,7 +635,7 @@ public class ConfigManagementService {
 
     private void assertValid(String entityName, ConfigValidationService.ValidationResult result) {
         if (!result.isValid()) {
-            throw new IllegalArgumentException(entityName + " validation failed: " + result.errors());
+            throw new ConfigValidationException(entityName + " validation failed", result.errors());
         }
     }
 

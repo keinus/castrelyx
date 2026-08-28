@@ -1302,36 +1302,58 @@ const App = (function() {
 
     // --- Live Tail ---
     let ws = null;
-    let wsReconnectInterval = null;
+    let wsReconnectTimeout = null;
 
-    async function connectLiveTail() {
-        // Init Toggle State
+    function scheduleLiveTailReconnect() {
+        if (wsReconnectTimeout !== null) return;
+        wsReconnectTimeout = setTimeout(() => {
+            wsReconnectTimeout = null;
+            connectLiveTail();
+        }, 3000);
+    }
+
+    async function refreshLiveTailStatus(socket) {
         try {
             const status = await pipelineAPI.getLiveTailStatus();
+            if (ws !== socket) return;
             const toggle = document.getElementById('livetail-service-toggle');
             if(toggle) toggle.checked = status.enabled;
         } catch (e) {
-            console.error("Failed to fetch live tail status", e);
+            if (ws === socket) console.error("Failed to fetch live tail status", e);
+        }
+    }
+
+    function connectLiveTail() {
+        // Reserve the socket synchronously, before any asynchronous status request.
+        if (ws && ws.readyState !== WebSocket.CLOSED) return;
+        if (wsReconnectTimeout !== null) {
+            clearTimeout(wsReconnectTimeout);
+            wsReconnectTimeout = null;
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = `${protocol}//${window.location.host}/ws/tail`;
         
         console.log(`Connecting to Live Tail WebSocket: ${url}`);
-        ws = new WebSocket(url);
+        let socket;
+        try {
+            socket = new WebSocket(url);
+        } catch (e) {
+            console.error('Failed to connect live tail WebSocket', e);
+            scheduleLiveTailReconnect();
+            return;
+        }
+        ws = socket;
 
-        ws.onopen = () => {
+        socket.onopen = () => {
+            if (ws !== socket) return;
             console.log('Live Tail connected');
             const term = document.getElementById('terminal-window');
-            term.innerHTML += `<div class="text-emerald-500 font-bold border-b border-emerald-900/50 pb-1"># Connected to log stream</div>`;
-            
-            if (wsReconnectInterval) {
-                clearInterval(wsReconnectInterval);
-                wsReconnectInterval = null;
-            }
+            if (term) term.innerHTML += `<div class="text-emerald-500 font-bold border-b border-emerald-900/50 pb-1"># Connected to log stream</div>`;
         };
 
-        ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+            if (ws !== socket) return;
             const view = document.getElementById('view-live-tail');
             if (view.classList.contains('hidden')) return;
             
@@ -1366,20 +1388,24 @@ const App = (function() {
             }
         };
 
-        ws.onclose = () => {
+        socket.onclose = () => {
+            if (ws !== socket) return;
+            ws = null;
             console.log('Live Tail disconnected');
             const term = document.getElementById('terminal-window');
             if (term) term.innerHTML += `<div class="text-amber-500 font-bold border-b border-amber-900/50 pb-1"># Disconnected. Reconnecting...</div>`;
             
-            if (!wsReconnectInterval) {
-                wsReconnectInterval = setInterval(connectLiveTail, 3000);
-            }
+            scheduleLiveTailReconnect();
         };
 
-        ws.onerror = (error) => {
+        socket.onerror = (error) => {
+            if (ws !== socket) return;
             console.error('WebSocket error:', error);
-            ws.close();
+            socket.close();
         };
+
+        // Status refresh must not block connection setup or queue extra connections.
+        void refreshLiveTailStatus(socket);
     }
 
     async function toggleLiveTailService(enabled) {

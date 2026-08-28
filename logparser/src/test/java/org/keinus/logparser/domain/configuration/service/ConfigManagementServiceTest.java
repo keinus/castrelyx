@@ -12,6 +12,7 @@ import org.keinus.logparser.infrastructure.persistence.entity.TransformEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.OutputAdapterEntity;
 import org.keinus.logparser.infrastructure.persistence.repository.*;
 import org.keinus.logparser.interfaces.exception.ConfigNotFoundException;
+import org.keinus.logparser.interfaces.exception.ConfigValidationException;
 import org.keinus.logparser.interfaces.dto.request.ProcessingStepOrderRequest;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -150,6 +151,35 @@ class ConfigManagementServiceTest {
         
         assertNotNull(saved);
         verify(parserRepository).save(parser);
+    }
+
+    @Test
+    void invalidRegexIsRejectedBeforeCreateOrReload() {
+        when(validationService.validateParser(any())).thenCallRealMethod();
+        ParserEntity parser = ParserEntity.builder().type("RegexParser").messagetype("syslog")
+                .param("(?P<sdid>\\w+)").build();
+
+        ConfigValidationException error = assertThrows(ConfigValidationException.class,
+                () -> service.createParser(parser));
+
+        assertTrue(error.getValidationErrors().getFirst().contains("(?<name>...)"));
+        verifyNoInteractions(parserRepository, eventPublisher);
+    }
+
+    @Test
+    void invalidRegexUpdateLeavesSavedParserAndPipelineUnchanged() {
+        when(validationService.validateParser(any())).thenCallRealMethod();
+        ParserEntity existing = ParserEntity.builder().id(17L).type("RegexParser").messagetype("syslog")
+                .param("(\\w+)=(\\w+)").build();
+        when(parserRepository.findById(17L)).thenReturn(Optional.of(existing));
+        ParserEntity update = ParserEntity.builder().type("RegexParser").messagetype("syslog")
+                .param("^\\[(?P<sdid>\\w+)@(?P<id>\\d+)\\s+(?P<attributes>.*)\\]$").build();
+
+        assertThrows(ConfigValidationException.class, () -> service.updateParser(17L, update));
+
+        assertEquals("(\\w+)=(\\w+)", existing.getParam());
+        verify(parserRepository, never()).save(any());
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test

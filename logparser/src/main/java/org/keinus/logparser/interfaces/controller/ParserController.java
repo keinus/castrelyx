@@ -40,7 +40,7 @@ public class ParserController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ParserEntity> getParser(@PathVariable Long id) {
+    public ResponseEntity<ParserEntity> getParser(@PathVariable("id") Long id) {
 
         ParserEntity entity = configManagementService.getParser(id);
         return ResponseEntity.ok(entity);
@@ -48,7 +48,7 @@ public class ParserController {
 
     @PutMapping("/{id}")
     public ResponseEntity<ParserEntity> updateParser(
-            @PathVariable Long id,
+            @PathVariable("id") Long id,
             @RequestBody ParserEntity entity) {
 
         ParserEntity updated = configManagementService.updateParser(id, entity);
@@ -56,21 +56,21 @@ public class ParserController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteParser(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteParser(@PathVariable("id") Long id) {
 
         configManagementService.deleteParser(id);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/type/{type}")
-    public ResponseEntity<List<ParserEntity>> getParsersByType(@PathVariable String type) {
+    public ResponseEntity<List<ParserEntity>> getParsersByType(@PathVariable("type") String type) {
 
         List<ParserEntity> result = configManagementService.getParsersByType(type);
         return ResponseEntity.ok(result);
     }
 
     @GetMapping("/messagetype/{messageType}")
-    public ResponseEntity<List<ParserEntity>> getParsersByMessageType(@PathVariable String messageType) {
+    public ResponseEntity<List<ParserEntity>> getParsersByMessageType(@PathVariable("messageType") String messageType) {
 
         List<ParserEntity> result = configManagementService.getParsersByMessageType(messageType);
         return ResponseEntity.ok(result);
@@ -78,8 +78,8 @@ public class ParserController {
 
     @PatchMapping("/{id}/priority")
     public ResponseEntity<ParserEntity> updateParserPriority(
-            @PathVariable Long id,
-            @RequestParam Integer priority) {
+            @PathVariable("id") Long id,
+            @RequestParam("priority") Integer priority) {
 
         ParserEntity entity = configManagementService.updateParserPriority(id, priority);
         return ResponseEntity.ok(entity);
@@ -111,6 +111,6 @@ public class ParserController {
     public static class ParserTestRequest {
         private String type;
         private Object param;
-        private String sampleData;
+        private Object sampleData;
     }
 }

@@ -40,8 +40,9 @@ public class LiveTailService {
     }
 
     public void removeSession(WebSocketSession session) {
-        sessions.remove(session.getId());
-        log.info("Live tail session removed: {}", session.getId());
+        if (sessions.remove(session.getId()) != null) {
+            log.info("Live tail session removed: {}", session.getId());
+        }
     }
 
     public int getSessionCount() {

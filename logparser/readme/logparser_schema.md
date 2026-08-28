@@ -4,6 +4,8 @@
 
 ## 1. 문서 적용 기준
 
+관리 UI의 Pipeline Studio와 Inputs/Outputs는 같은 속성별 편집기를 사용합니다. TLS·인증·SNMP 대상/OID·배치·헤더 등은 각각의 입력 항목으로 편집하며, 내부 저장 시에만 기존 `configParams` JSON 문자열로 직렬화합니다. 화면 구조가 바뀌어도 아래 REST 필드명·인코딩·런타임 계약은 유지합니다. 공통 폼 정의는 `frontend/src/lib/adapter-definitions.ts`이며, 저장된 추가 속성은 폼 편집 후에도 보존합니다.
+
 설정 동작이 서로 다르게 보일 때는 다음 우선순위로 해석합니다.
 
 1. 실제 adapter/parser/transform 생성자와 런타임 서비스
@@ -337,7 +339,7 @@ DB trigger와 validator는 `json`, `grok`, `regex`, `rfc3164`, `rfc5424`, `http`
 | --- | --- | --- |
 | `JsonParser` | 사용 안 함 | 원문 JSON object를 `Map<String,Object>`로 merge. top-level array는 실패 |
 | `GrokParser` | 필수 Grok pattern | 기본 Grok pattern library를 등록하고 named capture를 field로 추가 |
-| `RegexParser` | 필수 Java regex | 모든 match에서 capture group 1을 key, group 2를 value로 저장. 최소 2개 capture group 필요 |
+| `RegexParser` | 필수 Java regex | 이름 있는 capture group은 이름을 key로 저장. 이름 있는 그룹이 없으면 group 1=key, group 2=value이며 최소 2개 capture group 필요 |
 | `RFC3164SyslogParser` | 사용 안 함 | `FACILITY`, `SEVERITY`, `SEVERITY_TEXT`, `TIMESTAMP`, `HOST`, `TAG`, `MESSAGE`, `DECODE_ERRORS`; message의 `key=value`도 lowercase key로 추가 |
 | `RFC5424SyslogParser` | 사용 안 함 | `syslog_FACILITY`, `syslog_SEVERITY`, `syslog_SEVERITY_TEXT`, `syslog_VERSION`, `syslog_TIMESTAMP`, `syslog_HOST`, `syslog_APP_NAME`, `syslog_PROCID`, `syslog_MSGID`, `syslog_STRUCTURED_DATA`, `syslog_MESSAGE`, `syslog_DECODE_ERRORS` |
 | `HttpParser` | 사용 안 함 | request line은 버리고 `headers` map과 `body` string 생성. header key는 uppercase |
@@ -354,15 +356,33 @@ Parser test endpoint는 다음 object를 받습니다.
 
 `POST /api/v1/parsers/test`는 저장하지 않고 즉시 parser를 초기화해 결과 field map을 반환합니다.
 
+`RegexParser`의 `param`은 Java 정규식 문법을 사용합니다. Python의 `(?P<name>...)` 대신
+`(?<name>...)`를 사용해야 합니다. 생성/수정 시 정규식을 컴파일해 검증하며, 문법이 틀리면
+저장하거나 파이프라인을 재로딩하지 않고 HTTP 400과 오류 위치/수정 안내를 반환합니다.
+이름 있는 그룹이 하나라도 있으면 이름 있는 그룹만 필드로 추출하고, 매칭되지 않은 optional
+그룹은 생략합니다. `sampleData`는 기존 문자열 외에 배열도 받을 수 있으며, `RegexParser`는
+각 배열 항목을 따로 파싱합니다. 예를 들어 다음 요청은 `sdid: exampleSDID`, `id: 32473`,
+`attributes: iut="3"`를 반환하고, attributes 안의 `iut="3"` 같은 항목은 `iut: "3"` 개별 field로도 병합합니다.
+
+```json
+{
+  "type": "RegexParser",
+  "param": "^\\[(?<sdid>\\w+)@(?<id>\\d+)\\s+(?<attributes>.*)\\]$",
+  "sampleData": ["[exampleSDID@32473 iut=\"3\"]"]
+}
+```
+
 `sourceField` 입력 규칙은 다음과 같습니다.
 
 - 미지정/blank: 기존처럼 `originalText` 사용
 - String: 그대로 전달
 - 숫자/boolean: 문자열로 변환
-- Map/List: JSON 문자열로 직렬화
+- Map/List: JSON 문자열로 직렬화. 단, `RegexParser`의 List는 각 항목을 따로 파싱
 - 필드가 없거나 null: parser step 실패
 
-성공한 parser 결과는 원래 event의 top-level field map에 병합됩니다. nested path(JSONPath/SpEL)는 지원하지 않습니다.
+`sourceField`가 없는 parser의 성공 결과는 원래 event의 top-level field map에 병합됩니다. `sourceField`가 있으면 원래 source field 값을 삭제하고 같은 키에 parser 결과 Map을 넣습니다. `attributes` named group에서 발견한 `key="value"` 항목도 결과 Map에 추가되며, 원본 `attributes` 문자열은 유지됩니다. nested path(JSONPath/SpEL)는 지원하지 않습니다.
+`RegexParser`의 배열 입력은 하나 이상 매칭되면 성공하며, 결과는 항목 순서대로 병합합니다.
+같은 필드는 마지막으로 매칭된 값이 남고, null/불일치 항목은 건너뜁니다. 성공 시 원본 source field 값은 결과 Map으로 교체됩니다.
 
 ## 5. Transform
 

@@ -211,11 +211,9 @@ const PipelineStudio = (function() {
         valid: true,
         activeTab: 'connection',
         sampleInput: SAMPLE_INPUT,
-        testStage: '',
-        testResult: null,
-        testStatus: 'Draft configuration ready',
-        testStats: '—',
-        testError: false,
+        testResults: new Map(),
+        testRevision: 0,
+        testRunId: 0,
         testRunning: false,
         lastLoadError: null,
         nextDemoId: 100
@@ -232,7 +230,7 @@ const PipelineStudio = (function() {
     function parserDef(type, label, icon, description, needsPattern = false) {
         const fields = [
             field('priority', 'Order', 'number', { default: 10, min: 0, tab: 'behavior' }),
-            field('sourceField', 'Input field', 'text', { tab: 'behavior', list: 'studio-source-fields', placeholder: 'Raw event (originalText)', help: 'Optional event field to parse. Leave empty to parse the original log text. You may also enter a field not shown in the list.' }),
+            field('sourceField', 'Input field', 'text', { tab: 'behavior', list: 'studio-source-fields', placeholder: 'Raw event (originalText)', help: 'Optional event field to parse. Leave empty to parse the original log text. On success, the selected field is replaced with the parser result Map. You may also enter a field not shown in the list.' }),
             field('continueOnFailure', 'Continue on failure', 'boolean', { default: false, tab: 'behavior', help: 'When enabled, processing continues with the next step after this parser fails.' })
         ];
         if (needsPattern) {
@@ -338,6 +336,7 @@ const PipelineStudio = (function() {
     }
 
     async function loadStudioData(options = {}) {
+        state.testRunId++;
         state.loading = true;
         renderLoading();
         const forceDemo = new URLSearchParams(window.location.search).get('studioDemo') === '1';
@@ -452,13 +451,7 @@ const PipelineStudio = (function() {
                 ...stageItems('parser').map(item => ({ ...item, componentStage: 'parser' })),
                 ...stageItems('transform').map(item => ({ ...item, componentStage: 'transform' }))
             ]
-                .sort((a, b) => {
-                    const byPriority = Number(a.priority || 0) - Number(b.priority || 0);
-                    if (byPriority !== 0) return byPriority;
-                    const byKind = String(a.componentStage).localeCompare(String(b.componentStage));
-                    if (byKind !== 0) return byKind;
-                    return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
-                });
+                .sort(compareProcessingOrder);
         }
         const items = state.data[stage] || [];
         return items
@@ -472,6 +465,15 @@ const PipelineStudio = (function() {
                 }
                 return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
             });
+    }
+
+    function compareProcessingOrder(a, b) {
+        const byPriority = Number(a.priority || 0) - Number(b.priority || 0);
+        if (byPriority !== 0) return byPriority;
+        const byKind = String(a.componentStage).localeCompare(String(b.componentStage));
+        if (byKind !== 0) return byKind;
+        if (a.id == null || b.id == null) return a.id == null ? (b.id == null ? 0 : 1) : -1;
+        return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
     }
 
     function selectComponent(stage, id, force = false) {
@@ -489,7 +491,7 @@ const PipelineStudio = (function() {
         }
         state.dirty = false;
         state.valid = true;
-        state.testStage = componentStageKey(stage, id);
+        state.testRunId++;
         renderAll();
         return true;
     }
@@ -851,58 +853,116 @@ const PipelineStudio = (function() {
     function renderTest() {
         const container = document.getElementById('studio-test');
         if (!container) return;
-        const options = testStageOptions();
-        if (!options.some(option => option.value === state.testStage)) state.testStage = options[0]?.value || 'raw';
-        const selectedLabel = options.find(option => option.value === state.testStage)?.label || 'Raw input';
-        const result = state.testResult == null ? defaultTestResult() : state.testResult;
+        const { node, source, result } = testContext();
+        const sourceLabel = source.node ? `Source · ${source.node.label} test result` : 'Sample batch item';
+        const status = result?.status || source.error || 'Run test to see the current draft result';
+        const activeInput = document.activeElement;
+        const selection = activeInput?.id === 'studio-sample-input'
+            ? [activeInput.selectionStart, activeInput.selectionEnd] : null;
         container.innerHTML = `
             <header class="studio-test-toolbar">
                 <div><h3 class="studio-test-title">Test current draft</h3><p class="studio-test-subtitle">Runs in memory · Nothing is deployed${state.demo ? ' · Demo data' : ''}</p></div>
                 <div class="studio-test-controls">
-                    <label for="studio-test-stage">Stage result</label>
-                    <select id="studio-test-stage" class="studio-select">${options.map(option => `<option value="${escapeAttr(option.value)}" ${option.value === state.testStage ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>
-                    <span class="studio-test-stats">${escapeHtml(state.testStats)}</span>
-                    <button class="studio-run-button" type="button" data-run-test ${state.testRunning ? 'disabled' : ''}><span class="material-icons-round">${state.testRunning ? 'sync' : 'play_arrow'}</span>${state.testRunning ? 'Running' : 'Run test'}</button>
+                    <span class="studio-test-stats">${escapeHtml(result?.stats || '—')}</span>
+                    <button class="studio-run-button" type="button" data-run-test ${state.testRunning || !node || source.error ? 'disabled' : ''}><span class="material-icons-round">${state.testRunning ? 'sync' : 'play_arrow'}</span>${state.testRunning ? 'Running' : 'Run test'}</button>
                 </div>
             </header>
             <div class="studio-test-grid">
                 <section class="studio-code-pane">
-                    <div class="studio-code-heading"><span>Sample batch item</span><span class="material-icons-round">edit</span></div>
-                    <textarea id="studio-sample-input" class="studio-code-editor" spellcheck="false">${escapeHtml(state.sampleInput)}</textarea>
-                    <div class="studio-code-status"><span class="material-icons-round">check_circle</span><span>Draft sample · editable JSON or raw text</span></div>
+                    <div class="studio-code-heading"><span>${escapeHtml(sourceLabel)}</span><span class="material-icons-round">${source.node ? 'link' : 'edit'}</span></div>
+                    <textarea id="${source.node ? 'studio-test-source' : 'studio-sample-input'}" aria-label="${escapeAttr(sourceLabel)}" class="studio-code-editor" spellcheck="false" ${source.node ? 'readonly' : ''}>${escapeHtml(source.text)}</textarea>
+                    <div class="studio-code-status ${source.error ? 'is-error' : ''}"><span class="material-icons-round">${source.error ? 'info' : 'check_circle'}</span><span>${escapeHtml(source.error || (source.node ? 'Inherited test result · read only' : 'Draft sample · editable JSON or raw text'))}</span></div>
                 </section>
                 <section class="studio-code-pane">
-                    <div class="studio-code-heading"><span>Result after ${escapeHtml(selectedLabel.replace(/^\d+\s+/, ''))}</span><span class="material-icons-round">content_copy</span></div>
-                    <pre id="studio-test-result" class="studio-code-result">${syntaxHighlight(result)}</pre>
-                    <div class="studio-code-status ${state.testError ? 'is-error' : ''}"><span class="material-icons-round">${state.testError ? 'error' : 'check_circle'}</span><span>${escapeHtml(state.testStatus)}</span></div>
+                    <div class="studio-code-heading"><span>Result after ${escapeHtml(node?.label || 'current draft')}</span><span class="material-icons-round">content_copy</span></div>
+                    <pre id="studio-test-result" class="studio-code-result">${result ? syntaxHighlight(result.payload) : 'No test result yet'}</pre>
+                    <div class="studio-code-status ${result?.error || source.error ? 'is-error' : ''}"><span class="material-icons-round">${result?.error || source.error ? 'error' : 'info'}</span><span>${escapeHtml(status)}</span></div>
                 </section>
             </div>`;
-    }
-
-    function testStageOptions() {
-        const options = [{ value: 'raw', label: 'Raw input' }];
-        STAGES.forEach(stage => {
-            stageItems(stage.key).forEach((item, index) => {
-                const actualStage = item.componentStage || stage.key;
-                const label = actualStage === 'structured' ? 'Structured transform' : (getTypeDef(actualStage, item.type)?.label || humanizeType(item.type));
-                options.push({ value: componentStageKey(actualStage, item.id), label: `${stage.number} ${label}${index > 0 ? ` ${index + 1}` : ''}` });
-            });
-        });
-        return options;
+        if (selection) {
+            const input = document.getElementById('studio-sample-input');
+            input?.focus();
+            input?.setSelectionRange(...selection);
+        }
     }
 
     function componentStageKey(stage, id) {
-        return stage === 'structured' ? 'structured:mapping' : `${stage}:${id}`;
+        return stage === 'structured' ? 'structured:mapping' : `${stage}:${id ?? 'draft'}`;
     }
 
-    function defaultTestResult() {
-        const parsed = safeJson(state.sampleInput, { raw: state.sampleInput });
-        if (state.testStage.startsWith('input:')) {
-            const id = state.testStage.split(':')[1];
-            const input = stageItems('input').find(item => String(item.id) === String(id));
-            return inputPreview(parsed, input);
+    function testNodes() {
+        const nodesFor = stage => {
+            let items = stageItems(stage).map(normalizeEntity);
+            if (state.selected?.stage === stage && state.draft && ['create', 'edit'].includes(state.mode)) {
+                items = items.filter(item => String(item.id) !== String(state.selected.id));
+                items.push({ ...deepClone(state.draft), id: state.selected.id });
+            }
+            return items.map(config => ({ stage, id: config.id, config }));
+        };
+        const processing = [...nodesFor('parser'), ...nodesFor('transform')].sort((a, b) =>
+            compareProcessingOrder({ ...a.config, componentStage: a.stage }, { ...b.config, componentStage: b.stage }));
+        const nodes = [
+            ...nodesFor('input'), ...processing,
+            { stage: 'structured', id: 'mapping', config: state.mapping }, ...nodesFor('output')
+        ];
+        let previous = null;
+        for (const node of nodes) {
+            node.key = componentStageKey(node.stage, node.id);
+            node.label = node.stage === 'structured' ? 'Structured transform'
+                : (getTypeDef(node.stage, node.config.type)?.label || node.config.type);
+            if (['parser', 'transform'].includes(node.stage)) node.label += ` · order ${node.config.priority ?? 0}`;
+            node.sourceKey = node.stage === 'input' ? null : previous;
+            if (node.stage === 'structured' || (['parser', 'transform'].includes(node.stage) && node.config.enabled !== false)) previous = node.key;
         }
-        return parsed;
+        return nodes;
+    }
+
+    function testSignature(node) {
+        // Compare the editable test settings, not server-generated ids/timestamps/default null fields.
+        const definition = getTypeDef(node.stage, node.config?.type);
+        const config = definition ? [node.config.type, node.config.enabled !== false,
+            ...definition.fields.map(item => {
+                let value = getPath(node.config, item.path);
+                if (value == null || value === '') value = item.default ?? null;
+                if (['keyValue', 'mapList'].includes(item.type)) value = safeJson(value, {});
+                if (item.type === 'json') value = safeJson(value, value);
+                if (item.type === 'jsonList') value = parseJsonList(value);
+                return [item.path, value];
+            })]
+            : node.config;
+        return JSON.stringify([state.messageType, state.sampleInput, state.demo, config,
+            node.sourceKey, state.testResults.get(node.sourceKey)?.revision ?? null]);
+    }
+
+    function pruneTestResults(nodes) {
+        const keys = new Set(nodes.map(node => node.key));
+        for (const key of state.testResults.keys()) if (!keys.has(key)) state.testResults.delete(key);
+        // Nodes are visited in execution order so invalidating a result also invalidates its descendants.
+        for (const node of nodes) {
+            const result = state.testResults.get(node.key);
+            const source = state.testResults.get(node.sourceKey);
+            if (result && (result.signature !== testSignature(node)
+                || (node.sourceKey && (!source || source.error || source.count === 0)))) state.testResults.delete(node.key);
+        }
+    }
+
+    function testSource(node, nodes) {
+        if (!node?.sourceKey) return { node: null, text: state.sampleInput, error: node ? null : 'Choose a component type to test.' };
+        const sourceNode = nodes.find(item => item.key === node.sourceKey);
+        const result = state.testResults.get(node.sourceKey);
+        let error = null;
+        if (!result || result.error) error = `Test ${sourceNode.label} successfully first.`;
+        else if (result.count === 0) error = `${sourceNode.label} dropped the event. No source is available.`;
+        return { node: sourceNode, text: error ? '' : JSON.stringify(result.payload, null, 2),
+            payload: error ? null : deepClone(result.payload), error };
+    }
+
+    function testContext() {
+        const nodes = testNodes();
+        pruneTestResults(nodes);
+        const key = state.selected && componentStageKey(state.selected.stage, state.selected.id);
+        const node = nodes.find(item => item.key === key);
+        return { nodes, node, source: testSource(node, nodes), result: state.testResults.get(key) };
     }
 
     function inputPreview(parsed, input) {
@@ -1081,13 +1141,10 @@ const PipelineStudio = (function() {
     }
 
     function handleTestInput(event) {
-        if (event.target.id === 'studio-sample-input') state.sampleInput = event.target.value;
-        if (event.target.id === 'studio-test-stage') {
-            state.testStage = event.target.value;
-            state.testResult = null;
-            state.testStats = '—';
-            state.testStatus = 'Draft configuration ready';
-            state.testError = false;
+        if (event.target.id === 'studio-sample-input' && state.sampleInput !== event.target.value) {
+            state.sampleInput = event.target.value;
+            state.testRunId++;
+            state.testResults.clear();
             renderTest();
         }
     }
@@ -1095,7 +1152,9 @@ const PipelineStudio = (function() {
     function handleTestClick(event) {
         if (event.target.closest('[data-run-test]')) runTest();
         if (event.target.closest('.studio-code-heading .material-icons-round') && event.target.textContent.trim() === 'content_copy') {
-            navigator.clipboard?.writeText(JSON.stringify(state.testResult, null, 2));
+            const result = testContext().result;
+            if (!result) return;
+            navigator.clipboard?.writeText(JSON.stringify(result.payload, null, 2));
             showToast('Test result copied', 'success');
         }
     }
@@ -1111,6 +1170,7 @@ const PipelineStudio = (function() {
         state.draft = null;
         state.original = null;
         state.dirty = false;
+        state.testRunId++;
         renderAll();
     }
 
@@ -1121,8 +1181,8 @@ const PipelineStudio = (function() {
         typeDef.fields.forEach(item => {
             if (item.default !== undefined) setPath(draft, item.path, deepClone(item.default));
         });
-        if ((stage === 'parser' || stage === 'transform') && draft.priority == null) {
-            const priorities = stageItems(stage).map(item => Number(item.priority || 0));
+        if (stage === 'parser' || stage === 'transform') {
+            const priorities = stageItems('processing').map(item => Number(item.priority || 0));
             draft.priority = (priorities.length ? Math.max(...priorities) : 0) + 10;
         }
         state.mode = 'create';
@@ -1130,7 +1190,7 @@ const PipelineStudio = (function() {
         state.original = deepClone(draft);
         state.activeTab = typeDef.tabs?.[0] || 'general';
         state.dirty = true;
-        state.testStage = 'raw';
+        state.testRunId++;
         renderAll();
     }
 
@@ -1185,7 +1245,9 @@ const PipelineStudio = (function() {
     function markDirty() {
         state.dirty = true;
         state.valid = true;
+        state.testRunId++;
         renderHeader();
+        renderTest();
     }
 
     async function saveCurrent() {
@@ -1217,6 +1279,12 @@ const PipelineStudio = (function() {
                 if (!saved) saved = { ...payload, id: state.selected.id };
             }
             const selection = { stage, id: saved.id ?? state.selected.id };
+            const draftKey = componentStageKey(stage, state.selected.id);
+            const savedKey = componentStageKey(stage, selection.id);
+            if (draftKey !== savedKey && state.testResults.has(draftKey)) {
+                state.testResults.set(savedKey, state.testResults.get(draftKey));
+                state.testResults.delete(draftKey);
+            }
             showToast(`${stageLabel(stage)} saved`, 'success');
             if (state.demo) {
                 collectMessageTypes();
@@ -1456,8 +1524,8 @@ const PipelineStudio = (function() {
         }
         state.messageType = messageType;
         state.dirty = false;
-        state.testResult = null;
-        state.testStats = '—';
+        state.testRunId++;
+        state.testResults.clear();
         await loadMapping();
         chooseInitialSelection();
     }
@@ -1502,85 +1570,91 @@ const PipelineStudio = (function() {
     }
 
     async function runTest() {
+        if (state.testRunning) return;
         syncDraftFromForm();
         if (state.mode === 'mapping') syncMappingFromForm();
+        const { node, source } = testContext();
+        if (!node || source.error) {
+            renderTest();
+            return;
+        }
+        const runId = ++state.testRunId;
+        const signature = testSignature(node);
+        state.testResults.delete(node.key);
         state.testRunning = true;
-        state.testError = false;
         renderTest();
         const startedAt = performance.now();
+        let result;
         try {
-            const result = await simulateStage(state.testStage);
-            state.testResult = result.payload;
-            state.testStatus = result.status;
-            state.testStats = `${result.count ?? 1} event${result.count === 1 ? '' : 's'} · ${Math.max(1, Math.round(performance.now() - startedAt))} ms`;
+            result = await simulateNode(node, source);
+            result.stats = `${result.count ?? 1} event${result.count === 1 ? '' : 's'} · ${Math.max(1, Math.round(performance.now() - startedAt))} ms`;
         } catch (error) {
-            state.testResult = { error: error.message || String(error), stage: state.testStage };
-            state.testStatus = 'Draft test failed';
-            state.testStats = 'Failed';
-            state.testError = true;
+            result = { payload: { error: error.message || String(error) }, status: 'Draft test failed', stats: 'Failed', error: true, count: 0 };
         } finally {
+            const current = testContext().nodes.find(item => item.key === node.key);
+            if (runId === state.testRunId && current && testSignature(current) === signature) {
+                state.testResults.set(node.key, { ...result, signature, revision: ++state.testRevision });
+            }
             state.testRunning = false;
             renderTest();
         }
     }
 
-    async function simulateStage(stageKey) {
-        const parsedInput = safeJson(state.sampleInput, null);
-        const rawText = parsedInput == null ? state.sampleInput : JSON.stringify(parsedInput);
-        if (stageKey === 'raw') return { payload: parsedInput ?? { raw: rawText }, status: 'Raw sample accepted', count: 1 };
-        const [stage, id] = stageKey.split(':');
+    async function simulateNode(node, source) {
+        const { stage, config } = node;
+        const rawText = source.text;
+        if (!rawText.trim()) throw new Error('Enter sample data before running a test.');
+        const parsedInput = source.node ? source.payload : safeJson(rawText, null);
+        const fields = parsedInput && typeof parsedInput === 'object' ? deepClone(parsedInput) : { raw: rawText };
         if (stage === 'input') {
-            const input = stageItems('input').find(item => String(item.id) === String(id));
-            return { payload: inputPreview(parsedInput ?? { raw: rawText }, input), status: `${getTypeDef('input', input?.type)?.label || 'Input'} result previewed locally · no listener or external connection was opened`, count: 1 };
+            return { payload: inputPreview(parsedInput ?? { raw: rawText }, config), status: `${node.label} result previewed locally · no listener or external connection was opened`, count: 1 };
         }
-
-        let fields = parsedInput && typeof parsedInput === 'object' ? deepClone(parsedInput) : { raw: rawText };
-        const processing = stageItems('processing').filter(item => item.enabled !== false);
-        for (const step of processing) {
-            const actualStage = step.componentStage;
-            if (actualStage === 'parser') {
-                const activeDraft = state.selected?.stage === 'parser' && String(state.selected.id) === String(step.id) ? state.draft : normalizeEntity(step);
-                const sourceText = resolveParserInput(activeDraft, rawText, fields);
-                if (!state.demo && stage === 'parser' && String(step.id) === String(id) && sourceText != null) {
-                    const parsed = await parserAPI.test({ type: activeDraft.type, param: activeDraft.param || null, sampleData: sourceText });
-                    fields = { ...fields, ...(parsed || {}) };
-                } else fields = localParse(activeDraft, sourceText, fields);
-                if (stage === 'parser' && String(step.id) === String(id)) return { payload: fields, status: `${getTypeDef('parser', step.type)?.label || step.type} produced ${Object.keys(fields || {}).length} fields`, count: 1 };
-            } else {
-                const active = state.selected?.stage === 'transform' && String(state.selected.id) === String(step.id) ? state.draft : normalizeEntity(step);
-                const outcome = localTransform(active, fields);
-                fields = outcome.fields;
-                if (stage === 'transform' && String(step.id) === String(id)) return { payload: fields, status: outcome.status, count: outcome.dropped ? 0 : 1 };
-                if (outcome.dropped) return { payload: { dropped: true, matched: outcome.matched }, status: outcome.status, count: 0 };
-            }
+        if (stage === 'parser') {
+            if (['GrokParser', 'RegexParser'].includes(config.type) && !config.param?.trim()) throw new Error('Enter a parser pattern before running a test.');
+            const sourceText = resolveParserInput(config, rawText, fields);
+            if (sourceText == null) throw new Error(`Input field "${config.sourceField}" is missing from the test source.`);
+            const parsed = state.demo ? localParse(config, sourceText, {})
+                : await parserAPI.test({ type: config.type, param: config.param || null, sampleData: sourceText });
+            const payload = mergeParserPayload(fields, config, parsed || {});
+            return { payload, status: `${node.label} produced ${Object.keys(payload).length} fields`, count: 1 };
         }
-
-        if (stage === 'structured' || stage === 'output') {
-            let structured;
-            if (!state.demo) {
-                structured = await structureAPI.simulate({ messageType: state.messageType, sampleData: fields, temporaryConfig: state.mapping });
-            } else structured = localStructured(fields, state.mapping);
-            if (stage === 'structured') return { payload: structured, status: 'Structured result split into common, subFields, and additionalAttributes', count: 1 };
-            fields = structured;
+        if (stage === 'transform') {
+            const outcome = localTransform(config, fields);
+            return { payload: outcome.fields, status: outcome.status, count: outcome.dropped ? 0 : 1 };
         }
-
+        if (stage === 'structured') {
+            const payload = state.demo ? localStructured(fields, config)
+                : await structureAPI.simulate({ messageType: state.messageType, sampleData: fields, temporaryConfig: config });
+            return { payload, status: 'Structured result split into common, subFields, and additionalAttributes', count: 1 };
+        }
         if (stage === 'output') {
-            const output = stageItems('output').find(item => String(item.id) === String(id));
             return {
-                payload: { destination: destinationSummary(output), serializedPayload: fields },
+                payload: { destination: destinationSummary(config), serializedPayload: fields },
                 status: 'Serialization previewed locally · no external delivery was attempted',
                 count: 1
             };
         }
-        return { payload: fields, status: 'Draft stage evaluated', count: 1 };
+        throw new Error('Choose a supported component to test.');
     }
 
     function resolveParserInput(parser, rawText, fields) {
         if (!parser.sourceField || !String(parser.sourceField).trim()) return rawText;
         const value = fields?.[String(parser.sourceField).trim()];
         if (value == null) return null;
+        if (parser.type === 'RegexParser' && Array.isArray(value)) return value;
         if (typeof value === 'string') return value;
         return JSON.stringify(value);
+    }
+
+    function mergeParserPayload(fields, parser, parsed) {
+        const payload = { ...fields };
+        const sourceField = String(parser.sourceField || '').trim();
+        if (sourceField) {
+            delete payload[sourceField];
+            payload[sourceField] = parsed;
+            return payload;
+        }
+        return { ...payload, ...parsed };
     }
 
     function localParse(parser, rawText, current) {
@@ -1594,10 +1668,32 @@ const PipelineStudio = (function() {
         if (parser.type === 'RegexParser' && parser.param) {
             const result = {};
             const regex = new RegExp(parser.param, 'g');
-            for (const match of rawText.matchAll(regex)) if (match[1] != null && match[2] != null) result[match[1]] = match[2];
+            for (const value of Array.isArray(rawText) ? rawText : [rawText]) {
+                if (value == null) continue;
+                const text = typeof value === 'string' ? value : JSON.stringify(value);
+                for (const match of text.matchAll(regex)) {
+                    if (match.groups) {
+                        for (const [name, captured] of Object.entries(match.groups)) {
+                            if (captured != null) {
+                                result[name] = captured;
+                                if (name.toLowerCase() === 'attributes') addAttributeFields(result, captured);
+                            }
+                        }
+                    } else if (match[1] != null && match[2] != null) {
+                        result[match[1]] = match[2];
+                    }
+                }
+            }
             return { ...current, ...result };
         }
         return current;
+    }
+
+    function addAttributeFields(fields, attributes) {
+        const matcher = /([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(?:"((?:\\.|[^"\\])*)"|(\S+))/g;
+        for (const match of attributes.matchAll(matcher)) {
+            fields[match[1]] = (match[2] ?? match[3]).replace(/\\(["\\])/g, '$1');
+        }
     }
 
     function localTransform(transform, sourceFields) {
@@ -1723,7 +1819,8 @@ const PipelineStudio = (function() {
 
     function availableSourceFields() {
         const fields = new Set();
-        const sample = safeJson(state.sampleInput, null);
+        const { source } = testContext();
+        const sample = source.node ? source.payload : safeJson(state.sampleInput, null);
         if (sample && typeof sample === 'object' && !Array.isArray(sample)) {
             Object.keys(sample).forEach(key => fields.add(key));
         }

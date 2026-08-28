@@ -129,9 +129,84 @@ class ParseServiceTest {
         event.setField("body", "key=value");
 
         assertTrue(step.execute(event));
-        assertEquals("value", event.getField("key"));
+        assertEquals(Map.of("key", "value"), event.getField("body"));
+        assertEquals(null, event.getField("key"));
         assertEquals("kept", event.getField("existing"));
         assertFalse(event.hasError());
+    }
+
+    @Test
+    void parserStepExtractsNamedFieldsFromRfc5424StructuredDataArray() {
+        String raw = "<34>1 2026-08-27T12:00:00.000Z ://example.com su - ID47 "
+                + "[exampleSDID@32473 iut=\"3\" eventSource=\"Application\"] "
+                + "BOM 1-104 - 'su root' failed for lonvick on /dev/pts/8\n";
+        LogEvent event = new LogEvent(raw, "localhost", "test");
+        ParserAdapterConfig syslog = parserConfig(1L, 0, false, null);
+        syslog.setType("RFC5424SyslogParser");
+        assertTrue(parseService.createStep(syslog).execute(event));
+        Object structuredData = event.getField("syslog_STRUCTURED_DATA");
+        assertEquals(List.of("[exampleSDID@32473 iut=\"3\" eventSource=\"Application\"]"), structuredData);
+
+        ParserAdapterConfig regex = parserConfig(2L, 10, false,
+                "^\\[(?<sdid>\\w+)@(?<id>\\d+)\\s+(?<attributes>.*)\\]$");
+        regex.setSourceField("syslog_STRUCTURED_DATA");
+
+        assertTrue(parseService.createStep(regex).execute(event));
+        assertEquals(Map.of(
+                "sdid", "exampleSDID",
+                "id", "32473",
+                "attributes", "iut=\"3\" eventSource=\"Application\"",
+                "iut", "3",
+                "eventSource", "Application"), event.getField("syslog_STRUCTURED_DATA"));
+        assertEquals(null, event.getField("sdid"));
+        assertEquals(null, event.getField("attributes"));
+        assertEquals("ID47", event.getField("syslog_MSGID"));
+        assertEquals(raw, event.getOriginalText());
+    }
+
+    @Test
+    void regexSourceArrayMergesMatchesInOrderAndSkipsNonMatches() {
+        ParserAdapterConfig config = parserConfig(1L, 0, false, "^(\\w+)=(\\w+)$");
+        config.setSourceField("values");
+        LogEvent event = new LogEvent("ignored", "localhost", "test");
+        event.setField("values", List.of("alpha=one", "not a match", "beta=two", "alpha=last"));
+
+        assertTrue(parseService.createStep(config).execute(event));
+        assertEquals(Map.of("alpha", "last", "beta", "two"), event.getField("values"));
+        assertEquals(null, event.getField("alpha"));
+        assertFalse(event.hasError());
+    }
+
+    @Test
+    void parserTestAndRuntimeProduceSameNamedFieldsForArrayInput() {
+        List<String> input = List.of("[first@1 a=one]", "unmatched", "[second@2 a=two]");
+        String pattern = "^\\[(?<sdid>\\w+)@(?<id>\\d+)\\s+(?<attributes>.*)\\]$";
+        ParserAdapterConfig config = parserConfig(1L, 0, false, pattern);
+        config.setSourceField("structured");
+        LogEvent event = new LogEvent("ignored", "localhost", "test");
+        event.setField("structured", input);
+
+        Map<String, Object> result = parseService.testParser("RegexParser", pattern, input);
+
+        assertEquals(Map.of("sdid", "second", "id", "2", "attributes", "a=two", "a", "two"), result);
+        assertTrue(parseService.createStep(config).execute(event));
+        assertEquals(result, event.getField("structured"));
+    }
+
+    @Test
+    void emptyAndNonMatchingSourceArraysDoNotChangeExistingFields() {
+        ParserAdapterConfig config = parserConfig(1L, 0, false, "^(key)=(\\w+)$");
+        config.setSourceField("values");
+        ParseService.ParserStep step = parseService.createStep(config);
+        for (List<String> values : List.of(List.<String>of(), List.of("no match"))) {
+            LogEvent event = new LogEvent("ignored", "localhost", "test");
+            event.setField("values", values);
+            event.setField("existing", "kept");
+
+            assertFalse(step.execute(event));
+            assertEquals(Map.of("values", values, "existing", "kept"), event.getFields());
+            assertTrue(parseService.testParser("RegexParser", config.getParam(), values).isEmpty());
+        }
     }
 
     @Test
@@ -145,7 +220,8 @@ class ParseServiceTest {
         event.setField("payload", Map.of("nested", "value"));
 
         assertTrue(step.execute(event));
-        assertEquals("value", event.getField("nested"));
+        assertEquals(Map.of("nested", "value"), event.getField("payload"));
+        assertEquals(null, event.getField("nested"));
     }
 
     @Test
@@ -156,7 +232,7 @@ class ParseServiceTest {
         LogEvent numberEvent = new LogEvent("ignored", "localhost", "test");
         numberEvent.setField("payload", 123);
         assertTrue(numberStep.execute(numberEvent));
-        assertEquals("23", numberEvent.getField("1"));
+        assertEquals(Map.of("1", "23"), numberEvent.getField("payload"));
 
         ParserAdapterConfig listConfig = parserConfig(2L, 0, false, "(key)=(\\w+)");
         listConfig.setSourceField("payload");
@@ -164,7 +240,7 @@ class ParseServiceTest {
         LogEvent listEvent = new LogEvent("ignored", "localhost", "test");
         listEvent.setField("payload", List.of("key=value"));
         assertTrue(listStep.execute(listEvent));
-        assertEquals("value", listEvent.getField("key"));
+        assertEquals(Map.of("key", "value"), listEvent.getField("payload"));
     }
 
     private ParserAdapterConfig parserConfig(Long id, int priority, boolean continueOnFailure, String pattern) {

@@ -48,7 +48,7 @@ class ProcessingStepServiceTest {
         LogEvent event = new LogEvent("message=hello", "localhost", "test");
 
         assertEquals(ProcessingStepService.ProcessingResult.SUCCESS, processingStepService.process(event));
-        assertEquals("hello", event.getField("message"));
+        assertEquals(null, event.getField("message"));
         assertEquals(Map.of("message", "hello"), event.getField("payload"));
     }
 

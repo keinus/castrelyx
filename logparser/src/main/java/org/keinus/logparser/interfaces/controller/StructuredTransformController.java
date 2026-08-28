@@ -57,7 +57,7 @@ public class StructuredTransformController {
     }
 
     @GetMapping("/mapping/{messageType}")
-    public ResponseEntity<MappingConfiguration> getMapping(@PathVariable String messageType) {
+    public ResponseEntity<MappingConfiguration> getMapping(@PathVariable("messageType") String messageType) {
         Optional<MappingConfiguration> config = mappingRepository.findByMessageType(messageType);
         return config.map(ResponseEntity::ok)
                      .orElseGet(() -> ResponseEntity.notFound().build());
@@ -76,7 +76,7 @@ public class StructuredTransformController {
     }
 
     @GetMapping("/templates/{id}")
-    public ResponseEntity<MappingTemplate> getTemplate(@PathVariable String id) {
+    public ResponseEntity<MappingTemplate> getTemplate(@PathVariable("id") String id) {
         try {
             return ResponseEntity.ok(templateService.findById(id));
         } catch (NoSuchElementException e) {
@@ -95,7 +95,7 @@ public class StructuredTransformController {
 
     @PutMapping("/templates/{id}")
     public ResponseEntity<MappingTemplate> updateTemplate(
-            @PathVariable String id,
+            @PathVariable("id") String id,
             @RequestBody MappingTemplate template
     ) {
         try {
@@ -108,7 +108,7 @@ public class StructuredTransformController {
     }
 
     @DeleteMapping("/templates/{id}")
-    public ResponseEntity<Void> deleteTemplate(@PathVariable String id) {
+    public ResponseEntity<Void> deleteTemplate(@PathVariable("id") String id) {
         try {
             templateService.delete(id);
             return ResponseEntity.noContent().build();
@@ -119,8 +119,8 @@ public class StructuredTransformController {
 
     @PostMapping("/templates/{id}/apply")
     public ResponseEntity<MappingConfiguration> applyTemplate(
-            @PathVariable String id,
-            @RequestParam String messageType
+            @PathVariable("id") String id,
+            @RequestParam("messageType") String messageType
     ) {
         try {
             return ResponseEntity.ok(templateService.apply(id, messageType));

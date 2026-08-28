@@ -2,8 +2,9 @@
 
 Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 processing steps(parser/transform), structured mapping, output 단계를 연결합니다.
 
-설정은 REST API와 정적 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 관리 UI의 기본 화면인 Pipeline Studio에서는 하나의 `messagetype`에 연결된 Input, Processing Steps, Structured Transform, Output을 한 화면에서 생성·수정·삭제·테스트·배포할 수 있습니다.
+설정은 REST API와 React/shadcn 기반 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 모든 화면은 같은 사이드바·헤더·디자인 토큰을 사용합니다. Pipeline Studio와 Inputs/Outputs 목록은 공통 어댑터 편집기를 사용하고, `configParams`의 각 속성도 개별 입력으로 편집합니다. API의 JSON 문자열 저장 형식은 유지합니다.
 
+Pipeline Studio의 `Test selected step`은 저장 전 신규 어댑터를 포함해 현재 draft를 테스트합니다. 첫 processing step은 Sample을 사용하고, 하위 step은 직전 활성 order의 테스트 결과를 Source로 이어 받습니다. 상위 결과가 없으면 먼저 상위 테스트가 필요하며, Sample·설정·순서 변경 시 관련 하위 결과를 무효화합니다. 저장은 런타임에 반영되므로 별도의 Deploy 단계는 없습니다. 자세한 동작은 [사용자 매뉴얼](readme/logparser-user-manual.md#21-pipeline-studio)을 참고하세요.
 전체 input/output adapter, parser, transform, structured transform 설정 argument와 실제 런타임 기본값은 [`readme/logparser_schema.md`](readme/logparser_schema.md)를 기준으로 합니다.
 
 ## 현재 구현 요약
@@ -26,6 +27,8 @@ Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프�
 - MariaDB JDBC driver
 - Java HTTP client, OpenSearch HTTP client
 - JUnit 5
+- React 19, TypeScript, Vite, Tailwind CSS 4, shadcn/ui (Radix), Lucide
+- Vitest, React Testing Library
 
 ## 프로젝트 구조
 
@@ -43,8 +46,16 @@ src/main/java/org/keinus/logparser/
   interfaces/websocket/          # Live Tail WebSocket
 
 src/main/resources/
-  static/                        # 관리 UI 정적 파일
+  static/                        # favicon 및 이전 UI의 회귀 테스트용 소스
   db/migration/                  # Flyway migration
+
+frontend/src/
+  components/layout/             # 모든 화면이 공유하는 AppShell / Sidebar
+  components/adapters/           # Studio·목록 공통 속성별 편집기
+  components/ui/                 # shadcn MCP로 선택·설치한 컴포넌트
+  features/                      # Studio, Overview, 목록, Mapping, Live Tail, Settings, Docs
+  lib/adapter-definitions.ts     # canonical type별 공통 폼 정의
+  test/                          # UI 회귀 테스트
 
 src/test/                        # JUnit 테스트
 readme/                          # 상세 사용자 문서와 다이어그램 샘플
@@ -52,7 +63,7 @@ readme/                          # 상세 사용자 문서와 다이어그램 �
 
 ## 빠른 시작
 
-Java 21이 필요합니다.
+Java 21과 Node.js 22.12 이상이 필요합니다. Gradle은 `npm ci`와 프런트엔드 빌드를 실행한 뒤 결과를 Spring Boot 정적 리소스로 패키징합니다. 최초 실행에는 npm 패키지 다운로드가 필요합니다.
 
 ```powershell
 .\gradlew bootRun
@@ -78,10 +89,24 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 .\gradlew test
 ```
 
+### 프런트엔드 개발과 테스트
+
+서버가 `8765`에서 실행 중일 때 다음 명령을 별도 터미널에서 실행합니다.
+
+```powershell
+cd frontend
+npm ci
+npm run dev    # http://127.0.0.1:5174, /api 및 /ws는 8765로 프록시
+npm test
+npm run build
+```
+
+빌드 결과는 `build/frontend/`에 생성합니다. 이미 빌드한 번들을 재사용할 때만 `-PskipFrontend=true`를 지정합니다. 번들이 없으면 Gradle이 오류를 반환합니다. Windows에서 의존성을 다시 설치할 때는 실행 중인 Vite 서버를 먼저 종료하세요. 기존 vanilla UI 회귀 테스트도 `node --test src/test/js/pipeline-studio.test.cjs src/test/js/live-tail.test.cjs`로 실행할 수 있습니다.
+
 ## Docker 실행
 
 ```powershell
-docker build -t logparser .
+docker build -f Dockerfile -t logparser ..
 docker run -p 8765:8765 logparser
 ```
 
@@ -240,13 +265,13 @@ SNMPv3는 `securityName`과 security level별 passphrase를 요구합니다. pas
 
 Parser와 transform은 같은 processing step 목록에서 `priority` 오름차순으로 실행됩니다. 낮은 값이 먼저 실행되며, 같은 값이면 parser가 먼저이고 그 다음 id 오름차순입니다. Pipeline Studio에서 두 종류의 카드를 서로 드래그해 순서를 바꿀 수 있습니다. Parser의 `continueOnFailure=true`는 다음 parser가 아니라 다음 processing step으로 진행한다는 의미입니다.
 
-Parser는 기본적으로 `originalText`를 입력으로 사용합니다. 선택 사항인 `sourceField`를 지정하면 앞선 step이 만든 `LogEvent.fields`의 top-level 값을 parser 입력으로 사용합니다. 문자열은 그대로, 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환하며 값이 없으면 해당 parser step이 실패합니다. parser 결과는 원래 event field map에 병합됩니다.
+Parser는 기본적으로 `originalText`를 입력으로 사용합니다. 선택 사항인 `sourceField`를 지정하면 앞선 step이 만든 `LogEvent.fields`의 top-level 값을 parser 입력으로 사용합니다. 문자열은 그대로, 숫자/boolean은 문자열로, Map/List는 JSON 문자열로 변환하며 값이 없으면 해당 parser step이 실패합니다. 단, `RegexParser`의 List 입력은 각 항목에 정규식을 따로 적용합니다. `sourceField`를 지정한 parser가 성공하면 원래 값을 삭제하고 해당 필드를 parser 결과 Map으로 교체합니다. `sourceField`가 비어 있으면 기존처럼 결과를 event field map에 병합합니다.
 
 | Type | 필수 설정 | 설명 |
 | --- | --- | --- |
 | `JsonParser` | 없음 | JSON 원문을 field map으로 파싱합니다. |
 | `GrokParser` | `param` | Grok pattern을 적용합니다. |
-| `RegexParser` | `param` | 정규식 capture group을 적용합니다. |
+| `RegexParser` | `param` | `(?<name>...)` 그룹은 이름별 필드로 추출합니다. `attributes` 그룹 안의 `key="value"` 항목도 개별 field로 병합합니다. 이름 없는 패턴은 기존 group 1=key, group 2=value 방식을 사용합니다. |
 | `RFC3164SyslogParser` | 없음 | RFC3164 syslog를 파싱합니다. |
 | `RFC5424SyslogParser` | 없음 | RFC5424 syslog를 파싱합니다. |
 | `HttpParser` | 없음 | HTTP access log 형식을 파싱합니다. |

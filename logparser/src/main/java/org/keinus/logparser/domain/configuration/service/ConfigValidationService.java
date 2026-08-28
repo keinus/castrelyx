@@ -11,6 +11,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.net.URI;
 import java.util.*;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 @Service
 @RequiredArgsConstructor
@@ -341,6 +343,17 @@ public class ConfigValidationService {
         if ("grok".equals(type) || "grokparser".equals(type) || "regex".equals(type) || "regexparser".equals(type)) {
             if (entity.getParam() == null || entity.getParam().trim().isEmpty()) {
                 errors.add("Pattern parameter is required for " + entity.getType());
+            } else if ("regex".equals(type) || "regexparser".equals(type)) {
+                try {
+                    Pattern.compile(entity.getParam());
+                } catch (PatternSyntaxException e) {
+                    String message = "Invalid Java regex in param: " + e.getDescription()
+                            + " (index " + e.getIndex() + ").";
+                    if (entity.getParam().contains("(?P<")) {
+                        message += " Use (?<name>...) instead of Python-style (?P<name>...).";
+                    }
+                    errors.add(message);
+                }
             }
         }
         if (!Set.of(

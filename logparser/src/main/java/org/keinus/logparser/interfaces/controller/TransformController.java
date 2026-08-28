@@ -35,7 +35,7 @@ public class TransformController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<TransformEntity> getTransform(@PathVariable Long id) {
+    public ResponseEntity<TransformEntity> getTransform(@PathVariable("id") Long id) {
 
         TransformEntity entity = configManagementService.getTransform(id);
         return ResponseEntity.ok(entity);
@@ -43,7 +43,7 @@ public class TransformController {
 
     @PutMapping("/{id}")
     public ResponseEntity<TransformEntity> updateTransform(
-            @PathVariable Long id,
+            @PathVariable("id") Long id,
             @RequestBody TransformEntity entity) {
 
         TransformEntity updated = configManagementService.updateTransform(id, entity);
@@ -51,21 +51,21 @@ public class TransformController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteTransform(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteTransform(@PathVariable("id") Long id) {
 
         configManagementService.deleteTransform(id);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/type/{type}")
-    public ResponseEntity<List<TransformEntity>> getTransformsByType(@PathVariable String type) {
+    public ResponseEntity<List<TransformEntity>> getTransformsByType(@PathVariable("type") String type) {
 
         List<TransformEntity> result = configManagementService.getTransformsByType(type);
         return ResponseEntity.ok(result);
     }
 
     @GetMapping("/messagetype/{messageType}")
-    public ResponseEntity<List<TransformEntity>> getTransformsByMessageType(@PathVariable String messageType) {
+    public ResponseEntity<List<TransformEntity>> getTransformsByMessageType(@PathVariable("messageType") String messageType) {
 
         List<TransformEntity> result = configManagementService.getTransformsByMessageType(messageType);
         return ResponseEntity.ok(result);
@@ -73,8 +73,8 @@ public class TransformController {
 
     @PatchMapping("/{id}/priority")
     public ResponseEntity<TransformEntity> updateTransformPriority(
-            @PathVariable Long id,
-            @RequestParam Integer priority) {
+            @PathVariable("id") Long id,
+            @RequestParam("priority") Integer priority) {
 
         TransformEntity entity = configManagementService.updateTransformPriority(id, priority);
         return ResponseEntity.ok(entity);

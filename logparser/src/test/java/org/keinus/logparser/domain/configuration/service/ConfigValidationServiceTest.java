@@ -2,6 +2,8 @@ package org.keinus.logparser.domain.configuration.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.keinus.logparser.infrastructure.persistence.entity.InputAdapterEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.OutputAdapterEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.ParserEntity;
@@ -62,6 +64,46 @@ class ConfigValidationServiceTest {
 
         assertTrue(result.warnings().stream().noneMatch(warning -> warning.contains("has no corresponding output adapter")));
         assertTrue(result.warnings().stream().noneMatch(warning -> warning.contains("Output message type 'all'")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "RegexParser", "regex" })
+    void regexParserRejectsPythonNamedGroupsWithJavaSyntaxHint(String type) {
+        ParserEntity parser = ParserEntity.builder().type(type).messagetype("syslog")
+                .param("^\\[(?P<sdid>\\w+)@(?P<id>\\d+)\\s+(?P<attributes>.*)\\]$")
+                .build();
+
+        ConfigValidationService.ValidationResult result = configValidationService.validateParser(parser);
+
+        assertFalse(result.isValid());
+        assertTrue(result.errors().stream().anyMatch(error ->
+                error.contains("Invalid Java regex") && error.contains("(?<name>...)")
+                        && error.contains("index 5")));
+    }
+
+    @Test
+    void regexParserRejectsOtherSyntaxErrorsBeforeSaving() {
+        ParserEntity parser = ParserEntity.builder().type("RegexParser").messagetype("syslog")
+                .param("[").build();
+
+        ConfigValidationService.ValidationResult result = configValidationService.validateParser(parser);
+
+        assertFalse(result.isValid());
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("Unclosed character class")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "(\\w+)=(\\w+)",
+            "^\\[(?<sdid>\\w+)@(?<id>\\d+)\\s+(?<attributes>.*)\\]$",
+            "\\Q(?P<literal>)\\E(\\w+)=(\\w+)"
+    })
+    void regexParserAcceptsValidJavaPatternsWithoutRewriting(String pattern) {
+        ParserEntity parser = ParserEntity.builder().type("RegexParser").messagetype("syslog")
+                .param(pattern).build();
+
+        assertTrue(configValidationService.validateParser(parser).isValid());
+        org.junit.jupiter.api.Assertions.assertEquals(pattern, parser.getParam());
     }
 
     @Test
