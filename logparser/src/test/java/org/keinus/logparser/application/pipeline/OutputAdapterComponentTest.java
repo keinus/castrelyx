@@ -47,6 +47,30 @@ class OutputAdapterComponentTest {
     }
 
     @Test
+    void repeatedEnableDoesNotDuplicateDeliveryOrLeaveAnAdapterAfterDisable() {
+        for (String messageType : List.of("test", "all")) {
+            OutputAdapterConfig config = new OutputAdapterConfig();
+            config.setId(1L);
+            config.setType("BenchmarkAdapter");
+            config.setMessagetype(messageType);
+            config.setEnabled(true);
+            try {
+                outputAdapterComponent.addAdapter(config);
+                outputAdapterComponent.addAdapter(config);
+
+                var delivery = outputAdapterComponent.deliver(new LogEvent("message", "localhost", "test"));
+                assertEquals(1, delivery.succeeded());
+                assertEquals(1, outputAdapterComponent.getAdapterMetrics().size());
+
+                outputAdapterComponent.removeAdapter(config.getId());
+                assertEquals(0, outputAdapterComponent.deliver(new LogEvent("after disable", "localhost", "test")).attempted());
+            } finally {
+                outputAdapterComponent.close();
+            }
+        }
+    }
+
+    @Test
     void testDeliverToMatchingAdapterAndCollectMetrics() throws Exception {
         OutputAdapterConfig config = new OutputAdapterConfig();
         config.setId(1L);

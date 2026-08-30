@@ -172,7 +172,7 @@ public class FileInputAdapter extends InputAdapter {
             if (currentFileSize < lastFileSize) {
                 logger.info("Log rotation detected (file size decreased: {} -> {}). Re-opening file.",
                     lastFileSize, currentFileSize);
-                openFile();
+                reopenFile(0);
                 if (reader == null) {
                     return null;
                 }

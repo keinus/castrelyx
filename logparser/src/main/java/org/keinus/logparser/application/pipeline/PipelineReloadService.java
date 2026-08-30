@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CancellationException;
 
 @Service
 @Slf4j
@@ -31,9 +33,19 @@ public class PipelineReloadService {
     private final TransformService transformService;
     private final StructuredTransformService structuredTransformService;
 
-    private final AtomicBoolean reloadInProgress = new AtomicBoolean(false);
+    private final AtomicReference<ReloadOperation> activeReload = new AtomicReference<>();
     private final AtomicInteger reloadProgress = new AtomicInteger(0);
     private volatile PipelineStatus currentStatus = PipelineStatus.RUNNING;
+
+    private static final class ReloadOperation {
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+
+        private void checkCancellation() {
+            if (cancelled.get()) {
+                throw new CancellationException("Pipeline reload cancelled");
+            }
+        }
+    }
 
     @Autowired
     public PipelineReloadService(
@@ -110,44 +122,60 @@ public class PipelineReloadService {
             DatabaseConfigLoader.PipelineConfiguration targetConfiguration,
             PipelineStatus transientStatus
     ) {
-        if (!reloadInProgress.compareAndSet(false, true)) {
+        ReloadOperation operation = new ReloadOperation();
+        if (!activeReload.compareAndSet(null, operation)) {
             throw new RuntimeException("Reload already in progress");
         }
 
-        DatabaseConfigLoader.PipelineConfiguration previousConfiguration = applicationProperties.snapshot();
+        DatabaseConfigLoader.PipelineConfiguration previousConfiguration = null;
+        PipelineStatus previousStatus = currentStatus;
         boolean pipelineModified = false;
 
         try {
+            previousConfiguration = applicationProperties.snapshot();
+            operation.checkCancellation();
             reloadProgress.set(5);
             currentStatus = transientStatus;
 
-            stopAcceptingNewInput();
             pipelineModified = true;
+            stopAcceptingNewInput();
             reloadProgress.set(25);
 
             drainProcessingQueue();
+            operation.checkCancellation();
             reloadProgress.set(45);
 
             stopProcessingAndOutputs();
+            operation.checkCancellation();
             reloadProgress.set(65);
 
             applyConfiguration(targetConfiguration);
+            operation.checkCancellation();
             reloadProgress.set(80);
 
+            // Finish once inputs resume; cancellation is checked while the pipeline is drained.
             startPipelineComponents();
             reloadProgress.set(100);
             currentStatus = PipelineStatus.RUNNING;
             log.info("Pipeline reconfiguration completed successfully");
         } catch (Exception e) {
-            log.error("Failed to reconfigure pipeline", e);
+            if (e instanceof CancellationException) {
+                log.info("Rolling back cancelled pipeline reload");
+            } else {
+                log.error("Failed to reconfigure pipeline", e);
+            }
             if (pipelineModified) {
                 rollback(previousConfiguration, e);
             } else {
-                currentStatus = PipelineStatus.ERROR;
+                currentStatus = e instanceof CancellationException ? previousStatus : PipelineStatus.ERROR;
+            }
+            if (e instanceof CancellationException cancelled) {
+                reloadProgress.set(0);
+                throw cancelled;
             }
             throw new RuntimeException("Failed to reconfigure pipeline", e);
         } finally {
-            reloadInProgress.set(false);
+            activeReload.compareAndSet(operation, null);
         }
     }
 
@@ -245,14 +273,14 @@ public class PipelineReloadService {
     }
 
     public boolean isReloadInProgress() {
-        return reloadInProgress.get();
+        return activeReload.get() != null;
     }
 
     public ReloadProgress getReloadProgress() {
         return new ReloadProgress(
                 reloadProgress.get(),
                 currentStatus,
-                reloadInProgress.get()
+                isReloadInProgress()
         );
     }
 
@@ -298,10 +326,10 @@ public class PipelineReloadService {
     public void cancelReload() {
         log.info("Cancelling reload");
 
-        if (reloadInProgress.compareAndSet(true, false)) {
-            currentStatus = PipelineStatus.RUNNING;
-            reloadProgress.set(0);
-            log.info("Reload cancelled");
+        ReloadOperation operation = activeReload.get();
+        if (operation != null) {
+            operation.cancelled.set(true);
+            log.info("Reload cancellation requested; waiting for rollback before accepting another reload");
         } else {
             log.warn("No reload in progress to cancel");
         }

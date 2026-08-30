@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decodeConfig,
+  definition,
   fieldTab,
   hydrate,
   newAdapter,
@@ -12,6 +13,32 @@ import { TYPE_DEFS } from "./adapter-definitions";
 import type { Adapter } from "./types";
 
 describe("shared adapter form model", () => {
+  it.each([
+    ["input", "tcp", "TcpInputAdapter", "port"],
+    ["input", "tls_rabbitmq", "TlsRabbitMqInputAdapter", "configParams.queue"],
+    ["output", "tcp", "TcpOutputAdapter", "port"],
+    ["output", "rabbitmq", "RabbitMQAdapter", "rmqPort"],
+  ] as const)(
+    "edits %s alias %s through its canonical attribute form",
+    (stage, alias, canonical, field) => {
+      const stored: Adapter = {
+        id: 1,
+        type: alias,
+        messagetype: "sample",
+        enabled: false,
+        configParams: '{"customOption":false}',
+      };
+      const draft = hydrate(stored, stage);
+      expect(
+        definition(stage, alias)?.fields.some((item) => item.path === field),
+      ).toBe(true);
+      expect(draft.type).toBe(canonical);
+      expect(JSON.parse(serialize(draft).configParams).customOption).toBe(
+        false,
+      );
+      expect(stored.type).toBe(alias);
+    },
+  );
   it("round-trips nested attributes, false, zero, secrets and unknown options without changing the API contract", () => {
     const saved: Adapter = {
       id: 2,

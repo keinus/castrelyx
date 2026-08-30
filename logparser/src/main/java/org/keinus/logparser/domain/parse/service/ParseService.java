@@ -236,7 +236,7 @@ public class ParseService {
         }
         
         if (parsedFields == null) {
-            return java.util.Collections.emptyMap();
+            throw new IllegalArgumentException("Parser did not match the sample data");
         }
         
         return parsedFields;

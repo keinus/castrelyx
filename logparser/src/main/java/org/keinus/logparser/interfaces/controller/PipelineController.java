@@ -144,7 +144,7 @@ public class PipelineController {
             pipelineReloadService.cancelReload();
             return ResponseEntity.ok(Map.of(
                     "status", "success",
-                    "message", "Reload cancelled successfully"
+                    "message", "Reload cancellation requested"
             ));
         } catch (Exception e) {
             log.error("Failed to cancel reload", e);

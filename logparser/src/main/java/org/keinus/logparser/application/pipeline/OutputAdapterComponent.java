@@ -326,6 +326,10 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
 
         lock.writeLock().lock();
         try {
+            if (config.getId() != null && adapterIdMap.containsKey(config.getId())) {
+                log.debug("Output adapter id={} is already registered", config.getId());
+                return;
+            }
             OutputAdapter adapter = OutputFactory.getOutputAdapter(config);
             addAdapterInternal(adapter);
             log.info("Added output adapter: id={}, type={}", adapter.getId(), adapter.getClass().getSimpleName());

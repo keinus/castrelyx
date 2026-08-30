@@ -182,10 +182,12 @@ function MappingRows({
 }
 export function MappingEditor({
   onDraft,
+  onPersisted,
   sourceFields,
   compact = false,
 }: {
   onDraft?: (draft: Mapping) => void;
+  onPersisted?: (saved: Mapping) => void;
   sourceFields?: string[];
   compact?: boolean;
 }) {
@@ -246,6 +248,9 @@ export function MappingEditor({
   useEffect(() => {
     if (!loading && !loadError) onDraft?.(mapping);
   }, [mapping, loading, loadError, onDraft]);
+  useEffect(() => {
+    if (!loading && !loadError) onPersisted?.(original);
+  }, [original, loading, loadError, onPersisted]);
   const dirty = JSON.stringify(mapping) !== JSON.stringify(original);
   useDirty(dirty);
   function change(next: Mapping) {

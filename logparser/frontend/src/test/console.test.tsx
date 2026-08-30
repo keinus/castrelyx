@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "@/app";
 import { WorkspaceProvider } from "@/lib/workspace";
@@ -7,6 +14,7 @@ import { AdapterEditor } from "@/components/adapters/adapter-form";
 import { LiveTail } from "@/features/live-tail";
 import { MappingEditor } from "@/features/mapping-editor";
 import { Overview } from "@/features/overview";
+import { PipelineStudio } from "@/features/pipeline-studio";
 import { CodePreview } from "@/components/code-panel";
 import { newAdapter } from "@/lib/adapters";
 import type { Adapter } from "@/lib/types";
@@ -100,6 +108,121 @@ beforeEach(() => {
 });
 
 describe("unified console", () => {
+  it("edits and saves the connection fields of an adapter stored with an alias", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkspaceProvider>
+        <AdapterEditor
+          stage="input"
+          adapter={{ ...input, type: "tcp" }}
+          onSaved={() => {}}
+        />
+      </WorkspaceProvider>,
+    );
+    const port = await screen.findByLabelText(/Listen port/);
+    await user.clear(port);
+    await user.type(port, "6515");
+    await user.click(screen.getByRole("button", { name: "Save input" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          url === "/api/v1/input-adapters/1" && init?.method === "PUT",
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse(call![1]!.body as string)).toMatchObject({
+        type: "TcpInputAdapter",
+        port: 6515,
+      });
+    });
+  });
+
+  it("discards unsaved mapping previews but retains the latest saved mapping when switching Studio stages", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fallback = fetchMock.getMockImplementation()!;
+    let stored = {
+      messageType: "agent",
+      commonMappings: [],
+      subTableRules: [],
+    };
+    fetchMock.mockImplementation(async (url, init = {}) => {
+      const path = url.split("?")[0].replace("/api/v1", "");
+      let data: any;
+      if (path === "/parsers" || path === "/transforms")
+        data = { content: [], last: true };
+      else if (path === "/structure/schema")
+        data = {
+          commonSchema: [{ name: "src_host", type: "String" }],
+          subSchemas: {},
+        };
+      else if (path === "/structure/mapping/agent") data = stored;
+      else if (path === "/structure/mapping" && init.method === "POST") {
+        stored = JSON.parse(init.body as string);
+        data = stored;
+      } else return fallback(url, init);
+      return new Response(JSON.stringify(data), { status: 200 });
+    });
+    render(
+      <WorkspaceProvider>
+        <PipelineStudio />
+      </WorkspaceProvider>,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Field mapping/ }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Auto-map" }));
+    await user.click(
+      screen.getByRole("button", { name: "Test selected step" }),
+    );
+    await screen.findByText("Completed");
+
+    await user.click(
+      screen.getByRole("button", { name: "ClickHouse Disabled" }),
+    );
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(
+      screen.getByRole("button", { name: /Field mapping/ }),
+    ).toHaveTextContent("0 common attributes");
+    expect(
+      screen.getByRole("button", { name: "Test selected step" }),
+    ).toBeDisabled();
+    expect(stored.commonMappings).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: /Field mapping/ }));
+    await user.click(await screen.findByRole("button", { name: "Auto-map" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Save mapping" }),
+      ).toBeDisabled(),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "ClickHouse Disabled" }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: /Field mapping/ }),
+    ).toHaveTextContent("1 common attributes");
+
+    await user.click(screen.getByRole("button", { name: /Field mapping/ }));
+    const source = await screen.findByRole("combobox", {
+      name: "Source field",
+    });
+    await user.clear(source);
+    await user.type(source, "message");
+    await user.click(
+      screen.getByRole("button", { name: "ClickHouse Disabled" }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("button", { name: /Field mapping/ }),
+    ).toHaveTextContent("1 common attributes");
+    await user.click(screen.getByRole("button", { name: /Field mapping/ }));
+    expect(
+      await screen.findByRole("combobox", { name: "Source field" }),
+    ).toHaveValue("host");
+  });
+
   it("adds individual attributes to a sub-table rule from its compact toolbar", async () => {
     const user = userEvent.setup();
     render(
@@ -247,6 +370,16 @@ describe("unified console", () => {
   it("uses the sample for the first processing step and preserves its result for the next step", async () => {
     const user = userEvent.setup();
     render(<App />);
+    const sample = await screen.findByLabelText("Original sample event");
+    expect(sample).toHaveValue(
+      '<34>1 2026-08-27T12:00:00.000Z mymachine.example.com su 1234 ID47 [exampleSDID@32473 iut="3" eventSource="Application"] \'su root\' failed for lonvick on /dev/pts/8',
+    );
+    fireEvent.change(sample, {
+      target: {
+        value:
+          '{"host":"web-01","level":"INFO","message":"User login successful"}',
+      },
+    });
     await user.click(
       await screen.findByRole("button", { name: /Filter events.*Order/ }),
     );
@@ -274,7 +407,7 @@ describe("unified console", () => {
       screen.getByRole("button", { name: "Test selected step" }),
     );
     await screen.findByText("Event passed all filter rules.");
-    await user.clear(screen.getByLabelText("Original sample event"));
+    await user.clear(sample);
     expect(
       screen.getByRole("button", { name: "Test selected step" }),
     ).toBeDisabled();

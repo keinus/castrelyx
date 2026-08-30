@@ -135,45 +135,45 @@
     @apply bg-background text-foreground;
   }
   html {
-    @apply font-sans;
+    @apply bg-background font-sans;
   }
 }
 
 /* Shared console tokens: the same surfaces, type, and actions on every route. */
 .dark {
-  --background: #0d121a;
+  --background: #000000;
   color-scheme: dark;
-  --foreground: #e9edf3;
-  --card: #121923;
-  --card-foreground: #e9edf3;
-  --popover: #18212d;
-  --popover-foreground: #e9edf3;
-  --primary: #3168e0;
+  --foreground: #f4f4f5;
+  --card: #0a0a0b;
+  --card-foreground: #f4f4f5;
+  --popover: #111113;
+  --popover-foreground: #f4f4f5;
+  --primary: #4f7fe8;
   --primary-foreground: #ffffff;
-  --secondary: #223047;
-  --secondary-foreground: #e9edf3;
-  --muted: #1b2431;
-  --muted-foreground: #a1adbd;
-  --accent: #1a293e;
-  --accent-foreground: #e9edf3;
-  --destructive: #f98585;
-  --success: #56bb98;
-  --code-key: #a7caff;
-  --code-string: #eaa17c;
-  --code-number: #b5d591;
-  --code-literal: #c9a9ed;
-  --border: #293340;
-  --input: #364253;
-  --ring: #719dff;
+  --secondary: #171a20;
+  --secondary-foreground: #e9eaec;
+  --muted: #151518;
+  --muted-foreground: #a6abb4;
+  --accent: #132139;
+  --accent-foreground: #f4f4f5;
+  --destructive: #ff8787;
+  --success: #55cfa2;
+  --code-key: #9fc0ff;
+  --code-string: #f0a27f;
+  --code-number: #b7d98f;
+  --code-literal: #cfaaef;
+  --border: #29292d;
+  --input: #37373d;
+  --ring: #78a4ff;
   --radius: 0.55rem;
-  --sidebar: #101620;
-  --sidebar-foreground: #c2cbda;
-  --sidebar-primary: #3168e0;
+  --sidebar: #050506;
+  --sidebar-foreground: #c9cbd1;
+  --sidebar-primary: #4f7fe8;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1b2c46;
-  --sidebar-accent-foreground: #e9edf3;
-  --sidebar-border: #293340;
-  --sidebar-ring: #719dff;
+  --sidebar-accent: #111c30;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #29292d;
+  --sidebar-ring: #78a4ff;
 }
 
 @layer base {

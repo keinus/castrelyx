@@ -49,7 +49,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { MappingEditor, emptyMapping } from "./mapping-editor";
 
 const sampleEvent =
-  '{\n  "host": "web-01",\n  "level": "INFO",\n  "message": "User login successful"\n}';
+  '<34>1 2026-08-27T12:00:00.000Z mymachine.example.com su 1234 ID47 [exampleSDID@32473 iut="3" eventSource="Application"] \'su root\' failed for lonvick on /dev/pts/8';
 const keyFor = (stage: Stage, adapter: Adapter) =>
   `${stage}:${adapter.id ?? "new"}`;
 export function PipelineStudio() {
@@ -62,6 +62,9 @@ export function PipelineStudio() {
     [drafts, setDrafts] = useState<Record<string, Adapter>>({}),
     [editorRevision, setEditorRevision] = useState(0);
   const [mapping, setMapping] = useState<Mapping>(emptyMapping(messageType)),
+    [savedMapping, setSavedMapping] = useState<Mapping>(
+      emptyMapping(messageType),
+    ),
     [mappingError, setMappingError] = useState(""),
     [outputKey, setOutputKey] = useState(""),
     [sample, setSample] = useState(sampleEvent),
@@ -95,7 +98,9 @@ export function PipelineStudio() {
   );
   useEffect(() => {
     const controller = new AbortController();
-    setMapping(emptyMapping(messageType));
+    const initialMapping = emptyMapping(messageType);
+    setMapping(initialMapping);
+    setSavedMapping(initialMapping);
     setMappingError("");
     setCache({});
     setDrafts({});
@@ -117,7 +122,14 @@ export function PipelineStudio() {
           throw e;
         })
         .then((value) => {
-          if (!controller.signal.aborted) setMapping(value);
+          if (!controller.signal.aborted) {
+            setMapping((current) =>
+              current === initialMapping ? value : current,
+            );
+            setSavedMapping((current) =>
+              current === initialMapping ? value : current,
+            );
+          }
         })
         .catch((e) => {
           if (!controller.signal.aborted) setMappingError(errorMessage(e));
@@ -238,9 +250,23 @@ export function PipelineStudio() {
   useEffect(() => {
     setChecks(null);
   }, [configSignature]);
+  function discardEditorDrafts() {
+    setDrafts({});
+    if (JSON.stringify(mapping) !== JSON.stringify(savedMapping)) {
+      setMapping(savedMapping);
+      setCache((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).filter(
+            ([key]) => key !== "structured" && !key.startsWith("output:"),
+          ),
+        ),
+      );
+      generation.current++;
+    }
+  }
   function choose(key: string, stage?: Stage) {
     if (!guard()) return;
-    setDrafts({});
+    discardEditorDrafts();
     setCreating(null);
     setSelected(key);
     setEditorRevision((r) => r + 1);
@@ -252,7 +278,7 @@ export function PipelineStudio() {
     if (stage === "parser" || stage === "transform")
       adapter.priority =
         Math.max(0, ...steps.map((s) => s.config.priority || 0)) + 10;
-    setDrafts({});
+    discardEditorDrafts();
     setCreating({ stage, adapter });
     setSelected(keyFor(stage, adapter));
     setEditorRevision((r) => r + 1);
@@ -271,7 +297,7 @@ export function PipelineStudio() {
         "PUT",
         { steps: order.map((s) => ({ kind: s.stage, id: s.config.id })) },
       );
-      setDrafts({});
+      discardEditorDrafts();
       setCache({});
       setEditorRevision((r) => r + 1);
       await refresh();
@@ -582,8 +608,9 @@ export function PipelineStudio() {
             <div className="flex min-w-0 flex-col [&>div]:flex-1">
               {currentKey === "structured" ? (
                 <MappingEditor
-                  key={messageType}
+                  key={`${messageType}:${editorRevision}`}
                   onDraft={setMapping}
+                  onPersisted={setSavedMapping}
                   sourceFields={sourceFields}
                   compact
                 />

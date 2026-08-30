@@ -1,12 +1,15 @@
 package org.keinus.logparser.domain.input.model;
 
-import java.io.BufferedReader;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -31,6 +34,8 @@ import org.keinus.logparser.domain.model.LogEvent;
 public class HttpInputAdapter extends InputAdapter {
 	private static final int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10MB
 	private static final int READ_BUFFER_SIZE = 8192;
+	private static final int READ_TIMEOUT_MS = 30_000;
+	private static final int MAX_HEADER_LINE_BYTES = 64 * 1024;
 	private static final String LINE_SEPARATOR = System.lineSeparator();
 
 	@FunctionalInterface
@@ -38,7 +43,9 @@ public class HttpInputAdapter extends InputAdapter {
 		ServerSocket create(InputAdapterConfig config, int port) throws IOException;
 	}
 
-	private ServerSocket serverSocket;
+	private volatile ServerSocket serverSocket;
+	private final AtomicBoolean closed = new AtomicBoolean(false);
+	private final AtomicReference<Socket> activeSocket = new AtomicReference<>();
 	private final String localHostAddress;
 
 	public HttpInputAdapter(InputAdapterConfig config) throws IOException {
@@ -64,20 +71,19 @@ public class HttpInputAdapter extends InputAdapter {
 
 	private String read(Socket socket) throws IOException {
 		StringBuilder sb = new StringBuilder(READ_BUFFER_SIZE);
-		try (BufferedReader br = new BufferedReader(
-				new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+		try (InputStream input = new BufferedInputStream(socket.getInputStream(), READ_BUFFER_SIZE)) {
 			String line;
 			int remaining = 0;
 
 			// Read request line
-			line = br.readLine();
+			line = readHeaderLine(input);
 			if (line == null) {
 				return "";
 			}
 			sb.append(line);
 			sb.append(LINE_SEPARATOR);
 
-			while ((line = br.readLine()) != null) {
+			while ((line = readHeaderLine(input)) != null) {
 				sb.append(line);
 				sb.append(LINE_SEPARATOR);
 				if (line.equals(""))
@@ -97,19 +103,11 @@ public class HttpInputAdapter extends InputAdapter {
 			}
 
 			if (remaining > 0) {
-				char[] buffer = new char[Math.min(remaining, READ_BUFFER_SIZE)];
-				int expectedLength = remaining;
-				while (remaining > 0) {
-					int rc = br.read(buffer, 0, Math.min(remaining, buffer.length));
-					if (rc == -1) {
-						break;
-					}
-					sb.append(buffer, 0, rc);
-					remaining -= rc;
-				}
-
-				if (remaining != 0) {
-					log.warn("Content-Length mismatch: expected {}, actual {}", expectedLength, expectedLength - remaining);
+				// Content-Length counts bytes, including multi-byte UTF-8 characters.
+				byte[] body = input.readNBytes(remaining);
+				sb.append(new String(body, StandardCharsets.UTF_8));
+				if (body.length != remaining) {
+					log.warn("Content-Length mismatch: expected {}, actual {}", remaining, body.length);
 				}
 			}
 
@@ -117,27 +115,57 @@ public class HttpInputAdapter extends InputAdapter {
 		return sb.toString();
 	}
 
+	private String readHeaderLine(InputStream input) throws IOException {
+		ByteArrayOutputStream line = new ByteArrayOutputStream();
+		int value;
+		while ((value = input.read()) != -1 && value != '\n') {
+			if (line.size() >= MAX_HEADER_LINE_BYTES) {
+				throw new IOException("HTTP header line exceeds " + MAX_HEADER_LINE_BYTES + " bytes");
+			}
+			line.write(value);
+		}
+		if (value == -1 && line.size() == 0) {
+			return null;
+		}
+		byte[] bytes = line.toByteArray();
+		int length = bytes.length;
+		if (length > 0 && bytes[length - 1] == '\r') {
+			length--;
+		}
+		return new String(bytes, 0, length, StandardCharsets.UTF_8);
+	}
+
 	@Override
 	public LogEvent run() {
-		if (serverSocket == null)
+		ServerSocket listener = serverSocket;
+		if (listener == null || closed.get())
 			return null;
-		try (Socket socket = serverSocket.accept()) {
-			String msg = read(socket);
-			return createLogEvent(msg, localHostAddress);
+		try (Socket socket = listener.accept()) {
+			activeSocket.set(socket);
+			try {
+				if (closed.get()) return null;
+				socket.setSoTimeout(READ_TIMEOUT_MS);
+				String msg = read(socket);
+				return createLogEvent(msg, localHostAddress);
+			} finally {
+				activeSocket.compareAndSet(socket, null);
+			}
 		} catch (IOException e) {
-			log.error("Failed to read HTTP request: {}", e.getMessage(), e);
+			if (!closed.get()) log.error("Failed to read HTTP request: {}", e.getMessage(), e);
 			return null;
 		}
 	}
 
 	@Override
 	public void close() throws IOException {
+		closed.set(true);
+		Socket accepted = activeSocket.getAndSet(null);
 		try {
-			if (serverSocket != null)
-				serverSocket.close();
+			if (accepted != null) accepted.close();
+		} finally {
+			ServerSocket listener = serverSocket;
 			serverSocket = null;
-		} catch (IOException e) {
-			log.error("Error: {}", e.getMessage());
+			if (listener != null) listener.close();
 		}
 	}
 }

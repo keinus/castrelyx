@@ -1,6 +1,36 @@
 import { TYPE_DEFS } from "./adapter-definitions";
 import type { Adapter, Attributes, FieldDefinition, Stage } from "./types";
 
+const TYPE_ALIASES: Partial<Record<Stage, Record<string, string>>> = {
+  input: {
+    file: "FileInputAdapter",
+    tcp: "TcpInputAdapter",
+    tls_tcp: "TlsTcpInputAdapter",
+    tlstcp: "TlsTcpInputAdapter",
+    udp: "UdpInputAdapter",
+    http: "HttpInputAdapter",
+    https: "HttpsInputAdapter",
+    kafka: "KafkaInputAdapter",
+    snmp: "SnmpInputAdapter",
+    rabbitmq: "RabbitMqInputAdapter",
+    tls_rabbitmq: "TlsRabbitMqInputAdapter",
+    tlsrabbitmq: "TlsRabbitMqInputAdapter",
+    tcp_mtls_gzip: "TcpMtlsGzipInputAdapter",
+    fake: "FakeInputAdapter",
+  },
+  output: {
+    console: "ConsoleOutputAdapter",
+    tcp: "TcpOutputAdapter",
+    http: "HttpOutputAdapter",
+    kafka: "KafkaOutputAdapter",
+    opensearch: "OpenSearchOutputAdapter",
+    rabbitmq: "RabbitMQAdapter",
+    mariadb: "MariaDbOutputAdapter",
+    clickhouse: "ClickHouseOutputAdapter",
+    benchmark: "BenchmarkAdapter",
+  },
+};
+
 export function getPath(object: Attributes, path: string): any {
   return path.split(".").reduce((value, key) => value?.[key], object);
 }
@@ -21,8 +51,11 @@ export function setPath(
   else cursor[keys.at(-1)!] = value;
   return next;
 }
-export const definition = (stage: Stage, type: string) =>
-  TYPE_DEFS[stage].find((item) => item.type === type);
+export function definition(stage: Stage, type: string) {
+  const canonical =
+    TYPE_ALIASES[stage]?.[type.trim().toLowerCase()] ?? type.trim();
+  return TYPE_DEFS[stage].find((item) => item.type === canonical);
+}
 export function decodeConfig(value: unknown): Attributes {
   if (value == null || value === "") return {};
   const parsed =
@@ -36,6 +69,7 @@ export function decodeConfig(value: unknown): Attributes {
 export function hydrate(adapter: Adapter, stage: Stage): Adapter {
   let value: Adapter = {
     ...structuredClone(adapter),
+    type: definition(stage, adapter.type)?.type ?? adapter.type,
     configParams: decodeConfig(adapter.configParams),
   };
   if (stage === "output" && !value.messagetype) value.messagetype = "all";
@@ -142,7 +176,8 @@ export function validate(
     }
   }
   const config = decodeConfig(adapter.configParams);
-  if (["TlsTcpInputAdapter", "HttpsInputAdapter"].includes(adapter.type)) {
+  const type = definition(stage, adapter.type)?.type ?? adapter.type;
+  if (["TlsTcpInputAdapter", "HttpsInputAdapter"].includes(type)) {
     if (!config.keyStorePassword && !config.keyStorePasswordEnv)
       errors["configParams.keyStorePasswordEnv"] =
         "A password or environment variable is required.";
@@ -155,7 +190,7 @@ export function validate(
           "A password or environment variable is required.";
     }
   }
-  if (adapter.type === "SnmpInputAdapter") {
+  if (type === "SnmpInputAdapter") {
     if (
       (config.targets || []).some(
         (target: Attributes) =>

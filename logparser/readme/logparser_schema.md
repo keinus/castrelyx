@@ -121,7 +121,7 @@ REST 설정에는 canonical type 사용을 권장합니다.
 | `isFromBeginning` | 아니오 | `false` | `true`면 최초 open 시 처음부터, `false`면 당시 EOF부터 시작 |
 | `host` | 아니오 | `localhost` | 생성되는 event의 `source_host` |
 
-파일 크기가 줄면 rotation으로 판단해 다시 엽니다. `bufferSize`는 사용하지 않습니다.
+파일 크기가 줄면 rotation으로 판단해 새 파일의 처음부터 다시 읽습니다. 이때는 `isFromBeginning=false`여도 새 로그를 건너뛰지 않습니다. `bufferSize`는 사용하지 않습니다.
 
 ### 3.4 TcpInputAdapter / TlsTcpInputAdapter
 
@@ -153,8 +153,9 @@ REST 설정에는 canonical type 사용을 권장합니다.
 | `codec` | 현재 사용 안 함 | 현재 사용 안 함 | request body decoding mode를 바꾸지 않음 |
 | `pathPattern` | 현재 사용 안 함 | 현재 사용 안 함 | route filtering을 하지 않음 |
 | `host` | bind에 사용 안 함 | bind에 사용 안 함 | 모든 interface에 bind |
+| `timeoutMs` | 현재 사용 안 함 | 현재 사용 안 함 | client read timeout은 30,000ms로 고정 |
 
-request line, headers, blank line, `Content-Length`만큼의 body를 합친 전체 HTTP request 문자열이 한 event가 됩니다. body 상한은 10 MiB입니다. 응답 작성 로직은 없으므로 일반 webhook server와 동일한 HTTP 응답 동작을 기대하면 안 됩니다.
+request line, headers, blank line, `Content-Length` 바이트만큼의 body를 합친 전체 HTTP request 문자열이 한 event가 됩니다. body는 바이트 수만큼 읽은 뒤 UTF-8로 디코딩하므로 한글 등 다중 바이트 문자도 연결 종료 없이 처리합니다. body 상한은 10 MiB, request/header 한 줄의 상한은 64 KiB입니다. 종료 시 listener와 처리 중인 client 연결을 함께 닫습니다. 응답 작성 로직은 없으므로 일반 webhook server와 동일한 HTTP 응답 동작을 기대하면 안 됩니다.
 
 ### 3.7 KafkaInputAdapter
 

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -53,10 +54,18 @@ class ParseServiceTest {
         String pattern = "%{COMMONAPACHELOG}";
         String sampleData = "Invalid Data";
 
-        Map<String, Object> result = parseService.testParser(parserType, pattern, sampleData);
+        assertThrows(IllegalArgumentException.class, () -> parseService.testParser(parserType, pattern, sampleData));
+    }
 
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
+    @Test
+    void parserTestReportsTheSameNoMatchFailureAsRuntime() {
+        var config = parserConfig(1L, 0, false, "(?<level>INFO)");
+        LogEvent event = new LogEvent("ERROR", "localhost", "test");
+
+        assertFalse(parseService.createStep(config).execute(event));
+        var failure = assertThrows(IllegalArgumentException.class,
+                () -> parseService.testParser(config.getType(), config.getParam(), "ERROR"));
+        assertEquals("Parser did not match the sample data", failure.getMessage());
     }
 
     @Test
@@ -205,7 +214,8 @@ class ParseServiceTest {
 
             assertFalse(step.execute(event));
             assertEquals(Map.of("values", values, "existing", "kept"), event.getFields());
-            assertTrue(parseService.testParser("RegexParser", config.getParam(), values).isEmpty());
+            assertThrows(IllegalArgumentException.class,
+                    () -> parseService.testParser("RegexParser", config.getParam(), values));
         }
     }
 

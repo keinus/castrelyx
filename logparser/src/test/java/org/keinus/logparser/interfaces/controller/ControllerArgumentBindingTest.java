@@ -137,6 +137,22 @@ class ControllerArgumentBindingTest {
     }
 
     @Test
+    void parserTestReturnsBadRequestWhenThePatternDoesNotMatch() throws Exception {
+        ApplicationProperties properties = mock(ApplicationProperties.class);
+        ParseService parseService = new ParseService(properties, mock(DatabaseConfigLoader.class));
+        MockMvc parserMvc = MockMvcBuilders.standaloneSetup(
+                new ParserController(configService, mock(ConfigValidationService.class), parseService)).build();
+
+        parserMvc.perform(post("/api/v1/parsers/test")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"type":"RegexParser","param":"(?<level>INFO)","sampleData":"ERROR"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Parser did not match the sample data"));
+    }
+
+    @Test
     void transformUpdateBindsLongIdWithoutParameterNames() throws Exception {
         TransformEntity saved = TransformEntity.builder().id(29L).type("RemoveProperty").messagetype("access").build();
         when(configService.updateTransform(eq(29L), any(TransformEntity.class))).thenReturn(saved);

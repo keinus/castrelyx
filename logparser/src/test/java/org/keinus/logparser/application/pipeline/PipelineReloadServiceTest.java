@@ -17,12 +17,22 @@ import org.keinus.logparser.infrastructure.persistence.entity.ParserEntity;
 import org.keinus.logparser.infrastructure.persistence.entity.TransformEntity;
 
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -142,6 +152,59 @@ class PipelineReloadServiceTest {
         verify(applicationProperties).applyConfiguration(previousConfiguration);
         verify(parseService).reload(previousConfiguration.getParser());
         verify(transformService).reload(previousConfiguration.getTransform());
+    }
+
+    @Test
+    void cancellationKeepsReloadExclusiveUntilRollbackCompletes() throws Exception {
+        var target = new DatabaseConfigLoader.PipelineConfiguration();
+        var previous = new DatabaseConfigLoader.PipelineConfiguration();
+        when(databaseConfigLoader.loadConfiguration()).thenReturn(target);
+        when(applicationProperties.snapshot()).thenReturn(previous);
+        CountDownLatch draining = new CountDownLatch(1);
+        CountDownLatch finishDraining = new CountDownLatch(1);
+        CountDownLatch rollingBack = new CountDownLatch(1);
+        CountDownLatch finishRollback = new CountDownLatch(1);
+        when(messageDispatcher.awaitIdle(30_000)).thenAnswer(invocation -> {
+            draining.countDown();
+            assertTrue(finishDraining.await(5, TimeUnit.SECONDS));
+            return true;
+        });
+        doAnswer(invocation -> {
+            rollingBack.countDown();
+            assertTrue(finishRollback.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(applicationProperties).applyConfiguration(previous);
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(pipelineReloadService::reloadConfiguration);
+            assertTrue(draining.await(2, TimeUnit.SECONDS));
+            pipelineReloadService.cancelReload();
+
+            assertTrue(pipelineReloadService.isReloadInProgress());
+            assertEquals("Reload already in progress",
+                    assertThrows(RuntimeException.class, pipelineReloadService::reloadConfiguration).getMessage());
+            finishDraining.countDown();
+
+            assertTrue(rollingBack.await(2, TimeUnit.SECONDS));
+            assertTrue(pipelineReloadService.isReloadInProgress());
+            assertEquals("Reload already in progress",
+                    assertThrows(RuntimeException.class, pipelineReloadService::reloadConfiguration).getMessage());
+            finishRollback.countDown();
+
+            var failure = assertThrows(ExecutionException.class, () -> first.get(3, TimeUnit.SECONDS));
+            assertInstanceOf(CancellationException.class, failure.getCause());
+            verify(applicationProperties).applyConfiguration(previous);
+            verify(applicationProperties, never()).applyConfiguration(target);
+            assertFalse(pipelineReloadService.isReloadInProgress());
+            assertEquals(PipelineReloadService.PipelineStatus.RUNNING, pipelineReloadService.getReloadProgress().status());
+
+            pipelineReloadService.reloadConfiguration();
+            verify(applicationProperties).applyConfiguration(target);
+        } finally {
+            finishDraining.countDown();
+            finishRollback.countDown();
+            executor.shutdownNow();
+        }
     }
 
     private ParserAdapterConfig parserConfig(String messageType) {

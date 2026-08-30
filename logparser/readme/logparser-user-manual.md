@@ -54,6 +54,8 @@ SNMP 대상과 OID는 항목별 행으로, HTTP 헤더와 변환 규칙은 key/v
 
 새 component와 복제본은 Disabled 상태로 시작합니다. 저장 전에 Enabled를 확인하세요. Output의 Message type을 `all`로 설정하면 모든 message type을 받으며 각 Studio 경로에도 표시됩니다. `Save input/output/parser/transform`과 `Save mapping`은 해당 설정을 저장하고 런타임 갱신을 요청합니다. 별도 Deploy 단계는 없습니다.
 
+`tcp`, `http`, `clickhouse` 같은 입력·출력 별칭으로 저장한 설정도 동일한 속성 편집기를 사용하며, 편집 후 저장하면 canonical type 이름으로 정규화합니다. 같은 출력 어댑터의 활성화 요청을 반복해도 런타임 등록과 전송은 중복되지 않습니다.
+
 `Validate`는 현재 draft의 필수 필드·범위와 활성 입출력 연결을 로컬에서 검사합니다. 네트워크 연결·인증서·실제 전송 성공을 보장하지 않습니다. `Reload configuration`은 저장된 설정으로 `/api/v1/pipeline/validate-and-reload`를 호출하며 실행 전에 확인창을 표시합니다. 저장되지 않은 변경을 두고 다른 화면이나 Message type으로 이동하면 폐기 여부를 확인합니다.
 
 `Test selected step`은 현재 선택한 component만 테스트합니다.
@@ -65,6 +67,8 @@ SNMP 대상과 OID는 항목별 행으로, HTTP 헤더와 변환 규칙은 key/v
 - Sample, 상위 설정, 활성 상태, Order 변경과 상위 테스트 재실행은 관련 하위 결과를 무효화합니다. 테스트한 동일 draft를 저장한 경우에는 새 ID와 시간 필드가 생겨도 결과를 유지합니다.
 - Structured mapping은 마지막 처리 결과를, Output preview는 mapping 결과를 사용합니다. Input preview는 별도로 Sample만 사용합니다.
 - 결과는 화면 메모리에만 보관하며 새로고침이나 Message type 변경 시 초기화됩니다.
+- 매핑 변경을 폐기하고 다른 단계로 이동하면 마지막으로 저장한 매핑으로 복구하고 해당 매핑·하위 출력의 임시 테스트 결과를 무효화합니다. 저장하거나 template을 적용한 매핑은 유지됩니다.
+- 파서가 sample에 일치하지 않으면 테스트 API는 `400`과 오류 메시지를 반환합니다. 빈 객체를 성공 결과로 취급하지 않습니다.
 
 | 단계 | 테스트 범위 |
 | --- | --- |
@@ -528,11 +532,13 @@ Pipeline 제어 API는 다음과 같습니다.
 | `POST` | `/api/v1/pipeline/validate-and-reload` | 검증 후 reload |
 | `POST` | `/api/v1/pipeline/restart` | pipeline restart |
 | `GET` | `/api/v1/pipeline/reload-progress` | reload 진행 상태 |
-| `POST` | `/api/v1/pipeline/cancel-reload` | reload 취소 |
+| `POST` | `/api/v1/pipeline/cancel-reload` | reload 취소 요청 |
 | `GET` | `/api/v1/pipeline/threads` | thread detail 조회 |
 | `PUT` | `/api/v1/pipeline/{messageType}/processing-steps/order` | parser/transform 공통 실행 순서 저장 |
 
 어댑터와 처리 단계의 Save는 저장된 설정을 런타임에 반영합니다. Studio의 `Reload configuration`과 Settings의 Reload는 현재 저장된 설정을 다시 읽으며, 화면의 미저장 변경을 배포하는 동작이 아닙니다. Settings에서 검증 후 Reload와 Restart도 실행할 수 있으며, 실행 전 확인 창을 표시합니다.
+
+Reload 취소는 즉시 진행 중 표시를 해제하지 않습니다. 입력을 중지하고 처리 중인 이벤트를 비운 안전한 단계에서 취소 요청을 확인한 뒤 이전 런타임 설정을 복구합니다. 복구가 끝날 때까지 다른 Reload/Restart는 거부됩니다. 마지막 취소 확인 단계를 지나 입력을 다시 시작하는 중이면 해당 Reload는 정상 완료될 수 있습니다.
 
 ## 12. 문서 API
 

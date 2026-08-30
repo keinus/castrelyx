@@ -1,6 +1,7 @@
 package org.keinus.logparser.domain.input.model;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +29,11 @@ class FileInputAdapterTest {
         config = new InputAdapterConfig();
         config.setType("FileInputAdapter");
         config.setMessagetype("file-test");
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        if (adapter != null) adapter.close();
     }
 
     @Test
@@ -99,5 +105,23 @@ class FileInputAdapterTest {
         LogEvent event = adapter.run();
         assertThat(event).isNotNull();
         assertThat(event.getOriginalText()).isEqualTo("New line 1");
+    }
+
+    @Test
+    void tailFromEndReadsAllNewLinesAfterRotation() throws IOException {
+        Path logFile = tempDir.resolve("tail-rotate.log");
+        Files.writeString(logFile, "Existing content before the tail reader starts\n");
+        config.setPath(logFile.toString());
+        config.setIsFromBeginning(false);
+        adapter = new FileInputAdapter(config);
+        assertThat(adapter.run()).isNull();
+
+        Files.writeString(logFile, "New 1\nNew 2\n", StandardOpenOption.TRUNCATE_EXISTING);
+
+        assertThat(adapter.run().getOriginalText()).isEqualTo("New 1");
+        assertThat(adapter.run().getOriginalText()).isEqualTo("New 2");
+        assertThat(adapter.run()).isNull();
+        Files.writeString(logFile, "New 3\n", StandardOpenOption.APPEND);
+        assertThat(adapter.run().getOriginalText()).isEqualTo("New 3");
     }
 }
