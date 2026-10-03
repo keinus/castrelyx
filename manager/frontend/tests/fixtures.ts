@@ -78,7 +78,7 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     message: 'SSH login failed for alice',
     observedAt: '2026-06-11T13:33:00Z'
   }]));
-  await page.route('/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas', routeJson([{
+  await page.route('/api/assets/by-uid/nas/logs?range=1h&severity=ALL&family=ALL&query=&offset=0&limit=120', routeJson({ items: [{
     assetUid: 'nas',
     sourceId: 'nas-agent',
     eventType: 'auth.login.failure',
@@ -91,7 +91,7 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
     outcome: 'failure',
     message: 'SSH login failed for alice',
     observedAt: '2026-06-11T13:33:00Z'
-  }]));
+  }], hasMore: false, nextOffset: 1, storageAvailable: true, status: {} }));
   await page.route('/api/dashboards/snmp', routeJson({
     polls: { success: 4, failure: 1 },
     targets: ['edge-router'],
@@ -266,12 +266,50 @@ export async function mockApi(page: Page, role: 'ADMIN' | 'OPERATOR' | 'VIEWER' 
   await page.route('/api/integrations/logparser/status', routeJson({
     status: 'RUNNING',
     inputAdapterCount: 1,
-    outputAdapterCount: 1
+    outputAdapterCount: 1, parserCount: 2, transformCount: 1, queueSize: 12, queueCapacity: 1000, throughput: 248.5
   }));
   await page.route('/api/integrations/logparser/deep-links', routeJson([
     { label: 'Pipeline', url: 'http://logparser:8765/' },
     { label: 'Input adapters', url: 'http://logparser:8765/#input-adapters' }
   ]));
+  const targets = [{ id: 1, name: 'edge-router', host: '10.0.0.1', port: 161, credentialId: null, enabled: true, pollIntervalMs: 60000, logparserAdapterId: null }];
+  await page.route('/api/snmp/targets', async (route) => {
+    if (route.request().method() === 'POST') {
+      const target = { ...route.request().postDataJSON(), id: targets.length + 1, logparserAdapterId: null };
+      targets.push(target);
+      return routeJson(target, 201)(route);
+    }
+    return routeJson(targets)(route);
+  });
+  await page.route(/\/api\/snmp\/targets\/\d+\/(enable|disable)$/, async (route) => {
+    const parts = new URL(route.request().url()).pathname.split('/');
+    const target = targets.find((item) => item.id === Number(parts[4]))!;
+    target.enabled = parts[5] === 'enable';
+    return routeJson(target)(route);
+  });
+  const rules = [{ id: 1, name: 'CPU 사용량', ruleType: 'cpu_threshold', severity: 'CRITICAL', expressionJson: '{}', enabled: true }];
+  await page.route('/api/alert-rules', routeJson(rules));
+  await page.route(/\/api\/alert-rules\/\d+$/, async (route) => {
+    Object.assign(rules[0], route.request().postDataJSON());
+    return routeJson(rules[0])(route);
+  });
+  for (const name of ['castrelsign', 'logparser']) {
+    const config = { serviceName: name, baseUrl: name === 'castrelsign' ? 'https://castrelsign:8443' : 'http://logparser:8765', secret: { configured: name === 'castrelsign', masked: name === 'castrelsign' ? '********' : '' }, enabled: true };
+    await page.route(`/api/integrations/${name}`, async (route) => {
+      if (route.request().method() === 'PUT') {
+        const input = route.request().postDataJSON();
+        config.baseUrl = input.baseUrl; config.enabled = input.enabled;
+        if (input.adminToken || input.apiToken) config.secret = { configured: true, masked: '********' };
+      }
+      return routeJson(config)(route);
+    });
+    await page.route(`/api/integrations/${name}/test`, routeJson({ ok: true }));
+  }
+  await page.route(/\/api\/agent\/logs\?.*limit=300/, async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const rows = [{ assetUid: 'nas', eventType: 'auth.login.failure', severity: 'WARNING', message: 'SSH login failed for alice', sourceName: 'sshd', observedAt: '2026-06-11T13:33:00Z' }];
+    return routeJson(rows.filter((row) => (!params.has('assetUid') || row.assetUid === params.get('assetUid')) && (params.get('severity') === 'ALL' || row.severity === params.get('severity'))))(route);
+  });
 }
 
 function metricOverview(assets: MockAsset[]) {

@@ -67,6 +67,7 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
 
     private final ClickHouseConfig config;
     private final HttpClient httpClient;
+    private final SnmpHostMetricNormalizer snmpHostMetrics = new SnmpHostMetricNormalizer();
     private final List<EventRecord> legacyBuffer = new ArrayList<>();
     private long legacyBufferBytes;
     private final LinkedHashMap<ChunkGroupKey, PendingChunkGroup> pendingChunkGroups = new LinkedHashMap<>();
@@ -108,6 +109,10 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     public void send(LogEvent logEvent) {
         if (closed.get()) {
             throw deliveryFailure("Adapter is closed");
+        }
+        if ("security-router".equals(logEvent.getMessageType())) {
+            writeRouterEvent(logEvent);
+            return;
         }
         synchronized (lock) {
             EventRecord record = EventRecord.from(logEvent, isAddOriginText());
@@ -202,6 +207,26 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             enableNonReplicatedDeduplication(config.telemetryTableReference(config.stateTableName()));
             enableNonReplicatedDeduplication(config.telemetryTableReference(config.eventTableName()));
         }
+    }
+
+    private void writeRouterEvent(LogEvent event) {
+        if (!config.writeTelemetryTables()) throw deliveryFailure("Router output requires writeTelemetryTables=true");
+        String source = String.valueOf(event.getField("source_id"));
+        String id = String.valueOf(event.getField("item_id"));
+        if (!source.equals(event.getAuthenticatedSourceId()) || !"SECURITY_ROUTER".equals(event.getField("source_type"))) throw deliveryFailure("Router event was not authenticated and normalized");
+        String key = "router:" + source.length() + ":" + source + ":" + id;
+        EventRecord record = EventRecord.from(event, true);
+        // Synchronous writes: a successful send means canonical DB insertion,
+        // not merely appending to the ordinary batch buffer.
+        writeRawRecords(List.of(record), key);
+        Map<String,Object> payload = new LinkedHashMap<>(OBJECT_MAPPER.convertValue(event.getField("payload"), Map.class));
+        payload.put("stored_at", Instant.now().toString());
+        Map<String,Object> row = eventRow(Instant.parse(String.valueOf(event.getField("observed_at"))),
+                event.getAuthenticatedAssetUid(), "SECURITY_ROUTER", source,
+                String.valueOf(event.getField("item_type")), String.valueOf(payload.get("severity")), json(OBJECT_MAPPER.valueToTree(payload)));
+        insertTelemetryTable(config.eventTableName(),
+                "(observed_at, asset_uid, source_type, source_id, event_type, severity, event_json)", List.of(row), key);
+        event.acknowledgeStored();
     }
 
     private void enableNonReplicatedDeduplication(String tableReference) {
@@ -560,8 +585,19 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
         stateRows.add(stateRow(observedAt, targetHost, "SNMP", record.sourceId(), "identity", targetHost, json(identity)));
 
         JsonNode metrics = payload.path("metrics");
+        SnmpHostMetricNormalizer.Result normalized = snmpHostMetrics.normalize(
+                record.sourceId() + "\u0000" + targetHost, observedAt, payload);
+        for (SnmpHostMetricNormalizer.Metric metric : normalized.metrics()) {
+            Map<String, Object> row = baseTelemetryRow(observedAt, targetHost, "SNMP", record.sourceId());
+            row.put("metric_name", metric.name());
+            row.put("metric_value", metric.value());
+            row.put("unit", metric.unit());
+            row.put("labels_json", json(OBJECT_MAPPER.valueToTree(metric.labels())));
+            metricRows.add(row);
+        }
         if (metrics.isArray()) {
             for (JsonNode metric : metrics) {
+                if (metric.hasNonNull("name") && normalized.handledNames().contains(text(metric, "name"))) continue;
                 Map<String, Object> row = snmpMetricRow(record, targetHost, observedAt, metric, null);
                 if (row != null) {
                     metricRows.add(row);
@@ -569,6 +605,7 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             }
         } else if (metrics.isObject()) {
             metrics.fields().forEachRemaining(field -> {
+                if (normalized.handledNames().contains(field.getKey())) return;
                 Map<String, Object> row = snmpMetricRow(record, targetHost, observedAt, field.getValue(), field.getKey());
                 if (row != null) {
                     metricRows.add(row);
@@ -576,6 +613,10 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
             });
         }
 
+        String operation = text(payload, "operation");
+        if ("trap".equals(operation) || "inform".equals(operation)) {
+            eventRows.add(eventRow(observedAt, targetHost, "SNMP", record.sourceId(), "snmp." + operation, "INFO", json(payload)));
+        }
         if ("error".equalsIgnoreCase(firstNonBlank(text(payload, "poll_status"), text(event, "poll_status")))) {
             eventRows.add(eventRow(observedAt, targetHost, "SNMP", record.sourceId(), "snmp.poll.failure", "WARNING", json(payload)));
         }
@@ -613,15 +654,22 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     ) {
         String name = firstNonBlank(text(metric, "name"), fallbackName);
         Double value = metricValue(metric);
-        if (value == null || name == null || name.isBlank()) {
+        if (value == null || !Double.isFinite(value) || name == null || name.isBlank()
+                || !"success".equals(metric.path("status").asText("success"))) {
             return null;
         }
         ObjectNode labels = OBJECT_MAPPER.createObjectNode();
         copyLabel(metric, labels, "interface");
+        String canonicalName = snmpMetricName(name);
+        String unit = text(metric, "unit");
+        if ("host.network.rx_bytes".equals(canonicalName) || "host.network.tx_bytes".equals(canonicalName)) {
+            unit = "bytes";
+            labels.put("direction", "host.network.rx_bytes".equals(canonicalName) ? "ingress" : "egress");
+        }
         Map<String, Object> row = baseTelemetryRow(observedAt, targetHost, "SNMP", record.sourceId());
-        row.put("metric_name", snmpMetricName(name));
+        row.put("metric_name", canonicalName);
         row.put("metric_value", value);
-        row.put("unit", text(metric, "unit"));
+        row.put("unit", unit);
         row.put("labels_json", json(labels));
         return row;
     }
@@ -691,6 +739,16 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     }
 
     private static JsonNode payloadNode(JsonNode event) {
+        if ("event_snmp".equals(event.path("subDomainType").asText()) && event.path("subFields").isObject()) {
+            ObjectNode snmp = OBJECT_MAPPER.createObjectNode();
+            if (event.path("additionalAttributes").isObject()) snmp.setAll((ObjectNode) event.path("additionalAttributes"));
+            snmp.setAll((ObjectNode) event.path("subFields"));
+            return snmp;
+        }
+        JsonNode attributes = event.path("additionalAttributes");
+        if ("snmp".equals(attributes.path("protocol").asText())) {
+            return attributes;
+        }
         JsonNode payload = event.path("payload");
         if (payload.isObject()) {
             return payload;
@@ -800,8 +858,8 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
 
     private static String snmpMetricName(String name) {
         return switch (name == null ? "" : name) {
-            case "ifInOctets" -> "interface.in.bytes";
-            case "ifOutOctets" -> "interface.out.bytes";
+            case "ifInOctets", "ifHCInOctets" -> "host.network.rx_bytes";
+            case "ifOutOctets", "ifHCOutOctets" -> "host.network.tx_bytes";
             case "ifInErrors" -> "interface.in.errors";
             case "ifOutErrors" -> "interface.out.errors";
             case "ifInDiscards" -> "interface.in.discards";
@@ -1500,7 +1558,7 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
                 String itemId,
                 boolean includeOriginText
         ) {
-            if (itemKind == null) {
+            if (itemKind == null || "event_snmp".equals(output.get("subDomainType"))) {
                 return event.toOutputJson(includeOriginText);
             }
             Map<String, Object> compact = new LinkedHashMap<>();

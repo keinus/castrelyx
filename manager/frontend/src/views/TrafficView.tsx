@@ -8,12 +8,14 @@ import {
   Server,
   SlidersHorizontal
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { MetricCards } from '../components/MetricCards';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
 import type { InterfaceTraffic } from '../lib/types';
 import { formatBps } from '../lib/uiModel';
+import { useRemoteData } from '../lib/useRemoteData';
+import { ViewFeedback } from '../components/ViewFeedback';
 
 const rangeOptions = [
   ['15m', '15 min'],
@@ -39,29 +41,13 @@ type AssetTrafficSummary = {
 
 export function TrafficView() {
   const [range, setRange] = useState('1h');
-  const [rows, setRows] = useState<InterfaceTraffic[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [selectedAsset, setSelectedAsset] = useState('ALL');
   const [exceedThresholdMbps, setExceedThresholdMbps] = useState(10);
 
-  async function load(selectedRange = range) {
-    setLoading(true);
-    setError('');
-    try {
-      setRows(await api.trafficInterfaces(selectedRange));
-    } catch {
-      setRows([]);
-      setError('Unable to load traffic data.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void load(range);
-  }, [range]);
+  const fetchTraffic = useCallback(() => api.trafficInterfaces(range), [range]);
+  const { data, loading, error, reload: load } = useRemoteData(fetchTraffic, '트래픽 데이터를 불러오지 못했습니다.');
+  const rows = data ?? [];
 
   const thresholdBps = Math.max(0, exceedThresholdMbps) * 1_000_000;
   const assetSummaries = useMemo(() => buildAssetSummaries(rows, thresholdBps), [rows, thresholdBps]);
@@ -97,6 +83,7 @@ export function TrafficView() {
   return (
     <ViewFrame
       title="Traffic"
+      subtitle="자산별 네트워크 사용량과 인터페이스의 수신·송신 흐름을 확인합니다."
       actions={(
         <>
           <select aria-label="Range" value={range} onChange={(event) => setRange(event.target.value)}>
@@ -104,14 +91,13 @@ export function TrafficView() {
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
-          <button className="icon-button" aria-label="Refresh traffic" onClick={() => void load()} type="button">
+          <button className="icon-button" aria-label="Refresh traffic" disabled={loading} onClick={() => void load()} type="button">
             <RefreshCw size={18} />
           </button>
         </>
       )}
     >
-      {error && <div className="notice error">{error}</div>}
-      {loading && <div className="notice">Refreshing traffic data.</div>}
+      <ViewFeedback loading={loading} error={error} hasData={!!data} />
 
       <div className="traffic-control-bar">
         <label className="traffic-filter-field">
@@ -134,6 +120,7 @@ export function TrafficView() {
         </label>
         <label className="traffic-filter-field">
           <SlidersHorizontal size={16} aria-hidden="true" />
+          <span className="traffic-threshold-label">표시 기준 (Mbps)</span>
           <input
             aria-label="Exceed threshold Mbps"
             min={0}
@@ -147,10 +134,10 @@ export function TrafficView() {
 
       <MetricCards
         items={[
-          ['Total', formatBps(summary.total)],
-          ['Inbound', formatBps(summary.totalIn)],
-          ['Outbound', formatBps(summary.totalOut)],
-          ['Exceed', String(summary.exceedCount)]
+          ['Total', data ? formatBps(summary.total) : '—'],
+          ['Inbound', data ? formatBps(summary.totalIn) : '—'],
+          ['Outbound', data ? formatBps(summary.totalOut) : '—'],
+          ['Exceed', data ? String(summary.exceedCount) : '—']
         ]}
       />
 
@@ -160,6 +147,7 @@ export function TrafficView() {
       </div>
 
       <TrafficExceedPanel rows={exceedRows} thresholdBps={thresholdBps} maxTraffic={maxTraffic} />
+      <p className="cc-help">표시 기준은 이 화면의 초과 트래픽 강조에만 적용됩니다. 저장된 알림 규칙은 설정에서 관리합니다.</p>
     </ViewFrame>
   );
 }

@@ -33,6 +33,7 @@ public class AgentRepository {
     }
   }
 
+  @org.springframework.transaction.annotation.Transactional
   public void saveCertificate(String agentId, X509Certificate certificate) {
     jdbcTemplate.update("update issued_certificates set status = 'SUPERSEDED' where agent_id = ? and status = 'ACTIVE'", agentId);
     jdbcTemplate.update("""
@@ -55,6 +56,7 @@ public class AgentRepository {
         """, eventType, agentId, message, Instant.now().toString());
   }
 
+  @org.springframework.transaction.annotation.Transactional
   public void blockAgent(String agentId) {
     String normalized = requireAgentId(agentId);
     String now = Instant.now().toString();

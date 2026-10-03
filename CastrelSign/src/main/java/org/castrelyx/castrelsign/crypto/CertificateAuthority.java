@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.Arrays;
+import java.util.UUID;
 
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
@@ -54,6 +55,8 @@ import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.castrelyx.castrelsign.crypto.CsrService.ParsedCsr;
+import org.castrelyx.castrelsign.kms.KeyManagementService;
+import org.castrelyx.castrelsign.kms.ProtectedFiles;
 
 public class CertificateAuthority {
   private static final SecureRandom RANDOM = new SecureRandom();
@@ -69,6 +72,7 @@ public class CertificateAuthority {
   private final X509Certificate serverCertificate;
   private final PrivateKey serverPrivateKey;
   private final boolean serverMaterialChanged;
+  private KeyManagementService kms;
 
   private CertificateAuthority(Path certDir, X509Certificate rootCertificate, PrivateKey rootPrivateKey,
       X509Certificate serverCertificate, PrivateKey serverPrivateKey, boolean serverMaterialChanged) {
@@ -97,6 +101,54 @@ public class CertificateAuthority {
         FileLock ignored = lockChannel.lock()) {
       setRestrictedPermissions(lockPath);
       return initializeLocked(certDir, serverName, certValidFor, rootValidFor);
+    }
+  }
+
+  public static synchronized CertificateAuthority initializeManaged(Path certDir, String serverName, Duration certValidFor,
+      Duration rootValidFor, char[] password, KeyManagementService kms) throws Exception {
+    return refreshManaged(certDir, serverName, certValidFor, rootValidFor, password, kms).authority();
+  }
+
+  public static synchronized RefreshResult refreshManaged(Path certDir, String serverName, Duration certValidFor,
+      Duration rootValidFor, char[] password, KeyManagementService kms) throws Exception {
+    BouncyCastleSupport.install(); requirePositive(certValidFor, "certificate validity"); requirePositive(rootValidFor, "root validity");
+    Files.createDirectories(certDir);
+    try (FileChannel channel = FileChannel.open(certDir.resolve(".certificate-authority.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        FileLock ignored = channel.lock()) {
+      var root = kms.ensureCa(rootValidFor);
+      X509Certificate rootCert = KeyManagementService.certificate(root.certificatePem());
+      Path certPath = certDir.resolve("server.pem"), keyPath = certDir.resolve("server.key");
+      recoverInterruptedPair(certPath, keyPath);
+      ServerMaterial material = null;
+      boolean encrypted = Files.exists(keyPath) && Files.readString(keyPath).contains("BEGIN ENCRYPTED PRIVATE KEY");
+      if (Files.exists(certPath) && Files.exists(keyPath)) {
+        try {
+          X509Certificate cert = readCertificate(certPath); PrivateKey key = readPrivateKey(keyPath, password);
+          validateServerMaterial(cert, key, rootCert, serverName, certValidFor, Instant.now());
+          material = new ServerMaterial(cert, key);
+        } catch (Exception invalid) { /* Replace invalid TLS material, never the CA. */ }
+      }
+      boolean changed = material == null;
+      if (changed) {
+        ensureRootCovers(rootCert, certValidFor, Instant.now(), "server certificate");
+        KeyPair pair = ecKeyPair();
+        X509Certificate cert = signedServerCertificate(rootCert, pair, serverName, certValidFor,
+            kms.contentSigner(root.ref(), KeyManagementService.TLS, "server:" + UUID.randomUUID(), Instant.now().plus(certValidFor)));
+        material = new ServerMaterial(cert, pair.getPrivate());
+      }
+      if (changed || !encrypted) replaceMaterialPair(certPath, PemUtil.certificateToPem(material.certificate()),
+          keyPath, PemUtil.encryptedPrivateKeyToPem(material.privateKey(), password), true);
+      kms.registerTls(material.certificate(), root.ref());
+      ProtectedFiles.write(certDir.resolve("ca.pem"), kms.trustBundle().getBytes(StandardCharsets.UTF_8));
+      CertificateAuthority authority = new CertificateAuthority(certDir, rootCert, null, material.certificate(), material.privateKey(), changed);
+      authority.kms = kms;
+      boolean storesChanged = changed || !authority.keyStoresMatch(password);
+      KeyStoreFiles stores = storesChanged ? authority.writeKeyStoresLocked(password) : new KeyStoreFiles(certDir.resolve("server.p12"), certDir.resolve("truststore.p12"));
+      // Remove legacy plaintext only after the protected store and TLS material are durable.
+      Files.deleteIfExists(certDir.resolve("ca.key")); Files.deleteIfExists(certDir.resolve("ca.key.bak"));
+      Path backup = certDir.resolve("server.key.bak");
+      if (Files.exists(backup) && !Files.readString(backup).contains("BEGIN ENCRYPTED PRIVATE KEY")) Files.delete(backup);
+      return new RefreshResult(authority, stores, storesChanged);
     }
   }
 
@@ -346,6 +398,10 @@ public class CertificateAuthority {
   }
 
   public X509Certificate rootCertificate() {
+    if (kms != null) {
+      try { return KeyManagementService.certificate(kms.current(KeyManagementService.CA).certificatePem()); }
+      catch (java.security.cert.CertificateException e) { throw new IllegalStateException(e); }
+    }
     return rootCertificate;
   }
 
@@ -354,18 +410,27 @@ public class CertificateAuthority {
   }
 
   public String rootCertificatePem() {
+    if (kms != null) return kms.trustBundle();
     return PemUtil.certificateToPem(rootCertificate);
+  }
+
+  public boolean trustsClientCertificate(X509Certificate certificate) {
+    if (kms != null) return kms.trusts(certificate);
+    try { certificate.verify(rootCertificate.getPublicKey()); return true; } catch (Exception e) { return false; }
   }
 
   public X509Certificate signAgentCertificate(ParsedCsr csr, Duration validFor) {
     try {
+      var ref = kms == null ? null : kms.current(KeyManagementService.CA);
+      X509Certificate rootCertificate = ref == null ? this.rootCertificate : KeyManagementService.certificate(ref.certificatePem());
       requirePositive(validFor, "agent certificate validity");
       Instant now = Instant.now();
+      BigInteger certificateSerial = serial();
       ensureRootCovers(rootCertificate, validFor, now, "agent certificate");
       X500Name issuer = issuerName(rootCertificate);
       X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(
           issuer,
-          serial(),
+          certificateSerial,
           Date.from(now.minusSeconds(60)),
           Date.from(now.plus(validFor)),
           csr.request().getSubject(),
@@ -376,8 +441,10 @@ public class CertificateAuthority {
       if (csr.subjectAlternativeNames() != null) {
         builder.addExtension(Extension.subjectAlternativeName, false, csr.subjectAlternativeNames());
       }
-      return convert(builder.build(signer(rootPrivateKey)));
+      return convert(builder.build(kms == null ? signer(rootPrivateKey) : kms.contentSigner(ref.ref(),
+          KeyManagementService.ISSUER, "certificate:" + certificateSerial.toString(16), now.plus(validFor))));
     } catch (Exception e) {
+      if (e instanceof org.springframework.web.server.ResponseStatusException status) throw status;
       throw new IllegalStateException("failed to sign agent certificate", e);
     }
   }
@@ -412,6 +479,10 @@ public class CertificateAuthority {
     KeyStore trustStore = KeyStore.getInstance("PKCS12");
     trustStore.load(null, password);
     trustStore.setCertificateEntry("castrelsign-root", rootCertificate);
+    if (kms != null) {
+      for (var key : kms.keys()) if (KeyManagementService.CA.equals(key.alias()) && KeyManagementService.trusted(key.state()))
+        trustStore.setCertificateEntry("castrelsign-root-v" + key.version(), KeyManagementService.certificate(key.certificatePem()));
+    }
     byte[] encodedTrustStore;
     try (var out = new ByteArrayOutputStream()) {
       trustStore.store(out, password);
@@ -451,6 +522,14 @@ public class CertificateAuthority {
         trustStore.load(input, password);
       }
       java.security.cert.Certificate storedRoot = trustStore.getCertificate("castrelsign-root");
+      if (kms != null) {
+        long count = kms.keys().stream().filter(k -> KeyManagementService.CA.equals(k.alias()) && KeyManagementService.trusted(k.state())).count();
+        if (trustStore.size() != count + 1) return false;
+        for (var key : kms.keys()) if (KeyManagementService.CA.equals(key.alias()) && KeyManagementService.trusted(key.state())) {
+          var trusted = trustStore.getCertificate("castrelsign-root-v" + key.version());
+          if (trusted == null || !Arrays.equals(trusted.getEncoded(), KeyManagementService.certificate(key.certificatePem()).getEncoded())) return false;
+        }
+      }
       return storedRoot != null && Arrays.equals(storedRoot.getEncoded(), rootCertificate.getEncoded());
     } catch (Exception invalidOrMissingStore) {
       return false;
@@ -478,6 +557,11 @@ public class CertificateAuthority {
 
   private static X509Certificate signedServerCertificate(X509Certificate rootCert, PrivateKey rootKey, KeyPair serverKeyPair,
       String serverName, Duration validFor) throws Exception {
+    return signedServerCertificate(rootCert, serverKeyPair, serverName, validFor, signer(rootKey));
+  }
+
+  private static X509Certificate signedServerCertificate(X509Certificate rootCert, KeyPair serverKeyPair,
+      String serverName, Duration validFor, ContentSigner contentSigner) throws Exception {
     Instant now = Instant.now();
     X500Name issuer = issuerName(rootCert);
     X500Name subject = new X500Name("CN=" + serverName + ",O=Castrelyx,OU=CastrelSign");
@@ -491,7 +575,7 @@ public class CertificateAuthority {
     addCommonLeafExtensions(builder, rootCert, serverKeyPair.getPublic(), true);
     builder.addExtension(Extension.extendedKeyUsage, false, new ExtendedKeyUsage(KeyPurposeId.id_kp_serverAuth));
     builder.addExtension(Extension.subjectAlternativeName, false, serverNames(serverName));
-    X509Certificate cert = convert(builder.build(signer(rootKey)));
+    X509Certificate cert = convert(builder.build(contentSigner));
     cert.verify(rootCert.getPublicKey());
     return cert;
   }
@@ -546,9 +630,17 @@ public class CertificateAuthority {
   }
 
   private static PrivateKey readPrivateKey(Path path) throws Exception {
+    return readPrivateKey(path, null);
+  }
+
+  private static PrivateKey readPrivateKey(Path path, char[] password) throws Exception {
     try (PEMParser parser = new PEMParser(new StringReader(Files.readString(path)))) {
       Object object = parser.readObject();
       JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(BouncyCastleSupport.PROVIDER);
+      if (object instanceof org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo encrypted && password != null) {
+        return converter.getPrivateKey(encrypted.decryptPrivateKeyInfo(new org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8DecryptorProviderBuilder()
+            .setProvider(BouncyCastleSupport.PROVIDER).build(password)));
+      }
       if (object instanceof PEMKeyPair pair) {
         return converter.getPrivateKey(pair.getPrivateKeyInfo());
       }
@@ -676,11 +768,7 @@ public class CertificateAuthority {
   }
 
   private static void setRestrictedPermissions(Path path) throws IOException {
-    try {
-      Files.setPosixFilePermissions(path, OWNER_READ_WRITE);
-    } catch (UnsupportedOperationException ignored) {
-      // Windows ACLs are inherited from the restricted data directory.
-    }
+    ProtectedFiles.restrict(path);
   }
 
   private record ServerMaterial(X509Certificate certificate, PrivateKey privateKey) {

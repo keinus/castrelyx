@@ -227,6 +227,10 @@ client certificate이 필요한 RabbitMQ 환경에서는 `keyStorePath`, `keySto
 
 ### SNMP 입력 설정
 
+워크벤치의 **Pipeline Studio → Input → + (Add input)**에서 `SNMP poller`와 `SNMP notifications`를 선택할 수 있습니다. Poller의 v3 공통 인증정보는 Authentication, Trap/Inform 사용자는 Security 탭에서 입력합니다. 저장·재편집 절차, engine ID와 큐의 응답 범위는 [SNMP 설정 가이드](snmp.md)를 참고하세요.
+
+**SNMP poller → Targets → Import MIB files**에서 제조사 MIB와 의존 MIB를 함께 업로드하면 읽기 가능한 OID 목록이 표시됩니다. 스칼라는 `.0`이 자동 추가되고 테이블은 Instance suffix를 입력합니다. **Add OIDs and template**으로 OID 초안과 reusable structured transform 템플릿을 만든 뒤 **Save input**, **Field mapping → Mapping template → Apply template** 순서로 적용합니다. 업로드만으로 기존 매핑을 교체하지 않습니다.
+
 `SnmpInputAdapter`는 `targets[]`와 `oids[]`가 필요합니다.
 
 ```json
@@ -591,3 +595,10 @@ ${user.home}/logparser/data/config.db
 ```
 
 Flyway migration은 `src/main/resources/db/migration`에 있습니다. adapter type이나 alias가 추가되면 SQLite trigger가 새 type을 허용하는지 확인해야 합니다. 현재 입력 trigger는 TLS TCP, HTTPS, TLS RabbitMQ, TCP mTLS gzip을 포함하고, 출력 trigger는 MariaDB와 ClickHouse를 포함합니다.
+
+
+## Security Router TLS pipeline
+
+TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
+
+TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.

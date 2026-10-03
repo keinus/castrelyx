@@ -1,5 +1,7 @@
 # Logparser
 
+Security Router 직접 TLS 수집은 [운영 안내](readme/security-router.md)를 참고하세요. 기본 파이프라인은 인증서·장비 등록 후 활성화합니다.
+
 Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프라인입니다. 입력 어댑터가 원문 이벤트를 `LogEvent`로 만들고, dispatcher가 message type 기준으로 processing steps(parser/transform), structured mapping, output 단계를 연결합니다.
 
 설정은 REST API와 React/shadcn 기반 관리 UI에서 관리하며, 기본 설정 저장소는 SQLite와 Flyway migration입니다. 모든 화면은 같은 사이드바·헤더·디자인 토큰을 사용합니다. Pipeline Studio와 Inputs/Outputs 목록은 공통 어댑터 편집기를 사용하고, `configParams`의 각 속성도 개별 입력으로 편집합니다. API의 JSON 문자열 저장 형식은 유지합니다.
@@ -143,7 +145,8 @@ flowchart LR
 | `HttpInputAdapter` | `http` | `port` | HTTP 요청 전체를 원문 이벤트로 받습니다. |
 | `HttpsInputAdapter` | `https` | `port`, `configParams` | `HttpInputAdapter`와 같은 HTTP 수신을 TLS 서버 소켓으로 처리합니다. |
 | `KafkaInputAdapter` | `kafka` | `bootstrapservers`, `topicid` | Kafka topic을 consume합니다. |
-| `SnmpInputAdapter` | `snmp` | `configParams` | SNMP v1/v2c/v3 target과 OID를 주기적으로 polling합니다. |
+| `SnmpInputAdapter` | `snmp` | `configParams` | SNMP v1/v2c/v3 target과 OID를 GET polling합니다. |
+| `SnmpNotificationInputAdapter` | `snmp_notification` | `configParams` | v1/v2c/v3 Trap과 v2c/v3 Inform을 UDP로 수신합니다. |
 | `RabbitMqInputAdapter` | `rabbitmq` | `configParams.queue` | RabbitMQ queue를 `basicGet` 방식으로 polling합니다. `tlsEnabled=true`면 TLS 연결을 사용합니다. |
 | `TlsRabbitMqInputAdapter` | `tls_rabbitmq`, `tlsrabbitmq` | `configParams.queue` | RabbitMQ TLS 입력입니다. 포트 생략 시 `5671`을 사용합니다. |
 | `TcpMtlsGzipInputAdapter` | `tcp_mtls_gzip` | `port`, `configParams` | Castrelyx agent gzip batch를 TCP/mTLS로 수신합니다. |
@@ -234,6 +237,10 @@ schema `1.1` batch는 다음을 추가 검증합니다.
 동시 client 수는 `maxConnections` semaphore로 제한합니다. 생략하면 input의 `workerThreads`, 둘 다 없으면 32를 사용합니다. Adapter는 `tlsReloadIntervalMs`마다 key/trust PKCS12 내용 digest를 확인합니다. 파일이 원자 교체되면 새 SSLContext를 먼저 검증한 뒤 같은 port의 listener를 재바인드하며, 새 material이 깨졌으면 기존 listener를 유지합니다. 이미 연결된 client session은 종료될 때까지 기존 context를 사용합니다.
 
 ### SNMP 입력
+
+Polling과 Trap/Inform 수신, v3 인증, 이벤트 형식과 전달 범위는 [SNMP 상세 문서](readme/snmp.md)를 참고하세요. 구현은 `domain/input/model/snmp`에 있습니다.
+
+워크벤치의 **SNMP poller → Targets → Import MIB files**에서 MIB를 업로드해 OID를 선택하고 structured transform 템플릿을 생성할 수 있습니다. 테이블 항목은 장비 인덱스를 지정하고, **Save input** 후 생성한 템플릿을 Schema Mapping에서 적용합니다.
 
 SNMP 설정은 `configParams.targets[]`와 `configParams.oids[]`가 필수입니다.
 

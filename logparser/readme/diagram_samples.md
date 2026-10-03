@@ -13,7 +13,8 @@ flowchart LR
     Http["HttpInputAdapter"]
     Https["HttpsInputAdapter"]
     KafkaIn["KafkaInputAdapter"]
-    Snmp["SnmpInputAdapter"]
+    Snmp["SnmpInputAdapter: GET"]
+    Notifications["SnmpNotificationInputAdapter: Trap / Inform"]
     Rabbit["RabbitMqInputAdapter"]
     TlsRabbit["TlsRabbitMqInputAdapter"]
     Agent["TcpMtlsGzipInputAdapter"]
@@ -137,3 +138,35 @@ flowchart LR
   Apply --> Cache["StructuredTransformService\ninvalidateCache(messageType)"]
   Mapping --> Runtime["Runtime structured mapping"]
 ```
+
+## Mermaid: SNMP Notification Intake
+
+SNMP Poller의 MIB 가져오기 흐름은 다음과 같습니다. Trap/Inform 수신과 별개의 설정 보조 기능입니다.
+
+```mermaid
+flowchart LR
+  MIB["MIB + IMPORTS files"] --> Parse["SMI parse / OID resolution"]
+  Parse --> Select["Readable objects + instance suffix"]
+  Select --> OIDs["Input OID draft"]
+  Select --> Template["Structured transform template"]
+  OIDs --> Save["Save input"]
+  Template --> Apply["Schema Mapping: Apply template"]
+```
+
+```mermaid
+flowchart LR
+  Device["Device"] -->|"Trap / Inform"| Receiver["SNMPv3 USM / community validation"]
+  Receiver --> Queue["Bounded memory queue"]
+  Queue -->|"Inform: ACK after enqueue"| Device
+  Queue --> LogEvent --> JsonParser --> Output
+  Engine["Persistent engine ID / boots"] -.-> Receiver
+```
+
+Inform ACK confirms memory queue acceptance. Events and deduplication history are not persisted.
+
+
+## Security Router TLS pipeline
+
+TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
+
+TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.

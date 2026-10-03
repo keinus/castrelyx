@@ -13,7 +13,7 @@ import org.keinus.logparser.domain.input.model.InputAdapter;
  * 리플렉션을 사용하여 해당 클래스의 인스턴스를 생성합니다. 이를 통해 코드를 변경하지 않고도
  * 설정 파일 수정을 통해 새로운 입력 어댑터를 추가하거나 변경할 수 있습니다.
  * <p>
- * 모든 {@code InputAdapter} 구현체는 {@code org.keinus.logparser.domain.ingestion.model} 패키지 내에 위치해야 하며,
+ * 구현체는 {@code domain.input.model} 또는 등록된 {@code snmp} 하위 패키지에 위치하며,
  * {@code InputAdapterConfig}를 인자로 받는 생성자를 가져야 합니다.
  *
  * @see org.keinus.logparser.domain.input.model.InputAdapter
@@ -28,6 +28,7 @@ public class InputFactory {
 		Map.entry("https", "HttpsInputAdapter"),
 		Map.entry("kafka", "KafkaInputAdapter"),
 		Map.entry("snmp", "SnmpInputAdapter"),
+		Map.entry("snmp_notification", "SnmpNotificationInputAdapter"),
 		Map.entry("rabbitmq", "RabbitMqInputAdapter"),
 		Map.entry("tls_tcp", "TlsTcpInputAdapter"),
 		Map.entry("tlstcp", "TlsTcpInputAdapter"),
@@ -57,7 +58,11 @@ public class InputFactory {
 			throw new IllegalArgumentException("Input adapter type must not be blank");
 		}
 		try {
-			Class<?> cls = Class.forName("org.keinus.logparser.domain.input.model." + type);
+			String subpackage = switch (type) {
+				case "SnmpInputAdapter", "SnmpNotificationInputAdapter" -> "snmp.";
+				default -> "";
+			};
+			Class<?> cls = Class.forName("org.keinus.logparser.domain.input.model." + subpackage + type);
 			return (InputAdapter) cls.getDeclaredConstructor(InputAdapterConfig.class).newInstance(config);
 		}
 		catch (InvocationTargetException e) {

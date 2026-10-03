@@ -35,6 +35,10 @@ class MappingTemplateServiceTest {
         config.setId("source-config");
         config.setMessageType("source");
         config.setCommonMappings(List.of(new FieldMapping("src", "dst", null)));
+        var snmpRule = new org.keinus.logparser.domain.model.mapping.SubTableRule();
+        snmpRule.setTargetSubTable("event_snmp");
+        snmpRule.setMappings(List.of(new FieldMapping("/metrics/temperature/value", "metric_temperature", null)));
+        config.setSubTableRules(List.of(snmpRule));
         MappingTemplate template = new MappingTemplate();
         template.setId("template-1");
         template.setName("Template");
@@ -45,6 +49,9 @@ class MappingTemplateServiceTest {
 
         assertThat(applied.getMessageType()).isEqualTo("target");
         assertThat(applied.getCommonMappings()).hasSize(1);
+        assertThat(applied.getSubTableRules()).isEqualTo(config.getSubTableRules());
+        applied.getSubTableRules().getFirst().getMappings().getFirst().setTargetField("renamed");
+        assertThat(snmpRule.getMappings().getFirst().getTargetField()).isEqualTo("metric_temperature");
         assertThat(template.getConfig().getMessageType()).isEqualTo("source");
         verify(mappingRepository).save(applied);
         verify(transformService).invalidateCache("target");

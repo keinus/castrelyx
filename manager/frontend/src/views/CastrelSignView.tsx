@@ -1,5 +1,5 @@
 import { Ban, Download, KeyRound, PackagePlus, RefreshCw, RotateCcw, ShieldCheck, ShieldAlert, UploadCloud } from 'lucide-react';
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
 import type {
@@ -72,12 +72,33 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   const [confirmAgentId, setConfirmAgentId] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [policiesLoaded, setPoliciesLoaded] = useState(false);
+  const packageDialog = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!packageOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = packageDialog.current;
+    const controls = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? []);
+    controls()[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setPackageOpen(false); }
+      if (event.key !== 'Tab') return;
+      const items = controls();
+      const first = items[0]; const last = items.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    dialog?.addEventListener('keydown', onKeyDown);
+    return () => { dialog?.removeEventListener('keydown', onKeyDown); previous?.focus(); };
+  }, [packageOpen]);
 
   const canAdminister = canMutate(role, 'integration:update-secret');
 
   async function load() {
     setLoading(true);
-    setError(null);
+    setLoadError('');
     const [configResult, tokensResult, agentsResult, certificatesResult, auditResult, releasesResult, policiesResult, attemptsResult] = await Promise.allSettled([
       api.castrelSign(),
       api.castrelSignTokens(),
@@ -91,19 +112,21 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
 
     if (configResult.status === 'fulfilled') {
       setConfig(configResult.value);
-    } else {
-      setError('CastrelSign 설정을 불러오지 못했습니다.');
     }
-    const nextTokens = tokensResult.status === 'fulfilled' ? tokensResult.value : [];
-    const nextAgents = agentsResult.status === 'fulfilled' ? agentsResult.value : [];
-    const nextCertificates = certificatesResult.status === 'fulfilled' ? certificatesResult.value : [];
+    const failures = [configResult, tokensResult, agentsResult, certificatesResult, auditResult, releasesResult, policiesResult, attemptsResult]
+      .flatMap((result, index) => result.status === 'rejected' ? [['연결 설정', '등록 토큰', 'Agent', '인증서', '감사 기록', '릴리스', '업데이트 정책', '업데이트 이력'][index]] : []);
+    if (failures.length) setLoadError(`${failures.join(', ')} 조회에 실패했습니다. 해당 영역은 마지막 조회 결과이며, 데이터가 없으면 상태를 확인할 수 없습니다.`);
+    const nextTokens = tokensResult.status === 'fulfilled' ? tokensResult.value : tokens;
+    const nextAgents = agentsResult.status === 'fulfilled' ? agentsResult.value : agents;
+    const nextCertificates = certificatesResult.status === 'fulfilled' ? certificatesResult.value : certificates;
     setTokens(nextTokens);
     setAgents(nextAgents);
     setCertificates(nextCertificates);
-    setAuditEvents(auditResult.status === 'fulfilled' ? auditResult.value : []);
-    setReleases(releasesResult.status === 'fulfilled' ? releasesResult.value : []);
-    setPolicies(policiesResult.status === 'fulfilled' ? policiesResult.value : []);
-    setAttempts(attemptsResult.status === 'fulfilled' ? attemptsResult.value : []);
+    if (auditResult.status === 'fulfilled') setAuditEvents(auditResult.value);
+    if (releasesResult.status === 'fulfilled') setReleases(releasesResult.value);
+    if (policiesResult.status === 'fulfilled') setPolicies(policiesResult.value);
+    setPoliciesLoaded(policiesResult.status === 'fulfilled');
+    if (attemptsResult.status === 'fulfilled') setAttempts(attemptsResult.value);
     setSelectedAgentId((current) => {
       if (current && nextAgents.some((agent) => agent.agentId === current)) {
         return current;
@@ -155,7 +178,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   const selectedCertificates = certificates.filter((certificate) => certificate.agentId === selectedAgent?.agentId);
   const selectedAudit = auditEvents.filter((event) => event.agentId === selectedAgent?.agentId);
   const selectedAttempts = attempts.filter((attempt) => attempt.agentId === selectedAgent?.agentId);
-  const globalPolicy = policies.find((policy) => !policy.agentId) ?? { enabled: true, channel: 'stable' };
+  const globalPolicy = policies.find((policy) => !policy.agentId) ?? { enabled: false, channel: 'stable' };
   const activeReleases = releases.filter((release) => release.status === 'ACTIVE');
   const latestActiveRelease = activeReleases[0];
   const publishedTarget = globalPolicy.targetVersion || latestActiveRelease?.version || '-';
@@ -248,6 +271,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   }
 
   async function updateGlobalPolicy() {
+    if (!policiesLoaded) return;
     await runAgentAction(async () => {
       await api.updateAgentPolicy({
         enabled: globalPolicy.enabled,
@@ -289,9 +313,10 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
   return (
     <ViewFrame
       title="CastrelSign"
+      subtitle="Agent 등록부터 인증서·릴리스·업데이트 정책까지 수명 주기를 관리합니다."
       actions={(
         <>
-          <button className="icon-button" aria-label="새로고침" type="button" onClick={() => void load()} disabled={loading}>
+          <button className="icon-button" aria-label="새로고침" type="button" onClick={() => void load()} disabled={loading || working}>
             <RefreshCw size={18} />
           </button>
           {canAdminister && (
@@ -303,11 +328,12 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
         </>
       )}
     >
-      {error && <div className="notice error">{error}</div>}
-      {notice && <div className="notice">{notice}</div>}
+      {loadError && <div className="notice error" role="alert">{loadError}</div>}
+      {error && <div className="notice error" role="alert">{error}</div>}
+      {notice && <div className="notice" role="status">{notice}</div>}
 
       <section className="castrelsign-summary">
-        <SummaryTile label="연결" value={loading ? '확인 중' : config?.enabled ? 'ENABLED' : 'DISABLED'} icon="shield" />
+        <SummaryTile label="연결 설정" value={loading ? '확인 중' : config ? config.enabled ? 'ENABLED' : 'DISABLED' : '미확인'} icon="shield" />
         <SummaryTile label="Endpoint" value={config?.baseUrl || '-'} />
         <SummaryTile label="Active agents" value={String(agentRows.filter((agent) => agent.lifecycleStatus === 'ACTIVE').length)} />
         <SummaryTile label="Blocked" value={String(agentRows.filter((agent) => agent.lifecycleStatus === 'BLOCKED').length)} tone="danger" />
@@ -340,7 +366,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
                     }}
                   >
                     <td>
-                      <strong>{agent.agentId}</strong>
+                      <button className="cc-text-button" type="button" aria-label={`${agent.agentId} 상세 보기`} onClick={() => { setSelectedAgentId(agent.agentId); setConfirmAgentId(''); }}><strong>{agent.agentId}</strong></button>
                       <span>{agent.hostname ?? '-'}</span>
                     </td>
                     <td><StatusPill value={agent.lifecycleStatus} /></td>
@@ -411,7 +437,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
         <div className="version-status-strip">
           <div>
             <span>Policy</span>
-            <strong>{globalPolicy.enabled ? 'AUTO' : 'PAUSED'}</strong>
+            <strong>{!policiesLoaded ? '미확인' : !policies.some((policy) => !policy.agentId) ? '미설정' : globalPolicy.enabled ? 'AUTO' : 'PAUSED'}</strong>
           </div>
           <div>
             <span>Channel</span>
@@ -477,7 +503,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <input
                 type="checkbox"
                 checked={globalPolicy.enabled}
-                disabled={!canAdminister}
+                disabled={!canAdminister || !policiesLoaded || working}
                 onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, enabled: event.target.checked }))}
               />
             </label>
@@ -485,7 +511,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <span>Channel</span>
               <input
                 value={globalPolicy.channel}
-                disabled={!canAdminister}
+                disabled={!canAdminister || !policiesLoaded || working}
                 onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, channel: event.target.value }))}
               />
             </label>
@@ -493,11 +519,11 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
               <span>Target version</span>
               <input
                 value={globalPolicy.targetVersion ?? ''}
-                disabled={!canAdminister}
+                disabled={!canAdminister || !policiesLoaded || working}
                 onChange={(event) => setPolicies((current) => upsertGlobalPolicy(current, { ...globalPolicy, targetVersion: event.target.value }))}
               />
             </label>
-            {canAdminister && <button type="button" onClick={() => void updateGlobalPolicy()} disabled={working}>Save policy</button>}
+            {canAdminister && <button type="button" onClick={() => void updateGlobalPolicy()} disabled={working || !policiesLoaded}>Save policy</button>}
           </div>
         </div>
         <div className="table-scroll">
@@ -589,7 +615,7 @@ export function CastrelSignView({ role }: CastrelSignViewProps) {
       </div>
 
       {packageOpen && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="새 agent 패키지">
+        <div ref={packageDialog} className="modal-backdrop" role="dialog" aria-modal="true" aria-label="새 agent 패키지">
           <form className="modal-panel package-form" onSubmit={submitPackage}>
             <div className="panel-heading">
               <h3>새 agent 패키지</h3>

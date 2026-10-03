@@ -30,12 +30,12 @@ public class ServerCertificateRenewalService {
   }
 
   boolean renewIfNeeded() throws Exception {
-    CertificateAuthority.RefreshResult result = CertificateAuthority.refreshServerMaterial(
+    CertificateAuthority.RefreshResult result = CertificateAuthority.refreshManaged(
         properties.getDataDir().resolve("certs"),
         properties.getTlsServerName(),
         Duration.ofDays(properties.getCertValidDays()),
         Duration.ofDays(properties.getRootValidDays()),
-        properties.getKeyStorePassword().toCharArray());
+        properties.getKeyStorePassword().toCharArray(), org.castrelyx.castrelsign.kms.KeyManagementService.open(properties));
     if (result.keyStoresChanged()) {
       log.info(
           "Refreshed CastrelSign server TLS material; reloadable PEM consumers rotate automatically and PKCS12 consumers can reload the updated stores");

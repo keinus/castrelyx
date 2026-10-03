@@ -1,12 +1,9 @@
 package org.keinus.logparser.domain.input.model;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,6 +38,9 @@ public class TcpInputAdapter extends InputAdapter {
 	private final InputAdapterConfig adapterConfig;
 	private final ServerSocketProvider serverSocketProvider;
 	private final String adapterLabel;
+	private final TcpInputSettings settings;
+	private final RouterInbox inbox;
+	private final java.util.Set<Socket> clients = java.util.concurrent.ConcurrentHashMap.newKeySet();
 	private ExecutorService clientHandlerPool;
 	private final AtomicInteger activeConnections = new AtomicInteger(0);
 	private static final int MAX_CLIENTS = 100;  // 최대 동시 클라이언트 수
@@ -65,6 +65,9 @@ public class TcpInputAdapter extends InputAdapter {
 		this.adapterConfig = config;
 		this.serverSocketProvider = serverSocketProvider;
 		this.adapterLabel = adapterLabel;
+		this.settings = TcpInputSettings.from(config);
+		this.inbox = "security-router".equals(config.getMessagetype()) ? new RouterInbox(java.nio.file.Path.of(settings.inboxDirectory())) : null;
+		if(inbox!=null) settings.bindings().forEach(binding->inbox.register(binding.path("assetUid").asText()));
 		try {
             if (config.getPort() == null) {
                 throw new IllegalArgumentException("Port is required for " + adapterLabel + " Input Adapter");
@@ -84,7 +87,9 @@ public class TcpInputAdapter extends InputAdapter {
 
             LOGGER.info("{} Input Adapter started at port {} with max {} concurrent clients",
                 adapterLabel, port, MAX_CLIENTS);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            if(inbox!=null)inbox.close();
+            if(clientHandlerPool!=null)clientHandlerPool.shutdownNow();
             LOGGER.error("Failed to initialize {} Input Adapter: {}", adapterLabel, e.getMessage(), e);
             throw e;
         }
@@ -98,12 +103,16 @@ public class TcpInputAdapter extends InputAdapter {
 	}
 
 	@Override
-	public LogEvent run() {
+    public LogEvent run() {
         // 종료 상태 확인
         if (terminated.get()) {
             LOGGER.debug("Adapter terminated, returning null");
             return null;
         }
+		if (inbox != null) {
+			try { LogEvent event = inbox.poll(); if (event != null) return event; }
+			catch (IOException e) { LOGGER.error("Router inbox read failed", e); }
+		}
 
         // 큐에서 이벤트를 폴링 (논블로킹, 100ms 타임아웃)
         try {
@@ -121,6 +130,8 @@ public class TcpInputAdapter extends InputAdapter {
         // 새 클라이언트 연결 수락 시도 (논블로킹)
         try {
             Socket clientSocket = serverSocket.accept();
+			if (activeConnections.get() >= MAX_CLIENTS) { clientSocket.close(); return null; }
+            clients.add(clientSocket);
             int currentConnections = activeConnections.incrementAndGet();
 
             LOGGER.debug("New client connected from {}. Active connections: {}",
@@ -194,13 +205,38 @@ public class TcpInputAdapter extends InputAdapter {
 			socket.setKeepAlive(true);
 			socket.setTcpNoDelay(true);
 
-			try (BufferedReader reader = new BufferedReader(
-					new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+			String source = clientAddress;
+			String asset = "";
+			if (inbox != null) {
+				if (!(socket instanceof javax.net.ssl.SSLSocket tls)) throw new IOException("Router requires TLS");
+				tls.startHandshake();
+				try {
+					var name = new javax.naming.ldap.LdapName(tls.getSession().getPeerPrincipal().getName());
+					var names = name.getRdns().stream().filter(r -> r.getType().equalsIgnoreCase("CN")).toList();
+					if (names.size()!=1) throw new IOException("Exactly one client certificate CN required");
+					var binding = settings.bindings().path(String.valueOf(names.getFirst().getValue()));
+					if (binding.isMissingNode()) throw new IOException("Unregistered router client certificate CN");
+					source = binding.path("sourceId").asText(); asset = binding.path("assetUid").asText();
+				} catch (javax.naming.InvalidNameException e) { throw new IOException("Invalid certificate identity",e); }
+			}
+			try (var input = socket.getInputStream()) {
+				var reader = new TcpFrameReader(input, settings.framing(), settings.maxFrameBytes());
 
 				String line;
 				// 연결이 끊어질 때까지 계속 메시지 읽기
-				while ((line = reader.readLine()) != null) {
+				while (!terminated.get() && (line = reader.read()) != null) {
 					if (!line.trim().isEmpty()) {
+						if (inbox != null) {
+							// Pause this connection under backpressure; never discard a full frame.
+							while (!terminated.get()) {
+								try { inbox.append(line, source, asset); messagesReceived++; break; }
+								catch (IOException e) {
+									LOGGER.error("Router inbox write failed; applying backpressure: {}",e.getMessage());
+									try { Thread.sleep(1000); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+								}
+							}
+							continue;
+						}
 						LogEvent event = createLogEvent(line, clientAddress);
 						if (event != null) {
 							// 이벤트를 큐에 추가
@@ -234,6 +270,7 @@ public class TcpInputAdapter extends InputAdapter {
 			LOGGER.warn("Error handling client {}: {}. Messages received: {}",
 				clientAddress, e.getMessage(), messagesReceived);
 		} finally {
+			clients.remove(socket);
 			try {
 				if (!socket.isClosed()) {
 					socket.close();
@@ -251,6 +288,8 @@ public class TcpInputAdapter extends InputAdapter {
 	@Override
 	public void close() throws IOException {
 		terminated.set(true);
+		if(inbox!=null)inbox.close();
+		for (Socket client : clients) { try { client.close(); } catch (IOException ignored) {} }
 		LOGGER.info("Closing {} Input Adapter on port {}", adapterLabel, port);
 
 		// 1. ServerSocket 닫기 (새 연결 거부)

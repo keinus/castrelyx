@@ -3,6 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 
 describe('App shell', () => {
+  it('loads the authenticated console from asynchronous bootstrap without changing hook order', async () => {
+    mockFetch({
+      '/api/setup/status': { body: { required: false } },
+      '/api/auth/session': { body: { authenticated: true, user: { role: 'ADMIN', username: 'admin' } } }
+    });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: 'Assets' })).toBeInTheDocument();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -14,7 +22,7 @@ describe('App shell', () => {
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
     expect(await screen.findByRole('heading', { name: 'Castrelyx' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Operations 커맨드 센터' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '커맨드 센터' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Network' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hunt' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CastrelSign' })).toBeInTheDocument();

@@ -105,7 +105,7 @@ describe('TrafficView', () => {
 
     render(<TrafficView />);
 
-    expect(await screen.findByText('Unable to load traffic data.')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('트래픽 데이터를 불러오지 못했습니다.');
     expect(screen.getByText('No interface traffic.')).toBeInTheDocument();
   });
 });

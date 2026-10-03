@@ -1,12 +1,12 @@
 import { RefreshCw, Terminal } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { MetricCards } from '../components/MetricCards';
 import { ViewFrame } from '../components/ViewFrame';
 import { WebSshTerminal } from '../components/WebSshTerminal';
 import { api } from '../lib/api';
 import type {
-  AgentDashboard,
+  Role,
   AgentDashboardAgent,
   AgentFirewallState,
   AgentMetricSummary,
@@ -14,31 +14,20 @@ import type {
   AgentSocketState,
   RemoteAccessSession
 } from '../lib/types';
+import { useRemoteData } from '../lib/useRemoteData';
+import { canMutate } from '../lib/uiModel';
+import { ViewFeedback } from '../components/ViewFeedback';
 
-export function AgentDashboardView() {
-  const [dashboard, setDashboard] = useState<AgentDashboard>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+export function AgentDashboardView({ role = 'VIEWER' }: { role?: Role }) {
+  const { data, loading, error, reload: load } = useRemoteData(api.agentDashboard, 'Agent 관제 정보를 불러오지 못했습니다.');
+  const dashboard = data ?? {};
+  const [sshPending, setSshPending] = useState(false);
   const [sshError, setSshError] = useState('');
   const [sshSession, setSshSession] = useState<RemoteAccessSession | null>(null);
 
-  async function load() {
-    setLoading(true);
-    setError('');
-    try {
-      setDashboard(await api.agentDashboard());
-    } catch {
-      setError('Agent 관제 정보를 불러오지 못했습니다.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void load();
-  }, []);
-
   async function openSsh(agent: AgentDashboardAgent) {
+    if (!canMutate(role, 'remote-access:create') || sshPending) return;
+    setSshPending(true);
     setSshError('');
     try {
       const session = await api.createRemoteSshSession({
@@ -48,6 +37,8 @@ export function AgentDashboardView() {
       setSshSession(session);
     } catch {
       setSshError('SSH 세션을 만들지 못했습니다.');
+    } finally {
+      setSshPending(false);
     }
   }
 
@@ -65,24 +56,24 @@ export function AgentDashboardView() {
   return (
     <ViewFrame
       title="보안 관제"
+      subtitle="Agent 수집 상태와 포트·서비스·방화벽의 보안 신호를 확인합니다."
       actions={(
-        <button className="icon-button" aria-label="Agent 정보 새로고침" onClick={() => void load()} type="button">
+        <button className="icon-button" aria-label="Agent 정보 새로고침" disabled={loading} onClick={() => void load()} type="button">
           <RefreshCw size={18} />
         </button>
       )}
     >
-      {error && <div className="notice error">{error}</div>}
-      {sshError && <div className="notice error">{sshError}</div>}
-      {loading && <div className="notice">Agent telemetry를 갱신하는 중입니다.</div>}
+      <ViewFeedback loading={loading} error={error} hasData={!!data} />
+      {sshError && <div className="notice error" role="alert">{sshError}</div>}
 
       {sshSession && <WebSshTerminal session={sshSession} onClose={() => setSshSession(null)} />}
 
       <MetricCards
         items={[
-          ['정상 Agent', String(dashboard.heartbeat?.healthy ?? 0)],
-          ['오래된 Agent', String(dashboard.heartbeat?.stale ?? 0)],
-          ['노출 포트', String(posture.exposedPorts ?? exposedSockets.length)],
-          ['서비스 이상', String(posture.failedServices ?? failedServices.length)]
+          ['정상 Agent', String(dashboard.heartbeat?.healthy ?? '—')],
+          ['오래된 Agent', String(dashboard.heartbeat?.stale ?? '—')],
+          ['노출 포트', String(posture.exposedPorts ?? '—')],
+          ['서비스 이상', String(posture.failedServices ?? '—')]
         ]}
       />
 
@@ -111,9 +102,9 @@ export function AgentDashboardView() {
                     <td><span className={`status-pill ${isStale(agent.lastSeenAt) ? 'pending' : 'active'}`}>{isStale(agent.lastSeenAt) ? 'STALE' : 'HEALTHY'}</span></td>
                     <td>{formatDate(agent.lastSeenAt)}</td>
                     <td>
-                      <button className="icon-button" aria-label={`Open SSH for ${agent.assetUid ?? agent.sourceId ?? 'agent'}`} onClick={() => void openSsh(agent)} type="button">
+                      {canMutate(role, 'remote-access:create') ? <button className="icon-button" disabled={sshPending || !!sshSession} aria-label={`Open SSH for ${agent.assetUid ?? agent.sourceId ?? 'agent'}`} onClick={() => void openSsh(agent)} type="button">
                         <Terminal size={16} />
-                      </button>
+                      </button> : <span className="muted">읽기 전용</span>}
                     </td>
                   </tr>
                 ))}

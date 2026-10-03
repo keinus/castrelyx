@@ -22,6 +22,12 @@ import {
 } from "@/lib/adapters";
 import { TYPE_DEFS } from "@/lib/adapter-definitions";
 import {
+  PIPELINE_SAMPLES,
+  inputSample,
+  identifySample,
+  type PipelineSample,
+} from "@/lib/pipeline-samples";
+import {
   orderedSteps,
   cacheAfterSave,
   signature,
@@ -35,7 +41,12 @@ import { AdapterEditor } from "@/components/adapters/adapter-form";
 import { MessageTypeControl } from "@/components/message-type-control";
 import { CodeInput, CodePreview } from "@/components/code-panel";
 import { StageSection, stageIcons } from "@/components/pipeline-flow";
-import { ConfirmAction, EmptyState, PageHeading } from "@/components/shared";
+import {
+  ConfirmAction,
+  EmptyState,
+  PageHeading,
+  SelectInput,
+} from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -46,10 +57,9 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { MappingEditor, emptyMapping } from "./mapping-editor";
 
-const sampleEvent =
-  '<34>1 2026-08-27T12:00:00.000Z mymachine.example.com su 1234 ID47 [exampleSDID@32473 iut="3" eventSource="Application"] \'su root\' failed for lonvick on /dev/pts/8';
 const keyFor = (stage: Stage, adapter: Adapter) =>
   `${stage}:${adapter.id ?? "new"}`;
 export function PipelineStudio() {
@@ -67,12 +77,13 @@ export function PipelineStudio() {
     ),
     [mappingError, setMappingError] = useState(""),
     [outputKey, setOutputKey] = useState(""),
-    [sample, setSample] = useState(sampleEvent),
+    [sample, setSample] = useState(PIPELINE_SAMPLES.syslog.text),
     [cache, setCache] = useState<Record<string, CachedPreview>>({}),
     [testing, setTesting] = useState(false),
     [reordering, setReordering] = useState(false),
     [checks, setChecks] = useState<string[] | null>(null);
   const generation = useRef(0);
+  const lastSampleInput = useRef<string | undefined>(undefined);
   const scoped = useMemo(
     () =>
       Object.fromEntries(
@@ -108,6 +119,8 @@ export function PipelineStudio() {
     setSelected("");
     setOutputKey("");
     setChecks(null);
+    setSample(PIPELINE_SAMPLES.syslog.text);
+    lastSampleInput.current = undefined;
     generation.current++;
     if (messageType)
       api<Mapping>(
@@ -170,6 +183,30 @@ export function PipelineStudio() {
       ),
     [currentKey],
   );
+  const currentInputType =
+    current?.stage === "input"
+      ? definition("input", (drafts[currentKey] || current.adapter).type)?.type
+      : undefined;
+  const samplePreset = identifySample(sample);
+  useEffect(() => {
+    if (!currentInputType || lastSampleInput.current === currentInputType)
+      return;
+    lastSampleInput.current = currentInputType;
+    // Keep hand-edited data, and retain the chosen example while testing later stages.
+    setSample((previous) =>
+      identifySample(previous) === "custom"
+        ? previous
+        : PIPELINE_SAMPLES[inputSample(currentInputType)].text,
+    );
+    setCache({});
+    generation.current++;
+  }, [currentInputType, messageType]);
+
+  function changeSample(value: string) {
+    setSample(value);
+    setCache({});
+    generation.current++;
+  }
   const node = (stage: Stage, config: Adapter): TestNode => {
     const key = keyFor(stage, config);
     let normalized = config;
@@ -688,15 +725,42 @@ export function PipelineStudio() {
             </CardHeader>
             <CardContent className="grid gap-3 lg:grid-cols-2">
               <div className="flex min-w-0 flex-col gap-2">
+                <Field orientation="horizontal">
+                  <FieldLabel
+                    htmlFor="pipeline-sample-preset"
+                    className="shrink-0 whitespace-nowrap"
+                  >
+                    Sample data
+                  </FieldLabel>
+                  <SelectInput
+                    id="pipeline-sample-preset"
+                    label="Sample data"
+                    value={samplePreset}
+                    options={[
+                      ...Object.entries(PIPELINE_SAMPLES).map(
+                        ([value, example]) => ({ value, label: example.label }),
+                      ),
+                      ...(samplePreset === "custom"
+                        ? [{ value: "custom", label: "Custom sample" }]
+                        : []),
+                    ]}
+                    onChange={(value) => {
+                      if (value !== "custom")
+                        changeSample(
+                          PIPELINE_SAMPLES[value as PipelineSample].text,
+                        );
+                    }}
+                  />
+                </Field>
+                <p className="text-xs text-muted-foreground">
+                  Example data for testing, not live device data. SNMP polling
+                  collects only the OIDs configured under Targets.
+                </p>
                 <CodeInput
                   id="pipeline-sample"
                   label="Original sample event"
                   value={sample}
-                  onChange={(value) => {
-                    setSample(value);
-                    setCache({});
-                    generation.current++;
-                  }}
+                  onChange={changeSample}
                 />
                 <p className="text-xs text-muted-foreground">
                   {selectedNode

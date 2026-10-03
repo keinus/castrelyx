@@ -1,14 +1,19 @@
 import {
   ArrowDownUp,
+  ArrowRight,
   Check,
   CheckCircle2,
   ChevronDown,
   CircleAlert,
-  List,
+  Cpu,
+  HardDrive,
   ListFilter,
+  MemoryStick,
+  Network,
+  RefreshCw,
   Search,
   ShieldAlert,
-  UserCircle,
+  Server,
   UserPlus,
   XCircle
 } from 'lucide-react';
@@ -88,8 +93,6 @@ export function OverviewView({
   summary,
   alerts,
   assets = [],
-  username = 'operator',
-  navigationItems = [],
   onNavigate,
   onAcknowledgeAlert
 }: OverviewViewProps) {
@@ -109,8 +112,6 @@ export function OverviewView({
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [acknowledged, setAcknowledged] = useState(() => new Set<string>());
   const [toast, setToast] = useState('');
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const metricsRef = useRef(assetMetrics);
   const agentRef = useRef(agentDashboard);
   const eventsRef = useRef(events);
@@ -320,72 +321,28 @@ export function OverviewView({
     .slice(0, 5);
 
   return (
-    <section className="overview-action-rail" aria-label="SOC 및 NMS 운영 대시보드">
-      <header className="ar-topbar">
-        <div className="ar-title-group">
-          <h2 tabIndex={-1}>Action Rail Command Center</h2>
-          <span>SOC + NMS</span>
+    <section className="overview-action-rail command-overview" aria-label="SOC 및 NMS 운영 대시보드">
+      <header className="cc-page-heading">
+        <div>
+          <h2 tabIndex={-1}>커맨드 센터</h2>
+          <p>장비 상태와 주요 이벤트를 한눈에 확인하세요.</p>
         </div>
-        <div className="ar-topbar-controls">
-          <span className="ar-live-control"><i aria-hidden="true" /> Live <ChevronDown size={13} aria-hidden="true" /></span>
+        <div className="cc-page-controls">
           <label className="ar-range-control">
             <span className="sr-only">시간 범위</span>
             <select value={range} onChange={(event) => setRange(event.target.value as RangeValue)}>
-              <option value="15m">Last 15m</option>
-              <option value="1h">Last 1h</option>
-              <option value="24h">Last 24h</option>
+              <option value="15m">최근 15분</option>
+              <option value="1h">최근 1시간</option>
+              <option value="24h">최근 24시간</option>
             </select>
-            <ChevronDown size={13} aria-hidden="true" />
+            <ChevronDown size={14} aria-hidden="true" />
           </label>
-          <label className="ar-global-search">
-            <Search size={16} aria-hidden="true" />
-            <span className="sr-only">자산, IP, 신호 검색</span>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="검색 (자산, IP, 신호)"
-            />
-          </label>
-        </div>
-        <div className="ar-status-group">
-          <span className="ar-updated"><i aria-hidden="true" /> 마지막 업데이트 {formatTime(lastUpdatedAt)} (30s)</span>
-          <span className="ar-user-menu"><UserCircle size={18} aria-hidden="true" /> {username}</span>
+          <span className={`cc-live ${error ? 'is-delayed' : ''}`} title={`마지막 업데이트 ${formatTime(lastUpdatedAt)} · 30초 자동 갱신`}><i aria-hidden="true" />{loading ? '연결 중' : error ? '수집 지연' : 'LIVE'}</span>
+          <button className="cc-refresh-button" type="button" disabled={loading || refreshing} onClick={() => void loadOverview('refresh')}>
+            <RefreshCw size={16} className={refreshing ? 'cc-spinning' : ''} aria-hidden="true" />{refreshing ? '갱신 중' : '수집값 갱신'}
+          </button>
         </div>
       </header>
-
-      <header className="ar-mobile-header">
-        <button type="button" aria-label="메뉴 열기" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)}>
-          <List size={21} aria-hidden="true" />
-        </button>
-        <div><strong>Action Rail Command Center</strong><span>SOC + NMS</span></div>
-        <button type="button" aria-label="검색 열기" aria-expanded={mobileSearchOpen} onClick={() => setMobileSearchOpen((open) => !open)}>
-          <Search size={20} aria-hidden="true" />
-        </button>
-      </header>
-      <div className="ar-mobile-status"><span><i aria-hidden="true" /> Live</span><time>{formatTime(lastUpdatedAt)}</time><b>(30s)</b></div>
-      {mobileNavOpen ? (
-        <nav className="ar-mobile-nav" aria-label="모바일 메뉴">
-          {navigationItems.map((item) => (
-            <button key={item.id} type="button" onClick={() => { setMobileNavOpen(false); onNavigate?.(item.id); }}>
-              {item.label}
-            </button>
-          ))}
-        </nav>
-      ) : null}
-      {mobileSearchOpen ? (
-        <div className="ar-mobile-search">
-          <Search size={17} aria-hidden="true" />
-          <label className="sr-only" htmlFor="mobile-operations-search">자산, IP, 신호 검색</label>
-          <input
-            id="mobile-operations-search"
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="자산, IP, 신호 검색"
-          />
-          <button type="button" onClick={() => setMobileSearchOpen(false)}>닫기</button>
-        </div>
-      ) : null}
 
       {error ? <div className="ar-notice" role="status">{error}</div> : null}
 
@@ -405,6 +362,8 @@ export function OverviewView({
           loading={loading}
           onSort={sortResources}
           onSelect={setSelectedAssetUid}
+          query={query}
+          onSearch={setQuery}
         />
         <div className="ar-resource-lower-grid">
           <Inspector
@@ -453,28 +412,28 @@ function FleetResourceSummary({
       </div>
       <div className="ar-fleet-summary-grid">
         <div className="ar-fleet-summary-card" aria-label={`수집 장비 ${summary.reporting}대, 전체 ${summary.total}대`}>
-          <span>장비 수집</span>
+          <span><Server size={18} aria-hidden="true" />장비 수집</span>
           <strong>{summary.reporting}<small> / {summary.total}</small></strong>
-          <em>지연 {summary.stale} · 확인 필요 {summary.attention}</em>
+          <em>지연 {summary.stale} · 미수집 {summary.total - summary.reporting}</em>
         </div>
         <div className={`ar-fleet-summary-card ${metricTone(summary.avgCpuUsagePct)}`} aria-label={`전체 장비 평균 CPU ${formatPercent(summary.avgCpuUsagePct)}`}>
-          <span>평균 CPU</span>
+          <span><Cpu size={18} aria-hidden="true" />평균 CPU</span>
           <strong>{formatPercent(summary.avgCpuUsagePct)}</strong>
           <em>{summary.cpuReporting}대 수집</em>
         </div>
         <div className={`ar-fleet-summary-card ${metricTone(summary.avgMemoryUsagePct)}`} aria-label={`전체 장비 평균 RAM ${formatPercent(summary.avgMemoryUsagePct)}`}>
-          <span>평균 RAM</span>
+          <span><MemoryStick size={18} aria-hidden="true" />평균 RAM</span>
           <strong>{formatPercent(summary.avgMemoryUsagePct)}</strong>
           <em>{summary.memoryReporting}대 수집</em>
         </div>
         <div className="ar-fleet-summary-card ar-fleet-summary-io" aria-label={`Disk I/O 읽기 ${formatBytesPerSecond(summary.diskReadBps)}, 쓰기 ${formatBytesPerSecond(summary.diskWriteBps)}`}>
-          <span>Disk I/O</span>
+          <span><HardDrive size={18} aria-hidden="true" />Disk I/O</span>
           <strong><b>R</b> {formatBytesPerSecond(summary.diskReadBps)}</strong>
           <strong><b>W</b> {formatBytesPerSecond(summary.diskWriteBps)}</strong>
           <em>{formatIops(totalDiskIops)} · {summary.diskReporting}대</em>
         </div>
         <div className="ar-fleet-summary-card ar-fleet-summary-io" aria-label={`Network I/O 수신 ${formatOptionalBps(summary.networkInBps)}, 송신 ${formatOptionalBps(summary.networkOutBps)}`}>
-          <span>Network I/O</span>
+          <span><Network size={18} aria-hidden="true" />Network I/O</span>
           <strong><b>RX</b> {formatOptionalBps(summary.networkInBps)}</strong>
           <strong><b>TX</b> {formatOptionalBps(summary.networkOutBps)}</strong>
           <em>{summary.networkReporting}대 수집 · 활성 알림 {activeAlerts}</em>
@@ -493,7 +452,9 @@ function FleetResourceMatrix({
   sort,
   loading,
   onSort,
-  onSelect
+  onSelect,
+  query,
+  onSearch
 }: {
   rows: PriorityRow[];
   total: number;
@@ -504,6 +465,8 @@ function FleetResourceMatrix({
   loading: boolean;
   onSort: (key: ResourceSortKey) => void;
   onSelect: (assetUid: string) => void;
+  query: string;
+  onSearch: (query: string) => void;
 }) {
   return (
     <section className="ar-panel ar-resource-matrix" aria-labelledby="ar-resource-matrix-title">
@@ -512,11 +475,11 @@ function FleetResourceMatrix({
           <h3 id="ar-resource-matrix-title">전체 장비 리소스 매트릭스</h3>
           <p>모든 등록·관측 장비의 CPU, RAM, Disk I/O, Network I/O를 비교합니다.</p>
         </div>
-        <div className="ar-resource-matrix-counts">
-          <span>표시 <strong>{rows.length}</strong> / {total}</span>
-          <span>수집 <strong>{reporting}</strong></span>
-          <span>확인 필요 <strong>{attention}</strong></span>
-        </div>
+        <label className="ar-global-search">
+          <Search size={16} aria-hidden="true" />
+          <span className="sr-only">자산, IP, 신호 검색</span>
+          <input value={query} onChange={(event) => onSearch(event.target.value)} placeholder="검색 (자산, IP, 신호)" />
+        </label>
       </div>
 
       {loading && total === 0 ? (
@@ -603,7 +566,8 @@ function FleetResourceMatrix({
         </>
       )}
       <footer className="ar-panel-footer ar-resource-matrix-footer">
-        응답에 포함된 0은 그대로 표시하고, 수집 소스를 확인할 수 없는 값은 대시(—)로 구분합니다.
+        <div className="ar-resource-matrix-counts"><span>표시 <strong>{rows.length}</strong> / {total}</span><span>수집 <strong>{reporting}</strong></span><span>확인 필요 <strong>{attention}</strong></span></div>
+        <span>미수집 — · 30초 자동 갱신</span>
       </footer>
     </section>
   );
@@ -774,9 +738,9 @@ function Inspector({
       <div className="ar-drawer-handle" aria-hidden="true" />
       <div className="ar-panel-heading ar-inspector-heading"><h3>자산 인스펙터</h3><span><i aria-hidden="true" /> Live</span></div>
       <div className="ar-inspector-identity">
-        <span className="ar-inspector-shield"><SeverityIcon severity={row.severity} size={34} /></span>
+        <span className="ar-inspector-shield"><Server size={29} strokeWidth={1.7} aria-hidden="true" /></span>
         <div><strong>{asset.name}</strong><span>IP {asset.managementIp ?? '-'}</span><small>Agent 수집 <i aria-hidden="true" /> {asset.stale ? 'Delayed' : 'Live'} (30s)</small></div>
-        <div className="ar-inspector-severity"><span>{formatAge(asset.lastSeenAt)}</span><strong>{acknowledged ? 'ACK' : row.severity}</strong></div>
+        <div className="ar-inspector-severity"><span>{formatAge(asset.lastSeenAt)}</span><strong>{acknowledged ? '확인됨' : <ResourceHealth asset={asset} />}</strong></div>
       </div>
       <div className="ar-metric-grid">
         <Metric label="CPU" value={metrics.cpuUsagePct} />
@@ -792,33 +756,35 @@ function Inspector({
         <StateValue label="소켓" value={sockets} />
         <StateValue label="리슨닝" value={listening} />
       </div>
-      <div className="ar-inspector-section">
-        <div className="ar-section-title"><h4>네트워크 인터페이스 ({assetTrafficRows.length})</h4></div>
-        {primaryInterface ? (
-          <div className="ar-interface-row">
-            <strong>{primaryInterface.interfaceName}</strong>
-            <span>RX</span><b>{formatBps(primaryInterface.inBps)}</b><MiniSparkline values={networkInPoints.length ? networkInPoints : [primaryInterface.inBps]} />
-            <span>TX</span><b>{formatBps(primaryInterface.outBps)}</b><MiniSparkline values={networkOutPoints.length ? networkOutPoints : [primaryInterface.outBps]} color="#74a7d9" />
-            <em><i aria-hidden="true" /> {primaryInterface.status || 'up'}</em>
-          </div>
-        ) : <div className="ar-inline-empty">수집된 인터페이스 트래픽이 없습니다.</div>}
-      </div>
-      <div className="ar-inspector-section ar-resource-detail-io">
-        <div className="ar-section-title"><h4>선택 장비 I/O</h4><span>{detail?.range ?? '선택 범위'}</span></div>
-        <div className="ar-resource-detail-io-grid">
-          <div><span>Disk I/O</span><DiskIoResource asset={detail?.asset ?? asset} /></div>
-          <div><span>Network I/O</span><NetworkIoResource asset={detail?.asset ?? asset} /></div>
+      <div className="cc-inspector-evidence">
+        <div className="ar-inspector-section">
+          <div className="ar-section-title"><h4>네트워크 인터페이스 ({assetTrafficRows.length})</h4></div>
+          {primaryInterface ? (
+            <div className="ar-interface-row">
+              <strong>{primaryInterface.interfaceName}</strong>
+              <span>RX</span><b>{formatBps(primaryInterface.inBps)}</b><MiniSparkline values={networkInPoints.length ? networkInPoints : [primaryInterface.inBps]} />
+              <span>TX</span><b>{formatBps(primaryInterface.outBps)}</b><MiniSparkline values={networkOutPoints.length ? networkOutPoints : [primaryInterface.outBps]} color="#74a7d9" />
+              <em><i aria-hidden="true" /> {primaryInterface.status || 'up'}</em>
+            </div>
+          ) : <div className="ar-inline-empty">수집된 인터페이스 트래픽이 없습니다.</div>}
         </div>
-      </div>
-      <div className="ar-inspector-section ar-recent-events">
-        <div className="ar-section-title"><h4>최근 이벤트</h4><span>최신순</span></div>
-        {recentEvents.length ? recentEvents.map((event, index) => (
-          <div className="ar-mini-event" key={`${event.observedAt ?? event.eventTime}-${event.eventType}-${index}`}>
-            <time>{formatTime(event.observedAt ?? event.eventTime)}</time>
-            <SeverityIcon severity={eventSeverity(event)} size={16} />
-            <span>{event.eventType ?? event.eventCategory ?? 'event'}</span>
+        <div className="ar-inspector-section ar-resource-detail-io">
+          <div className="ar-section-title"><h4>선택 장비 I/O</h4><span>{detail?.range ?? '선택 범위'}</span></div>
+          <div className="ar-resource-detail-io-grid">
+            <div><span>Disk I/O</span><DiskIoResource asset={detail?.asset ?? asset} /></div>
+            <div><span>Network I/O</span><NetworkIoResource asset={detail?.asset ?? asset} /></div>
           </div>
-        )) : <div className="ar-inline-empty">최근 경고 이벤트가 없습니다.</div>}
+        </div>
+        <div className="ar-inspector-section ar-recent-events">
+          <div className="ar-section-title"><h4>최근 이벤트</h4><span>최신순</span></div>
+          {recentEvents.length ? recentEvents.map((event, index) => (
+            <div className="ar-mini-event" key={`${event.observedAt ?? event.eventTime}-${event.eventType}-${index}`}>
+              <time>{formatTime(event.observedAt ?? event.eventTime)}</time>
+              <SeverityIcon severity={eventSeverity(event)} size={16} />
+              <span>{event.eventType ?? event.eventCategory ?? 'event'}</span>
+            </div>
+          )) : <div className="ar-inline-empty">최근 경고 이벤트가 없습니다.</div>}
+        </div>
       </div>
       <div className="ar-inspector-actions">
         <button className="ar-primary-action" type="button" onClick={onInvestigate}><ListFilter size={19} aria-hidden="true" /> 조사</button>
@@ -831,7 +797,7 @@ function Inspector({
 function Metric({ label, value, suffix = '%' }: { label: string; value?: number | null; suffix?: string }) {
   const number = finiteNumber(value);
   return (
-    <div className="ar-metric"><span>{label}</span><strong>{number == null ? '-' : `${number.toFixed(1)}${suffix}`}</strong><i aria-hidden="true"><b style={{ width: `${Math.min(Math.max(number ?? 0, 0), 100)}%` }} /></i></div>
+    <div className={`ar-metric ${suffix === '%' ? metricTone(number) : ''}`}><span>{label}</span><strong>{number == null ? '-' : `${number.toFixed(1)}${suffix}`}</strong><i aria-hidden="true"><b style={{ width: `${Math.min(Math.max(number ?? 0, 0), 100)}%` }} /></i></div>
   );
 }
 
@@ -843,15 +809,15 @@ function EventPanel({ events, onOpenAll }: { events: AgentLogEvent[]; onOpenAll:
   const visible = events.filter(isImportantEvent).sort(sortEventsNewestFirst).slice(0, 6);
   return (
     <section className="ar-panel ar-event-panel" aria-labelledby="ar-events-title">
-      <div className="ar-panel-heading"><h3 id="ar-events-title">이벤트 스트림</h3><span>최신순</span></div>
+      <div className="ar-panel-heading"><h3 id="ar-events-title">이벤트 스트림</h3><span>최신순 · {visible.length}건</span></div>
       <div className="ar-event-list">
         {visible.length ? visible.map((event, index) => (
           <div className="ar-event-row" key={`${event.observedAt ?? event.eventTime}-${event.assetUid}-${index}`}>
-            <time>{formatTime(event.observedAt ?? event.eventTime)}</time><SeverityIcon severity={eventSeverity(event)} size={16} /><strong>{event.assetUid ?? '-'}</strong><span>{event.eventType ?? event.message ?? 'event'}</span>
+            <span className={`cc-event-icon ${eventSeverity(event).toLowerCase()}`}><SeverityIcon severity={eventSeverity(event)} size={18} /></span><div><strong>{event.assetUid ?? '-'}</strong><p>{event.message ?? event.eventType ?? 'event'}</p><span>{event.eventType ?? event.eventCategory ?? 'event'}</span></div><time>{formatTime(event.observedAt ?? event.eventTime)}</time>
           </div>
         )) : <div className="ar-inline-empty">최근 경고 이벤트가 없습니다.</div>}
       </div>
-      <button className="ar-all-events" type="button" onClick={onOpenAll}>모든 이벤트 보기 <ChevronDown size={13} aria-hidden="true" /></button>
+      <button className="ar-all-events" type="button" onClick={onOpenAll}>모든 이벤트 보기 <ArrowRight size={14} aria-hidden="true" /></button>
     </section>
   );
 }
@@ -863,7 +829,7 @@ function CoveragePanel({ coverage, total }: { coverage: ReturnType<typeof buildC
       <div className="ar-coverage-grid">
         {coverage.map((source) => (
           <div className={`ar-coverage-source ${source.count > 0 ? 'healthy' : ''}`} key={source.label}>
-            {source.count > 0 ? <CheckCircle2 size={30} aria-hidden="true" /> : <XCircle size={30} aria-hidden="true" />}
+            {source.count > 0 ? <CheckCircle2 size={22} aria-hidden="true" /> : <XCircle size={22} aria-hidden="true" />}
             <div><strong>{source.label}</strong><span>{source.count > 0 ? '수집 중' : '미수집'}</span></div>
             <b>{source.count} / {total}</b>
           </div>
@@ -876,11 +842,11 @@ function CoveragePanel({ coverage, total }: { coverage: ReturnType<typeof buildC
 
 function SeverityIcon({ severity, size = 22 }: { severity: Severity; size?: number }) {
   return severity === 'CRITICAL'
-    ? <CircleAlert size={size} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
-    : <ShieldAlert size={size} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />;
+    ? <CircleAlert size={size} strokeWidth={1.8} aria-hidden="true" />
+    : <ShieldAlert size={size} strokeWidth={1.8} aria-hidden="true" />;
 }
 
-function MiniSparkline({ values, color = '#47d8d2', max }: { values: number[]; color?: string; max?: number }) {
+function MiniSparkline({ values, color = '#087f8c', max }: { values: number[]; color?: string; max?: number }) {
   const data = normalizeSparkline(values, max).map((value, index) => ({ index, value }));
   return (
     <LineChart className="ar-sparkline" width={52} height={18} data={data} margin={{ top: 2, right: 1, bottom: 2, left: 1 }} aria-hidden="true">

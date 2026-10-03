@@ -514,7 +514,7 @@ func (u *Updater) verify(response CheckResponse, artifact []byte) (Manifest, err
 }
 
 func (u *Updater) verifyManifest(response CheckResponse) (Manifest, error) {
-	publicKey, err := readPublicKey(u.config.PublicKeyPath)
+	publicKeys, err := readPublicKeys(u.config.PublicKeyPath)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -522,7 +522,14 @@ func (u *Updater) verifyManifest(response CheckResponse) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("invalid manifest signature encoding: %w", err)
 	}
-	if !ed25519.Verify(publicKey, []byte(response.Manifest), signature) {
+	verified := false
+	for _, publicKey := range publicKeys {
+		if ed25519.Verify(publicKey, []byte(response.Manifest), signature) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
 		return Manifest{}, errors.New("manifest signature verification failed")
 	}
 	var manifest Manifest
@@ -1161,24 +1168,42 @@ func fileSHA256(path string) ([sha256.Size]byte, error) {
 	return digest, nil
 }
 
-func readPublicKey(path string) (ed25519.PublicKey, error) {
+func readPublicKeys(path string) ([]ed25519.PublicKey, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	block, _ := pem.Decode(payload)
-	if block == nil {
-		return nil, errors.New("update public key is not PEM encoded")
+	if len(payload) > 64*1024 {
+		return nil, errors.New("update public key bundle is too large")
 	}
-	key, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, err
+	var keys []ed25519.PublicKey
+	for len(bytes.TrimSpace(payload)) > 0 {
+		payload = bytes.TrimSpace(payload)
+		if !bytes.HasPrefix(payload, []byte("-----BEGIN PUBLIC KEY-----")) {
+			return nil, errors.New("invalid update public key bundle")
+		}
+		block, rest := pem.Decode(payload)
+		if block == nil || block.Type != "PUBLIC KEY" || len(block.Headers) != 0 {
+			return nil, errors.New("update public key is not PEM encoded")
+		}
+		key, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		publicKey, ok := key.(ed25519.PublicKey)
+		if !ok {
+			return nil, errors.New("update public key must be Ed25519")
+		}
+		keys = append(keys, publicKey)
+		if len(keys) > 32 {
+			return nil, errors.New("too many update public keys")
+		}
+		payload = rest
 	}
-	publicKey, ok := key.(ed25519.PublicKey)
-	if !ok {
-		return nil, errors.New("update public key must be Ed25519")
+	if len(keys) == 0 {
+		return nil, errors.New("update public key bundle is empty")
 	}
-	return publicKey, nil
+	return keys, nil
 }
 
 func copyFile(source, destination string, mode os.FileMode) error {

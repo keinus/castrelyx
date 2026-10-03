@@ -23,7 +23,7 @@ export function LoginView({ onLogin, errorMessage, disabled = false }: LoginView
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-muted/30 px-4 py-6">
+    <main className="cc-auth grid min-h-screen place-items-center bg-muted/30 px-4 py-6">
       <Card className="w-full max-w-sm border-border/70">
         <CardHeader>
           <CardTitle className="text-lg">Castrelyx Manager</CardTitle>

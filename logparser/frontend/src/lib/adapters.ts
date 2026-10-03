@@ -12,6 +12,7 @@ const TYPE_ALIASES: Partial<Record<Stage, Record<string, string>>> = {
     https: "HttpsInputAdapter",
     kafka: "KafkaInputAdapter",
     snmp: "SnmpInputAdapter",
+    snmp_notification: "SnmpNotificationInputAdapter",
     rabbitmq: "RabbitMqInputAdapter",
     tls_rabbitmq: "TlsRabbitMqInputAdapter",
     tlsrabbitmq: "TlsRabbitMqInputAdapter",
@@ -124,6 +125,33 @@ export function fieldTab(field: FieldDefinition) {
     return "connection";
   return field.tab.includes("mtls") ? "mtls" : field.tab.at(-1)!;
 }
+
+function snmpSecurityError(
+  user: Attributes,
+  defaults: Attributes,
+): string | undefined {
+  const text = (value: unknown) => String(value ?? "").trim();
+  if (!text(user?.securityName) && !text(defaults.securityName))
+    return "Each SNMPv3 user or target needs a security name.";
+  const level = text(
+    user?.securityLevel || defaults.securityLevel || "authPriv",
+  )
+    .toLowerCase()
+    .replaceAll("_", "");
+  const hasSecret = (key: string) =>
+    [
+      user?.[key],
+      user?.[`${key}Env`],
+      defaults[key],
+      defaults[`${key}Env`],
+    ].some(text);
+  if (
+    (level !== "noauthnopriv" && !hasSecret("authPassphrase")) ||
+    (level === "authpriv" && !hasSecret("privPassphrase"))
+  )
+    return "Supply the authentication/privacy passphrase or environment variable for each user or target.";
+}
+
 export function validate(
   adapter: Adapter,
   stage: Stage,
@@ -191,10 +219,12 @@ export function validate(
     }
   }
   if (type === "SnmpInputAdapter") {
+    const targets = Array.isArray(config.targets) ? config.targets : [];
     if (
-      (config.targets || []).some(
+      !targets.length ||
+      targets.some(
         (target: Attributes) =>
-          !target.host ||
+          !target?.host ||
           (target.port != null &&
             (!Number.isInteger(Number(target.port)) ||
               target.port < 1 ||
@@ -203,6 +233,21 @@ export function validate(
     )
       errors["configParams.targets"] =
         "Each target needs a host and a valid port (1–65535).";
+    else {
+      const invalid = targets
+        .filter((target: Attributes) =>
+          ["3", "v3"].includes(
+            String(target.version || config.version || "2c")
+              .trim()
+              .toLowerCase(),
+          ),
+        )
+        .map((target: Attributes) => snmpSecurityError(target, config))
+        .find(Boolean);
+      if (invalid)
+        errors["configParams.targets"] =
+          `${invalid} Use the Authentication defaults or target overrides.`;
+    }
     if (
       (config.oids || []).some(
         (oid: any) =>
@@ -210,6 +255,24 @@ export function validate(
       )
     )
       errors["configParams.oids"] = "Each OID needs an identifier.";
+  }
+  if (type === "SnmpNotificationInputAdapter") {
+    const users = config.users || [];
+    if (!Array.isArray(users))
+      errors["configParams.users"] = "SNMPv3 users must be a list.";
+    else if (
+      !users.length &&
+      !(config.communities || []).length &&
+      !(config.communityEnvs || []).length
+    )
+      errors["configParams.users"] =
+        "Add an SNMPv3 user or an allowed community.";
+    else {
+      const invalid = users
+        .map((u: Attributes) => snmpSecurityError(u, config))
+        .find(Boolean);
+      if (invalid) errors["configParams.users"] = invalid;
+    }
   }
   return errors;
 }

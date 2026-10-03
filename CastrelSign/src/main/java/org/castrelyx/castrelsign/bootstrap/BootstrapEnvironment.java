@@ -30,12 +30,17 @@ public final class BootstrapEnvironment {
       long rootDays = environment.getProperty("castrelsign.root-valid-days", Long.class, 3650L);
 
       Path certDir = Path.of(dataDir, "certs").toAbsolutePath().normalize();
-      CertificateAuthority.refreshServerMaterial(
+      if (java.nio.file.Files.exists(Path.of(dataDir, ".restore-in-progress"))) throw new IllegalStateException("incomplete backup restore");
+      var properties = org.springframework.boot.context.properties.bind.Binder.get(environment)
+          .bind("castrelsign", org.castrelyx.castrelsign.config.CastrelSignProperties.class)
+          .orElseGet(org.castrelyx.castrelsign.config.CastrelSignProperties::new);
+      var kms = org.castrelyx.castrelsign.kms.KeyManagementService.open(properties);
+      CertificateAuthority.refreshManaged(
           certDir,
           serverName,
           Duration.ofDays(certDays),
           Duration.ofDays(rootDays),
-          password.toCharArray());
+          password.toCharArray(), kms);
 
       Map<String, Object> defaults = new LinkedHashMap<>();
       defaults.put("server.ssl.client-auth", "want");
@@ -80,6 +85,9 @@ public final class BootstrapEnvironment {
     defaults.put(prefix + ".reload-on-update", "true");
     defaults.put(prefix + ".keystore.certificate", certDir.resolve("server.pem").toUri().toString());
     defaults.put(prefix + ".keystore.private-key", certDir.resolve("server.key").toUri().toString());
+    defaults.put(prefix + ".keystore.private-key-password", password);
+    defaults.put(prefix + ".keystore.verify-keys", "true");
+    defaults.put(prefix + ".key.password", password);
     defaults.put(prefix + ".truststore.certificate", certDir.resolve("ca.pem").toUri().toString());
     defaults.put("spring.ssl.bundle.watch.file.quiet-period", "2s");
     defaults.put("server.ssl.bundle", GENERATED_BUNDLE);

@@ -205,6 +205,10 @@ export function MappingEditor({
     [templateDialog, setTemplateDialog] = useState<"new" | "edit" | null>(null),
     [templateName, setTemplateName] = useState(""),
     [templateDescription, setTemplateDescription] = useState("");
+  useEffect(() => {
+    window.addEventListener("mapping-templates-changed", templates.refresh);
+    return () => window.removeEventListener("mapping-templates-changed", templates.refresh);
+  }, [templates.refresh]);
   const [sample, setSample] = useState(
       '{\n  "src_ip": "192.0.2.10",\n  "message": "Example event"\n}',
     ),

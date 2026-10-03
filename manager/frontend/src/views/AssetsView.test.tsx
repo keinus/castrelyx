@@ -21,7 +21,8 @@ describe('AssetsView', () => {
     const fetchMock = mockFetch({
       '/api/metrics/assets?range=1h': { body: overview },
       '/api/metrics/assets/nas?range=1h&bucket=auto': { body: detail },
-      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas': { body: assetLogs }
+      '/api/assets/by-uid/nas/logs?range=1h&severity=ALL&family=ALL&query=&offset=0&limit=120': { body: { items: assetLogs, hasMore: false, nextOffset: assetLogs.length, storageAvailable: true, status: {} } },
+      '/api/assets/by-uid/nas/logs?range=1h&severity=ALL&family=ALL&query=nomatch&offset=0&limit=120': { body: { items: [], hasMore: false, nextOffset: 0, storageAvailable: true, status: {} } }
     });
 
     render(<AssetsView role="ADMIN" assets={assets} onCreate={vi.fn()} onUpdate={vi.fn()} onDelete={vi.fn()} />);
@@ -48,7 +49,7 @@ describe('AssetsView', () => {
       expect.objectContaining({ credentials: 'include' })
     ));
     expect(fetchMock).not.toHaveBeenCalledWith(
-      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas',
+      '/api/assets/by-uid/nas/logs?range=1h&severity=ALL&family=ALL&query=&offset=0&limit=120',
       expect.objectContaining({ credentials: 'include' })
     );
     expect(await screen.findByRole('heading', { name: 'nas' })).toBeInTheDocument();
@@ -75,7 +76,7 @@ describe('AssetsView', () => {
     expect(screen.queryByText(/auth\.login\.failure/)).not.toBeInTheDocument();
     activateTab('로그');
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      '/api/agent/logs?range=1h&severity=ALL&limit=120&assetUid=nas',
+      '/api/assets/by-uid/nas/logs?range=1h&severity=ALL&family=ALL&query=&offset=0&limit=120',
       expect.objectContaining({ credentials: 'include' })
     ));
     expect(await screen.findByText('자산 로그')).toBeInTheDocument();
@@ -85,7 +86,7 @@ describe('AssetsView', () => {
     fireEvent.change(screen.getByLabelText('자산 로그 검색'), { target: { value: 'alice' } });
     expect(screen.getByText(/Failed password for invalid user alice/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('자산 로그 검색'), { target: { value: 'nomatch' } });
-    expect(screen.getByText('해당 조건의 자산 로그가 없습니다.')).toBeInTheDocument();
+    expect(await screen.findByText('해당 조건의 자산 로그가 없습니다.')).toBeInTheDocument();
     activateTab('프로세스');
     expect(await screen.findByText('Process/socket map')).toBeInTheDocument();
     expect(screen.getAllByText('sshd').length).toBeGreaterThan(0);

@@ -39,7 +39,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { AssetFileManager } from './AssetFileManager';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
-import type { AgentLogEvent, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
+import type { AgentLogEvent, AssetLogEvent, AssetLogPage, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
 import { canMutate, formatBps } from '../lib/uiModel';
 import { cn } from '../lib/utils';
 
@@ -353,6 +353,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
     <TooltipProvider>
       <ViewFrame
         title="자산 관리"
+        subtitle="수집된 자산을 탐색하고 리소스·네트워크·보안 신호의 상세 근거를 확인합니다."
         actions={(
           <>
             <Tooltip>
@@ -589,14 +590,14 @@ function AssetFleetScan({
                       </TableCell>
                       <TableCell>
                         <div className="asset-scan-stack">
-                          <strong>{formatBps(asset.metrics.networkInBps ?? 0)} RX</strong>
-                          <span>{formatBps(asset.metrics.networkOutBps ?? 0)} TX</span>
+                          <strong>{optionalBps(asset.metrics.networkInBps)} RX</strong>
+                          <span>{optionalBps(asset.metrics.networkOutBps)} TX</span>
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className="asset-scan-stack">
-                          <strong>{securitySignalLabel(asset.security)}</strong>
-                          <span>{asset.security?.openPorts ?? 0} ports · {asset.security?.failedServices ?? 0} failed</span>
+                          <strong>{asset.security ? securitySignalLabel(asset.security) : '미수집'}</strong>
+                          <span>{asset.security?.openPorts ?? '—'} ports · {asset.security?.failedServices ?? '—'} failed</span>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -872,7 +873,7 @@ function AssetDetailPanel({
           <AssetDetailSnapshotTile icon={<Database size={17} />} label="Memory" value={formatPercent(metrics.memoryUsagePct)} meta={formatBytes(metrics.memoryAvailableBytes)} tone={metricTone(metrics.memoryUsagePct)} />
           <AssetDetailSnapshotTile icon={<HardDrive size={17} />} label="Disk" value={formatPercent(metrics.diskUsagePct)} meta={`${disks.length} mounts`} tone={metricTone(metrics.diskUsagePct)} />
           <AssetDetailSnapshotTile icon={<Thermometer size={17} />} label="Temp" value={formatTemperature(metrics.temperatureCelsius)} meta="hottest sensor" tone={temperatureTone(metrics.temperatureCelsius)} />
-          <AssetDetailSnapshotTile icon={<Network size={17} />} label="Network" value={formatBps((metrics.networkInBps ?? 0) + (metrics.networkOutBps ?? 0))} meta="RX + TX" />
+          <AssetDetailSnapshotTile icon={<Network size={17} />} label="Network" value={metrics.networkInBps == null || metrics.networkOutBps == null ? '미수집' : formatBps(metrics.networkInBps + metrics.networkOutBps)} meta="RX + TX" />
           <AssetDetailSnapshotTile icon={<ShieldAlert size={17} />} label="Signals" value={securitySignalLabel(security)} meta={`${openPortCount} open · ${processes.length} proc`} tone={signalTone} />
         </div>
 
@@ -1008,7 +1009,7 @@ function AssetDetailPanel({
   );
 }
 
-function AssetLogsPanel({
+export function AssetLogsPanel({
   assetUid,
   range,
   active
@@ -1017,7 +1018,14 @@ function AssetLogsPanel({
   range: RangeOption;
   active: boolean;
 }) {
-  const [logs, setLogs] = useState<AgentLogEvent[]>([]);
+  const [logs, setLogs] = useState<AssetLogEvent[]>([]);
+  const [family, setFamily] = useState('ALL');
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [status, setStatus] = useState<AssetLogPage['status']>({});
+  const [receiver, setReceiver] = useState<AssetLogPage['receiver']>();
+  const [serverQuery, setServerQuery] = useState('');
+  const requestVersion = useRef(0);
   const [severity, setSeverity] = useState<LogSeverityOption>('ALL');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1028,6 +1036,7 @@ function AssetLogsPanel({
     if (!assetUid) {
       return;
     }
+    const version = ++requestVersion.current;
     if (mode === 'refresh') {
       setRefreshing(true);
     } else {
@@ -1035,15 +1044,28 @@ function AssetLogsPanel({
     }
     setError('');
     try {
-      setLogs(await api.agentLogs(range, severity, ASSET_LOG_LIMIT, assetUid));
+      const page = await api.assetLogs(assetUid, range, severity, family, serverQuery, offset, ASSET_LOG_LIMIT);
+      if (version !== requestVersion.current) return;
+      setLogs(page.items);
+      setHasMore(page.hasMore);
+      setStatus(page.status);
+      setReceiver(page.receiver);
     } catch {
+      if (version !== requestVersion.current) return;
       setLogs([]);
-      setError('자산 로그를 불러오지 못했습니다.');
+      setHasMore(false);
+      setError('로그 저장소에 연결할 수 없습니다. 수집 상태와 서버 연결을 확인하세요.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (version === requestVersion.current) { setLoading(false); setRefreshing(false); }
     }
-  }, [assetUid, range, severity]);
+  }, [assetUid, range, severity, family, serverQuery, offset]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setServerQuery(query); setOffset(0); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  useEffect(() => { setOffset(0); }, [assetUid, range, severity, family]);
+  useEffect(() => () => { requestVersion.current++; }, [assetUid, range, severity, family, serverQuery, offset, active]);
 
   useEffect(() => {
     if (!active) {
@@ -1062,7 +1084,8 @@ function AssetLogsPanel({
     return () => window.clearInterval(refreshTimer);
   }, [active, loadLogs]);
 
-  const visibleLogs = useMemo(() => filterAssetLogs(logs, query), [logs, query]);
+  // Search is performed against the full stored event, including raw fields.
+  const visibleLogs = logs;
   const summary = useMemo(() => summarizeAssetLogs(visibleLogs), [visibleLogs]);
 
   return (
@@ -1072,7 +1095,7 @@ function AssetLogsPanel({
         <span>{assetUid} · {rangeLabel(range)} · {logs.length} loaded</span>
       </div>
 
-      <div className="asset-log-toolbar">
+      <div className="asset-log-toolbar asset-log-filters">
         <label className="traffic-filter-field asset-log-search-field">
           <Search size={16} aria-hidden="true" />
           <input
@@ -1085,6 +1108,12 @@ function AssetLogsPanel({
         <NativeSelect aria-label="로그 심각도" value={severity} onChange={(event) => setSeverity(event.target.value as LogSeverityOption)}>
           {logSeverityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </NativeSelect>
+        <NativeSelect aria-label="로그 종류" value={family} onChange={(event) => setFamily(event.target.value)}>
+          <option value="ALL">전체 로그</option>
+          <option value="audit">감사</option>
+          <option value="security">보안</option>
+          <option value="zeek">Zeek</option>
+        </NativeSelect>
         <Button type="button" variant="outline" size="sm" onClick={() => void loadLogs('refresh')} disabled={loading || refreshing}>
           <RefreshCw className={cn(refreshing && 'asset-refresh-spin')} size={15} />
           새로고침
@@ -1092,6 +1121,11 @@ function AssetLogsPanel({
       </div>
 
       {error && <p className="asset-empty-detail asset-log-error">{error}</p>}
+      <p className="asset-panel-footnote">
+        마지막 수신 {(receiver?.lastReceivedAt || status.lastReceivedAt) ? formatDate(receiver?.lastReceivedAt || status.lastReceivedAt) : '기록 없음'} · 마지막 DB 저장 {status.lastStoredAt ? formatDate(status.lastStoredAt) : '기록 없음'}
+      </p>
+      {receiver?.configured && <p className="asset-panel-footnote">저장 대기 {receiver.pendingRecords ?? 0}건 · 파싱·검증 오류 보관 {receiver.quarantinedRecords ?? 0}건</p>}
+      {receiver && !receiver.available && <p className="asset-panel-footnote">수신기 상태를 확인할 수 없습니다. 저장된 로그는 조회할 수 있습니다.</p>}
       {loading && logs.length === 0 && (
         <div className="grid gap-2">
           <Skeleton className="h-4 w-52" />
@@ -1131,7 +1165,7 @@ function AssetLogsPanel({
                 <TableCell>
                   <div className="agent-log-meta">
                     <strong>{log.sourceName ?? log.channel ?? log.sourceId ?? '-'}</strong>
-                    <span>{log.program ?? log.provider ?? log.platform ?? '-'}</span>
+                    <span>{log.sourceType === 'SECURITY_ROUTER' ? 'Security Router' : log.program ?? log.provider ?? log.platform ?? '-'}</span>
                   </div>
                 </TableCell>
                 <TableCell className="agent-log-message">
@@ -1140,16 +1174,22 @@ function AssetLogsPanel({
                     <span>{log.message ?? '-'}</span>
                   </div>
                   {(log.actor || log.action) && <em>{[log.actor, log.action].filter(Boolean).join(' / ')}</em>}
+                  {log.raw && <details><summary>원본·상세</summary><pre className="max-w-full overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ eventId: log.eventId, jobId: log.jobId, target: log.target, result: log.outcome, raw: log.raw }, null, 2)}</pre></details>}
                 </TableCell>
               </TableRow>
             ))}
-            {!loading && visibleLogs.length === 0 && (
+            {!loading && !error && visibleLogs.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5}>해당 조건의 자산 로그가 없습니다.</TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
+      </div>
+      <div className="asset-log-pagination">
+        <Button variant="outline" size="sm" disabled={offset === 0 || loading || refreshing} onClick={() => setOffset(Math.max(0, offset - ASSET_LOG_LIMIT))}>이전 로그</Button>
+        <span>{Math.floor(offset / ASSET_LOG_LIMIT) + 1} 페이지</span>
+        <Button variant="outline" size="sm" disabled={!hasMore || loading || refreshing} onClick={() => setOffset(offset + ASSET_LOG_LIMIT)}>다음 로그</Button>
       </div>
     </section>
   );
@@ -1535,7 +1575,7 @@ function securitySignalLabel(security?: AssetMetricSummary['security']) {
   return `${total} signals`;
 }
 
-function filterAssetLogs(logs: AgentLogEvent[], query: string) {
+function filterAssetLogs<T extends AgentLogEvent>(logs: T[], query: string): T[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return logs;
@@ -1835,6 +1875,10 @@ function isPublicListeningSocket(socket: AgentSocketState) {
 
 function isAnyAddress(address?: string) {
   return !address || address === '0.0.0.0' || address === '::' || address === '::0' || address === '[::]';
+}
+
+function optionalBps(value?: number | null) {
+  return value == null ? '미수집' : formatBps(value);
 }
 
 function formatPercent(value?: number | null) {

@@ -56,8 +56,14 @@ public class AgentUpdateService {
       manifest.put("sha256", sha256);
       manifest.put("size_bytes", artifact.length);
       manifest.put("created_at", createdAt);
+      var signingKey = signer.current();
+      String signingReference = "release:" + UUID.randomUUID();
+      manifest.put("signing_key_id", signingKey.keyId());
+      manifest.put("signing_key_version", signingKey.version());
+      manifest.put("signing_algorithm", signingKey.algorithm());
+      manifest.put("signing_reference", signingReference);
       String manifestJson = objectMapper.writeValueAsString(manifest);
-      String signature = signer.sign(manifestJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      String signature = signer.sign(signingKey.ref(), manifestJson.getBytes(java.nio.charset.StandardCharsets.UTF_8), signingReference);
       Path artifactPath = releaseDir().resolve(safe(normalizedVersion) + "-" + normalizedOs + "-" + normalizedArch
           + "-" + normalizedChannel + "-" + UUID.randomUUID() + ".bin");
       Files.write(artifactPath, artifact);
@@ -73,6 +79,7 @@ public class AgentUpdateService {
           artifactPath.toString(),
           createdAt));
     } catch (Exception e) {
+      if (e instanceof org.springframework.web.server.ResponseStatusException status) throw status;
       if (e instanceof IllegalArgumentException argument) {
         throw argument;
       }
@@ -89,14 +96,17 @@ public class AgentUpdateService {
   }
 
   public AgentRelease activateRelease(long id) {
-    repository.findRelease(id).orElseThrow(() -> new IllegalArgumentException("release not found"));
+    AgentRelease release = repository.findRelease(id).orElseThrow(() -> new IllegalArgumentException("release not found"));
+    if (!distributable(release)) throw new IllegalArgumentException("release signing key is not trusted");
+    if ("REVOKED".equals(release.status())) throw new IllegalArgumentException("a revoked release cannot be reactivated");
     repository.activateRelease(id);
     return repository.findRelease(id).orElseThrow();
   }
 
   public AgentRelease revokeRelease(long id) {
-    repository.findRelease(id).orElseThrow(() -> new IllegalArgumentException("release not found"));
+    AgentRelease release = repository.findRelease(id).orElseThrow(() -> new IllegalArgumentException("release not found"));
     repository.revokeRelease(id);
+    signer.revoked((String) manifest(release).getOrDefault("signing_reference", "legacy-release:" + release.id()));
     return repository.findRelease(id).orElseThrow();
   }
 
@@ -126,6 +136,7 @@ public class AgentUpdateService {
       return UpdateCheckResponse.none(policy);
     }
     return repository.findActiveRelease(os, arch, policy.channel(), policy.targetVersion())
+        .filter(this::distributable)
         .filter(release -> !release.version().equals(currentVersion))
         .map(release -> available(normalizedAgentId, currentVersion, release, policy))
         .orElseGet(() -> UpdateCheckResponse.none(policy));
@@ -141,7 +152,9 @@ public class AgentUpdateService {
     if (!"ACTIVE".equals(release.status())) {
       throw new IllegalArgumentException("release is not active");
     }
+    if (!distributable(release)) throw new IllegalArgumentException("release signing key is not trusted");
     UpdatePolicy policy = repository.effectivePolicy(normalizedAgentId, release.channel());
+    if (!policy.enabled()) throw new IllegalArgumentException("updates are disabled by policy");
     AgentRelease allowed = repository.findActiveRelease(release.os(), release.arch(), policy.channel(), policy.targetVersion())
         .orElseThrow(() -> new IllegalArgumentException("release is not allowed by policy"));
     if (allowed.id() != release.id()) {
@@ -168,6 +181,12 @@ public class AgentUpdateService {
 
   public String publicKeyPem() {
     return signer.publicKeyPem();
+  }
+
+  private boolean distributable(AgentRelease release) { return signer.distributable(manifest(release)); }
+  private Map<String, Object> manifest(AgentRelease release) {
+    try { return objectMapper.readValue(release.manifestJson(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}); }
+    catch (java.io.IOException e) { throw new IllegalStateException("invalid stored update manifest", e); }
   }
 
   private UpdateCheckResponse available(String agentId, String fromVersion, AgentRelease release, UpdatePolicy policy) {

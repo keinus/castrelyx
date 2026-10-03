@@ -17,6 +17,30 @@ import static org.mockito.Mockito.when;
 class StructuredTransformControllerTest {
 
     @Test
+    void simulatesMibTemplateAgainstNestedSnmpSample() {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        var repository = mock(MappingRepository.class);
+        var transform = new StructuredTransformService(repository,
+                new org.keinus.logparser.domain.transformation.service.ConditionEvaluator(),
+                new org.keinus.logparser.domain.transformation.service.StructuredEventSerializer(mapper));
+        var controller = new StructuredTransformController(new SchemaDefinitionService(), repository, transform, mock(MappingTemplateService.class));
+        var request = new org.keinus.logparser.interfaces.dto.transform.SimulationRequestDto();
+        request.setMessageType("snmp");
+        request.setSampleData(java.util.Map.of("protocol", "snmp", "operation", "poll",
+                "metrics", java.util.Map.of("portBytes_3", java.util.Map.of("value", "18446744073709551615"))));
+        var config = new MappingConfiguration();
+        var rule = new org.keinus.logparser.domain.model.mapping.SubTableRule();
+        rule.setTargetSubTable("event_snmp");
+        rule.setConditionExpression("protocol == 'snmp' && operation == 'poll'");
+        rule.setMappings(java.util.List.of(new org.keinus.logparser.domain.model.mapping.FieldMapping("/metrics/portBytes_3/value", "metric_portBytes_3", null)));
+        config.setSubTableRules(java.util.List.of(rule));
+        request.setTemporaryConfig(config);
+        var response = controller.simulate(request).getBody();
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getResult().getSubFields()).containsEntry("metric_portBytes_3", "18446744073709551615");
+    }
+
+    @Test
     void saveMappingInvalidatesStructuredTransformCache() {
         SchemaDefinitionService schemaDefinitionService = mock(SchemaDefinitionService.class);
         MappingRepository mappingRepository = mock(MappingRepository.class);

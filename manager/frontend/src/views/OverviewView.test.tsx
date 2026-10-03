@@ -21,8 +21,8 @@ describe('OverviewView', () => {
 
     render(<OverviewView summary={summary} alerts={alerts} assets={[registeredAsset]} />);
 
-    expect(await screen.findByRole('heading', { name: 'Action Rail Command Center' })).toBeInTheDocument();
-    expect(screen.getAllByText('SOC + NMS').length).toBeGreaterThan(0);
+    expect(await screen.findByRole('heading', { name: '커맨드 센터' })).toBeInTheDocument();
+    expect(screen.getByText('장비 상태와 주요 이벤트를 한눈에 확인하세요.')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '전체 장비 리소스 상태' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '전체 장비 리소스 매트릭스' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '자산 인스펙터' })).toBeInTheDocument();

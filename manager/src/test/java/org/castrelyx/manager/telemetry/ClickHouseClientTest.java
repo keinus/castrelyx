@@ -18,6 +18,25 @@ import org.springframework.web.client.RestClient;
 
 class ClickHouseClientTest {
   @Test
+  void queriesRouterAndAgentLogsWithStableDedupFiltersAndPagination() {
+    var builder=RestClient.builder();
+    var server=MockRestServiceServer.bindTo(builder).build();
+    List<String> queries=new ArrayList<>();
+    server.expect(request->queries.add(clickHouseQuery(request.getURI().getRawQuery())))
+      .andRespond(withSuccess("""
+        {"asset_uid":"asset-1","source_type":"SECURITY_ROUTER","source_id":"ssw-1","event_type":"zeek.notice","observed_at":"2026-10-03 00:00:00","event_json":"{\\"event_id\\":\\"ev-1\\",\\"message\\":\\"alert\\",\\"raw\\":{\\"uid\\":\\"C1\\"}}"}
+        {"asset_uid":"asset-1","source_id":"agent-1","event_json":"{}","observed_at":"2026-10-03 00:00:00"}
+        """,MediaType.TEXT_PLAIN));
+    server.expect(request->queries.add(clickHouseQuery(request.getURI().getRawQuery())))
+      .andRespond(withSuccess("{\"last_received_at\":\"2026-10-03T00:00:00Z\",\"last_stored_at\":\"2026-10-03T00:00:01Z\"}\n",MediaType.TEXT_PLAIN));
+    var client=new ClickHouseClient(new ManagerProperties("test","https://manager.test",new ManagerProperties.ClickHouse("http://localhost:18123","castrelyx","default","","castrelyx_agent_events")),builder);
+    var page=client.queryAssetLogEvents("1h","WARNING","asset-1","zeek","a\\'b",1,10);
+    assertThat(page).containsEntry("hasMore",true).containsEntry("nextOffset",11);
+    assertThat((List<?>)page.get("items")).hasSize(1);
+    assertThat(queries.getFirst()).contains("source_type IN ('AGENT', 'SECURITY_ROUTER')", "LIMIT 1 BY source_type, source_id, log_key", "LIMIT 2 OFFSET 10", "'log_family') = 'zeek'", "a\\\\''b");
+    server.verify();
+  }
+  @Test
   void formatsDateTime64ValuesWithoutIsoZuluSuffixForJsonEachRow() {
     assertThat(ClickHouseClient.formatDateTime64(Instant.parse("2026-06-09T10:01:02.345Z")))
         .isEqualTo("2026-06-09 10:01:02.345");

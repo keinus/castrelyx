@@ -3015,6 +3015,21 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.asset-log-filters {
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+}
+
+.asset-log-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-log-monitor-panel .asset-log-stat.neutral strong {
+  color: #d8edf7;
+}
+
 .asset-log-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

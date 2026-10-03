@@ -1,5 +1,13 @@
 server:
   port: ${CASTRELSIGN_PORT:8443}
+  servlet:
+    session:
+      timeout: 15m
+      tracking-modes: cookie
+      cookie:
+        name: CASTRELSIGN_SESSION
+        http-only: true
+        same-site: strict
   ssl:
     enabled: true
     client-auth: want
@@ -8,6 +16,7 @@ castrelsign:
   data-dir: ${CASTRELSIGN_DATA_DIR:${user.home}/castrelsign}
   public-base-url: ${CASTRELSIGN_PUBLIC_BASE_URL:}
   enrollment-token: ${CASTRELSIGN_ENROLLMENT_TOKEN:}
+  portal-users-file: ${CASTRELSIGN_PORTAL_USERS_FILE:}
   admin-token: ${CASTRELSIGN_ADMIN_TOKEN:}
   cert-valid-days: ${CASTRELSIGN_CERT_VALID_DAYS:30}
   root-valid-days: ${CASTRELSIGN_ROOT_VALID_DAYS:3650}
@@ -16,6 +25,17 @@ castrelsign:
   tls-bootstrap-enabled: ${CASTRELSIGN_TLS_BOOTSTRAP_ENABLED:true}
   server-cert-check-interval-ms: ${CASTRELSIGN_SERVER_CERT_CHECK_INTERVAL_MS:3600000}
   server-cert-check-initial-delay-ms: ${CASTRELSIGN_SERVER_CERT_CHECK_INITIAL_DELAY_MS:60000}
+  kms:
+    mode: ${CASTRELSIGN_KMS_MODE:development}
+    environment: ${CASTRELSIGN_KMS_ENVIRONMENT:development}
+    tenant: ${CASTRELSIGN_KMS_TENANT:castrelyx}
+    master-key-file: ${CASTRELSIGN_KMS_MASTER_KEY_FILE:}
+    administrators-file: ${CASTRELSIGN_KMS_ADMINISTRATORS_FILE:}
+    signs-per-minute: ${CASTRELSIGN_KMS_SIGNS_PER_MINUTE:600}
+    deletion-grace-days: ${CASTRELSIGN_KMS_DELETION_GRACE_DAYS:7}
+    signing-lifetime-days: ${CASTRELSIGN_KMS_SIGNING_LIFETIME_DAYS:365}
+    pkcs11-config: ${CASTRELSIGN_KMS_PKCS11_CONFIG:}
+    pkcs11-pin-file: ${CASTRELSIGN_KMS_PKCS11_PIN_FILE:}
 
 spring:
   application:

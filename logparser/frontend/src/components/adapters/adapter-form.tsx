@@ -48,8 +48,8 @@ import {
   AttributeTree,
   EntriesField,
   SnmpCollection,
-  snmpSecurityFields,
 } from "./collection-fields";
+import { SnmpMibImport } from "./snmp-mib-import";
 
 const tabLabel = (tab: string) =>
   ({ mtls: "mTLS", tls: "TLS", dlq: "DLQ" })[tab] ||
@@ -132,7 +132,11 @@ function FormField({
           onValidity={onValidity}
         />
       ) : field.type === "json" &&
-        ["configParams.targets", "configParams.oids"].includes(field.path) ? (
+        [
+          "configParams.targets",
+          "configParams.oids",
+          "configParams.users",
+        ].includes(field.path) ? (
         <SnmpCollection field={field} value={value} onChange={onChange} />
       ) : field.type === "json" ? (
         <AttributeTree
@@ -232,23 +236,10 @@ export function AdapterEditor({
       {},
     ),
     [busy, setBusy] = useState(false),
+    [mibBusy, setMibBusy] = useState(false),
     [saveError, setSaveError] = useState("");
   const def = definition(stage, value.type),
-    fields = [...(def?.fields || [])];
-  if (value.type === "SnmpInputAdapter")
-    fields.push(
-      ...snmpSecurityFields.map(([key, label, choices]) => ({
-        path: `configParams.${key}`,
-        label: `Default ${label.toLowerCase()}`,
-        type: choices
-          ? ("select" as const)
-          : key.endsWith("Passphrase")
-            ? ("password" as const)
-            : ("text" as const),
-        choices: choices ? [...choices] : undefined,
-        tab: "authentication",
-      })),
-    );
+    fields = def?.fields || [];
   const orderField = fields.find((f) => f.path === "priority");
   const tabs = [
     ...new Set([
@@ -356,7 +347,7 @@ export function AdapterEditor({
           }}
         >
           <fieldset
-            disabled={busy || !!configError}
+            disabled={busy || mibBusy || !!configError}
             className="flex flex-1 flex-col"
           >
             <CardContent className="flex flex-1 flex-col gap-4">
@@ -448,6 +439,14 @@ export function AdapterEditor({
                     className="pt-3"
                   >
                     <FieldGroup>
+                      {item === "targets" && def?.type === "SnmpInputAdapter" && (
+                        <SnmpMibImport
+                          rows={Array.isArray(value.configParams?.oids) ? value.configParams.oids : []}
+                          messageType={value.messagetype}
+                          onChange={(oids) => change("configParams.oids", oids)}
+                          onBusyChange={setMibBusy}
+                        />
+                      )}
                       <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
                         {fields
                           .filter(

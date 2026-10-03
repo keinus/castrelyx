@@ -39,6 +39,8 @@ public class CsrService {
     if (!(publicKey instanceof ECPublicKey)) {
       throw new IllegalArgumentException("agent CSR public key must be EC");
     }
+    try { org.castrelyx.castrelsign.kms.KeyManagementService.requireP256(publicKey); }
+    catch (Exception e) { throw new IllegalArgumentException("agent CSR must use EC P-256", e); }
     return new ParsedCsr(csr, commonName, publicKey, subjectAlternativeNames(csr));
   }
 

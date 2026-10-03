@@ -1,0 +1,134 @@
+[
+  {
+    "error": false,
+    "overflow": false,
+    "route": "keys?tab=grants",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "keys?tab=dependencies",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "rotation",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "approvals",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "certificates",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals?tab=agents",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals?tab=tokens",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "tls",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases?tab=policy",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases?tab=attempts",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "trust",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "audit",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "health",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=lifecycle",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=identity",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=backup",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=integration",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "reviews",
+    "w": 390
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "account",
+    "w": 390
+  }
+]

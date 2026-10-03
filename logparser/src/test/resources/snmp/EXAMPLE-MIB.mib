@@ -1,0 +1,73 @@
+EXAMPLE-MIB DEFINITIONS ::= BEGIN
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Integer32, Counter64, enterprises
+        FROM SNMPv2-SMI
+    DisplayString FROM SNMPv2-TC;
+
+example MODULE-IDENTITY
+    LAST-UPDATED "202609040000Z"
+    ORGANIZATION "Example"
+    CONTACT-INFO "Example operator"
+    DESCRIPTION "Illustrative MIB for import tests."
+    ::= { enterprises 32473 }
+
+deviceLabel OBJECT-TYPE
+    SYNTAX DisplayString
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Device label; text containing -- and { braces } is not syntax."
+    ::= { example 1 }
+
+temperature OBJECT-TYPE
+    SYNTAX Integer32
+    UNITS "degrees Celsius"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Temperature sensor."
+    ::= { example 2 }
+
+portTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF PortEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "Ports."
+    ::= { example 3 }
+
+portEntry OBJECT-TYPE
+    SYNTAX PortEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "A port."
+    INDEX { portIndex }
+    ::= { portTable 1 }
+
+PortEntry ::= SEQUENCE { portIndex Integer32, portBytes Counter64 }
+
+portIndex OBJECT-TYPE
+    SYNTAX Integer32 (1..2147483647)
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "Port index."
+    ::= { portEntry 1 }
+
+portBytes OBJECT-TYPE
+    SYNTAX Counter64
+    UNITS "bytes"
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "Cumulative received bytes."
+    ::= { portEntry 2 }
+
+resetCommand OBJECT-TYPE
+    SYNTAX Integer32
+    MAX-ACCESS accessible-for-notify
+    STATUS current
+    DESCRIPTION "Not available to GET."
+    ::= { example 4 }
+
+exampleAlarm NOTIFICATION-TYPE
+    OBJECTS { temperature }
+    STATUS current
+    DESCRIPTION "High temperature alarm."
+    ::= { example 0 1 }
+END

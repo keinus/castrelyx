@@ -41,7 +41,12 @@ import org.springframework.test.context.DynamicPropertySource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentHttpsIntegrationTest {
+  @org.junit.jupiter.api.AfterAll
+  static void closeKeyStore() throws Exception {
+    org.castrelyx.castrelsign.kms.KeyManagementService.closeAt(tempDir);
+  }
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final char[] PASSWORD = "integration-pass".toCharArray();
 

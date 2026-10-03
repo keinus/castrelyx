@@ -5,6 +5,30 @@ import type {
   FieldKind,
 } from "./types";
 
+export const snmpSecurityFields = [
+  ["securityName", "Security name"],
+  [
+    "securityLevel",
+    "Security level",
+    ["noAuthNoPriv", "authNoPriv", "authPriv"],
+  ],
+  [
+    "authProtocol",
+    "Authentication protocol",
+    ["MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"],
+  ],
+  ["authPassphrase", "Authentication passphrase"],
+  ["authPassphraseEnv", "Authentication passphrase env"],
+  ["privProtocol", "Privacy protocol", ["DES", "AES128", "AES192", "AES256"]],
+  ["privPassphrase", "Privacy passphrase"],
+  ["privPassphraseEnv", "Privacy passphrase env"],
+] as const;
+const snmpSecurityDefaults: Record<string, string> = {
+  securityLevel: "authPriv",
+  authProtocol: "SHA256",
+  privProtocol: "AES128",
+};
+
 // One schema powers both the inventory editor and Pipeline Studio.
 export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
   input: [
@@ -37,7 +61,7 @@ export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
       "TcpInputAdapter",
       "TCP",
       "settings_ethernet",
-      "Newline-delimited TCP listener",
+      "TCP listener with configurable framing",
       ["connection", "advanced"],
       [
         field("port", "Listen port", "number", {
@@ -46,8 +70,9 @@ export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
           max: 65535,
           tab: "connection",
         }),
+        ...tcpFramingFields(),
       ],
-      "All interfaces · newline-delimited UTF-8 · one line per event.",
+      "UTF-8 · line or octet-counted framing.",
     ),
     def(
       "TlsTcpInputAdapter",
@@ -63,6 +88,9 @@ export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
           tab: ["connection", "tls"],
         }),
         ...serverTlsFields(),
+        ...tcpFramingFields(),
+        field("configParams.inboxDirectory", "Router durable inbox directory", "text", { tab: "advanced", help: "Required for security-router. Absolute path; 256 MiB shared with failed records." }),
+        field("configParams.clientSourceBindings", "Router certificate registrations", "json", { tab: "tls", wide: true, help: 'Certificate CN → {"sourceId":"ssw-01","assetUid":"manual-..."}. Required for security-router with clientAuth=need.' }),
       ],
       "TLS server listener · optional client certificate authentication.",
     ),
@@ -145,7 +173,7 @@ export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
       "SNMP poller",
       "sensors",
       "Poll one or more SNMP targets",
-      ["polling", "targets", "advanced"],
+      ["polling", "targets", "authentication", "advanced"],
       [
         field("configParams.version", "Default version", "select", {
           default: "2c",
@@ -192,21 +220,116 @@ export const TYPE_DEFS: Record<Stage, AdapterDefinition[]> = {
               name: "router-01",
               host: "192.0.2.10",
               port: 161,
-              version: "2c",
-              community: "public",
             },
           ],
-          help: "Each target supports v1/v2c community or v3 security fields.",
+          help: "Targets inherit the default version and credentials unless overridden. Configure shared v3 credentials in Authentication.",
         }),
         field("configParams.oids", "OIDs", "json", {
           required: true,
           wide: true,
           tab: "targets",
           default: [{ name: "sysUpTime", oid: "1.3.6.1.2.1.1.3.0" }],
-          help: "Provide at least one {name, oid} entry. A plain OID string is also accepted.",
+          help: "Choose a common OID by name, or use Add OID for a custom numeric identifier. The OID list applies to every target.",
         }),
+        ...snmpSecurityFields.map(([key, label, choices]) =>
+          field(
+            `configParams.${key}`,
+            `Default ${label.toLowerCase()}`,
+            choices
+              ? "select"
+              : key.endsWith("Passphrase")
+                ? "password"
+                : "text",
+            {
+              choices: choices ? [...choices] : undefined,
+              default: snmpSecurityDefaults[key],
+              tab: "authentication",
+            },
+          ),
+        ),
       ],
       "Poll interval, target credentials, and OIDs are stored inside configParams.",
+    ),
+    def(
+      "SnmpNotificationInputAdapter",
+      "SNMP notifications",
+      "sensors",
+      "Receive SNMP traps and informs",
+      ["listener", "security", "advanced"],
+      [
+        field("host", "Listen address", "text", {
+          default: "0.0.0.0",
+          tab: "listener",
+        }),
+        field("port", "Listen port", "number", {
+          default: 162,
+          min: 1,
+          max: 65535,
+          tab: "listener",
+        }),
+        field("queueSize", "Queue size", "number", {
+          default: 1000,
+          min: 1,
+          tab: "listener",
+        }),
+        field("configParams.users", "SNMPv3 users", "json", {
+          default: [],
+          wide: true,
+          tab: "security",
+          help: "For Inform, leave engine ID empty. For Trap, enter the sending device engine ID. Passphrases can use environment variables.",
+        }),
+        field(
+          "configParams.communityEnvs",
+          "Community environment variables",
+          "json",
+          {
+            default: [],
+            wide: true,
+            tab: "security",
+            help: "Environment variable names containing allowed v1/v2c communities.",
+          },
+        ),
+        field("configParams.communities", "Allowed communities", "json", {
+          default: [],
+          wide: true,
+          tab: "security",
+          help: "Optional direct v1/v2c community values. Empty disables community access unless environment variables are configured.",
+        }),
+        field("configParams.allowedHosts", "Allowed sender addresses", "json", {
+          default: [],
+          wide: true,
+          tab: "security",
+          help: "Host/IP entries; empty allows any sender with valid credentials. CIDR is not supported.",
+        }),
+        field("configParams.engineStatePath", "Engine state file", "text", {
+          tab: "advanced",
+          help: "Optional persistent file for the local v3 engine ID and boot count. Default: user.home/logparser/data/snmp/receiver-ID.json.",
+        }),
+        field("configParams.engineId", "Local engine ID", "text", {
+          tab: "advanced",
+          help: "Optional 5–32 bytes in hexadecimal. Must match the persisted engine ID after first startup.",
+        }),
+        field(
+          "configParams.maxVarBindings",
+          "Maximum variable bindings",
+          "number",
+          { default: 256, min: 1, tab: "advanced" },
+        ),
+        field(
+          "configParams.dedupTtlMs",
+          "Inform deduplication window",
+          "number",
+          { default: 60000, min: 1, unit: "ms", tab: "advanced" },
+        ),
+        field(
+          "configParams.dedupCacheSize",
+          "Inform deduplication entries",
+          "number",
+          { default: 10000, min: 1, tab: "advanced" },
+        ),
+      ],
+      "Accepts v1/v2c/v3 Trap and v2c/v3 Inform over UDP.",
+      "Inform responses confirm acceptance into memory. Queued events and duplicate history are lost on restart.",
     ),
     def(
       "RabbitMqInputAdapter",
@@ -860,6 +983,13 @@ function field(
   options: Partial<FieldDefinition> = {},
 ): FieldDefinition {
   return { path, label, type, ...options };
+}
+
+function tcpFramingFields(): FieldDefinition[] {
+  return [
+    field("configParams.framing", "Message framing", "select", { choices: ["line", "octet-counted"], default: "line", tab: "connection" }),
+    field("configParams.maxFrameBytes", "Maximum frame bytes", "bytes", { default: 2097152, min: 1024, max: 2097152, tab: "advanced" }),
+  ];
 }
 
 function parserDef(

@@ -143,11 +143,13 @@ public class ProcessingDispatcher implements Runnable {
             if (processingStepService != null) {
                 ProcessingStepService.ProcessingResult result = processingStepService.process(logEvent);
                 if (result == ProcessingStepService.ProcessingResult.FAILED) {
+					logEvent.quarantine("Parser/transform failed: " + logEvent.getProcessingError());
                     totalMessagesFailed.incrementAndGet();
                     log.error("Failed to process log event through processing steps: {}", logEvent);
                     return;
                 }
                 if (result == ProcessingStepService.ProcessingResult.FILTERED) {
+					logEvent.quarantine("Filtered by configured processing step");
                     log.debug("Log event filtered out by processing step");
                     return;
                 }
@@ -155,6 +157,7 @@ public class ProcessingDispatcher implements Runnable {
             } else {
                 boolean parseResult = parseService.parse(logEvent);
                 if (!parseResult) {
+					logEvent.quarantine("Parsing failed");
                     logEvent.markAsError("Parsing failed");
                     totalMessagesFailed.incrementAndGet();
                     log.error("Failed to parse log event: {}", logEvent);
@@ -164,12 +167,17 @@ public class ProcessingDispatcher implements Runnable {
 
                 boolean transformResult = transformService.transform(logEvent);
                 if (!transformResult) {
+					logEvent.quarantine("Filtered by configured transform");
                     log.debug("Log event filtered out by transform service");
                     return;
                 }
             }
 
-            if (structuredTransformService != null) {
+            if ("security-router".equals(logEvent.getMessageType())) {
+                try { RouterEventNormalizer.normalize(logEvent); }
+                catch (RuntimeException e) { logEvent.quarantine(e.getMessage()); throw e; }
+            }
+            if (structuredTransformService != null && !"security-router".equals(logEvent.getMessageType())) {
                 boolean structuredResult = structuredTransformService.applyToLogEvent(logEvent);
                 if (!structuredResult) {
                     log.warn("Structured transformation failed for event: {}", logEvent);

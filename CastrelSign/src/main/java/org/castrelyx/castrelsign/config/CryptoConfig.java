@@ -9,13 +9,17 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class CryptoConfig {
+  @Bean(destroyMethod = "close")
+  org.castrelyx.castrelsign.kms.KeyManagementService keyManagementService(CastrelSignProperties properties) {
+    return org.castrelyx.castrelsign.kms.KeyManagementService.open(properties);
+  }
   @Bean
-  CertificateAuthority certificateAuthority(CastrelSignProperties properties) throws Exception {
+  CertificateAuthority certificateAuthority(CastrelSignProperties properties, org.castrelyx.castrelsign.kms.KeyManagementService kms) throws Exception {
     BouncyCastleSupport.install();
-    return CertificateAuthority.initialize(
+    return CertificateAuthority.initializeManaged(
         properties.getDataDir().resolve("certs"),
         properties.getTlsServerName(),
         Duration.ofDays(properties.getCertValidDays()),
-        Duration.ofDays(properties.getRootValidDays()));
+        Duration.ofDays(properties.getRootValidDays()), properties.getKeyStorePassword().toCharArray(), kms);
   }
 }

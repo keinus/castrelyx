@@ -1,85 +1,31 @@
 package org.castrelyx.castrelsign.update;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.KeyFactory;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.PrivateKey;
-import java.security.Signature;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.util.Base64;
-import org.castrelyx.castrelsign.config.CastrelSignProperties;
+import java.util.List;
+import java.util.Map;
+import org.castrelyx.castrelsign.kms.KeyManagementService;
 import org.springframework.stereotype.Component;
 
 @Component
 public class UpdateSigner {
-  private static final String PRIVATE_BEGIN = "-----BEGIN PRIVATE KEY-----";
-  private static final String PRIVATE_END = "-----END PRIVATE KEY-----";
-  private static final String PUBLIC_BEGIN = "-----BEGIN PUBLIC KEY-----";
-  private static final String PUBLIC_END = "-----END PUBLIC KEY-----";
-
-  private final CastrelSignProperties properties;
-
-  public UpdateSigner(CastrelSignProperties properties) {
-    this.properties = properties;
+  private final KeyManagementService kms;
+  public UpdateSigner(KeyManagementService kms) throws Exception {
+    this.kms = kms;
+    kms.ensureUpdate();
+    Files.deleteIfExists(kms.dataDir().resolve("update-signing/private.pem"));
+    Files.deleteIfExists(kms.dataDir().resolve("update-signing/private.pem.bak"));
   }
-
-  public synchronized String publicKeyPem() {
-    try {
-      ensureKeyPair();
-      return Files.readString(publicKeyPath(), StandardCharsets.UTF_8);
-    } catch (Exception e) {
-      throw new IllegalStateException("failed to load update public key", e);
-    }
+  public String publicKeyPem() { return current().publicKeyPem(); }
+  public KeyManagementService.KeyView current() { return kms.current(KeyManagementService.UPDATE); }
+  public List<KeyManagementService.KeyView> publicKeys() { return kms.keys().stream().filter(k -> KeyManagementService.UPDATE.equals(k.alias())).toList(); }
+  public String sign(KeyManagementService.Ref ref, byte[] payload, String reference) {
+    return kms.sign(ref, KeyManagementService.UPDATER, payload, reference, null).signature();
   }
-
-  public synchronized String sign(byte[] payload) {
-    try {
-      ensureKeyPair();
-      PrivateKey privateKey = readPrivateKey();
-      Signature signer = Signature.getInstance("Ed25519");
-      signer.initSign(privateKey);
-      signer.update(payload);
-      return Base64.getEncoder().encodeToString(signer.sign());
-    } catch (Exception e) {
-      throw new IllegalStateException("failed to sign update manifest", e);
-    }
+  public boolean distributable(Map<String, Object> manifest) {
+    Object id = manifest.get("signing_key_id"), version = manifest.get("signing_key_version");
+    var key = id == null ? publicKeys().stream().filter(k -> k.version() == 1).findFirst().orElse(null)
+        : kms.get(new KeyManagementService.Ref(id.toString(), ((Number) version).intValue()));
+    return key != null && java.util.Set.of("ACTIVE", "VERIFY_ONLY").contains(key.state());
   }
-
-  private void ensureKeyPair() throws Exception {
-    Path privatePath = privateKeyPath();
-    Path publicPath = publicKeyPath();
-    if (Files.exists(privatePath) && Files.exists(publicPath)) {
-      return;
-    }
-    Files.createDirectories(privatePath.getParent());
-    KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
-    KeyPair keyPair = generator.generateKeyPair();
-    Files.writeString(privatePath, pem(PRIVATE_BEGIN, PRIVATE_END, keyPair.getPrivate().getEncoded()), StandardCharsets.UTF_8);
-    Files.writeString(publicPath, pem(PUBLIC_BEGIN, PUBLIC_END, keyPair.getPublic().getEncoded()), StandardCharsets.UTF_8);
-  }
-
-  private PrivateKey readPrivateKey() throws Exception {
-    String pem = Files.readString(privateKeyPath(), StandardCharsets.UTF_8)
-        .replace(PRIVATE_BEGIN, "")
-        .replace(PRIVATE_END, "")
-        .replaceAll("\\s+", "");
-    byte[] der = Base64.getDecoder().decode(pem);
-    return KeyFactory.getInstance("Ed25519").generatePrivate(new PKCS8EncodedKeySpec(der));
-  }
-
-  private Path privateKeyPath() {
-    return properties.getDataDir().resolve("update-signing").resolve("private.pem");
-  }
-
-  private Path publicKeyPath() {
-    return properties.getDataDir().resolve("update-signing").resolve("public.pem");
-  }
-
-  private static String pem(String begin, String end, byte[] der) {
-    String body = Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8)).encodeToString(der);
-    return begin + "\n" + body + "\n" + end + "\n";
-  }
+  public void revoked(String reference) { if (reference != null) kms.releaseDependency(KeyManagementService.UPDATER, reference); }
 }

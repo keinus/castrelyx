@@ -12,6 +12,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { SelectInput } from "@/components/shared";
 import type { Attributes, FieldDefinition } from "@/lib/types";
+import { snmpSecurityFields } from "@/lib/adapter-definitions";
+import { SnmpOidPicker } from "./snmp-oid-picker";
 
 function parse(value: any, fallback: any) {
   if (value == null || value === "") return fallback;
@@ -166,24 +168,6 @@ export function EntriesField({
   );
 }
 
-export const snmpSecurityFields = [
-  ["securityName", "Security name"],
-  [
-    "securityLevel",
-    "Security level",
-    ["noAuthNoPriv", "authNoPriv", "authPriv"],
-  ],
-  [
-    "authProtocol",
-    "Authentication protocol",
-    ["MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"],
-  ],
-  ["authPassphrase", "Authentication passphrase"],
-  ["authPassphraseEnv", "Authentication passphrase env"],
-  ["privProtocol", "Privacy protocol", ["DES", "AES128", "AES192", "AES256"]],
-  ["privPassphrase", "Privacy passphrase"],
-  ["privPassphraseEnv", "Privacy passphrase env"],
-] as const;
 export function SnmpCollection({
   field,
   value,
@@ -195,6 +179,8 @@ export function SnmpCollection({
 }) {
   const id = useId(),
     targets = field.path.endsWith("targets"),
+    users = field.path.endsWith("users"),
+    entryLabel = targets ? "target" : users ? "user" : "OID",
     rows: any[] = Array.isArray(value) ? value : [];
   const update = (i: number, key: string, v: any) =>
     onChange(
@@ -209,19 +195,22 @@ export function SnmpCollection({
     );
   return (
     <div className="flex flex-col gap-3">
+      {!targets && !users && (
+        <SnmpOidPicker rows={rows} onAdd={(entry) => onChange([...rows, entry])} />
+      )}
       {rows.map((item, i) => {
         const row: Attributes = typeof item === "string" ? { oid: item } : item;
         return (
           <FieldSet key={i} className="rounded-lg border bg-background p-4">
             <div className="flex items-center justify-between">
               <FieldLegend>
-                {targets ? "Target" : "OID"} {i + 1}
+                {targets ? "Target" : users ? "User" : "OID"} {i + 1}
               </FieldLegend>
               <Button
                 size="icon-sm"
                 type="button"
                 variant="ghost"
-                aria-label={`Remove ${targets ? "target" : "OID"} ${i + 1}`}
+                aria-label={`Remove ${entryLabel} ${i + 1}`}
                 onClick={() => onChange(rows.filter((_, index) => index !== i))}
               >
                 <Trash2 />
@@ -230,7 +219,9 @@ export function SnmpCollection({
             <div className="grid gap-4 sm:grid-cols-2">
               {(targets
                 ? ["name", "host", "port", "version", "community"]
-                : ["name", "oid"]
+                : users
+                  ? ["engineId"]
+                  : ["name", "oid"]
               ).map((key) => (
                 <Field key={key}>
                   <FieldLabel htmlFor={`${id}-${i}-${key}`}>
@@ -242,6 +233,7 @@ export function SnmpCollection({
                         version: "Version",
                         community: "Community",
                         oid: "OID identifier",
+                        engineId: "Sender engine ID (Trap only)",
                       }[key]
                     }
                   </FieldLabel>
@@ -288,8 +280,8 @@ export function SnmpCollection({
                 </Field>
               ))}
             </div>
-            {targets && (
-              <details className="mt-1">
+            {(targets || users) && (
+              <details className="mt-1" open={users || undefined}>
                 <summary className="cursor-pointer text-sm text-muted-foreground">
                   SNMPv3 authentication & privacy
                 </summary>
@@ -337,12 +329,21 @@ export function SnmpCollection({
         onClick={() =>
           onChange([
             ...rows,
-            targets ? { name: "", host: "", port: 161 } : { name: "", oid: "" },
+            targets
+              ? { name: "", host: "", port: 161 }
+              : users
+                ? {
+                    securityName: "",
+                    securityLevel: "authPriv",
+                    authProtocol: "SHA256",
+                    privProtocol: "AES128",
+                  }
+                : { name: "", oid: "" },
           ])
         }
       >
         <Plus data-icon="inline-start" />
-        Add {targets ? "target" : "OID"}
+        Add {entryLabel}
       </Button>
     </div>
   );

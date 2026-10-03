@@ -1,0 +1,128 @@
+[
+  {
+    "error": false,
+    "overflow": false,
+    "route": "keys?tab=grants",
+    "title": "키 관리"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "keys?tab=dependencies",
+    "title": "키 관리"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "approvals",
+    "title": "승인 요청"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "certificates",
+    "title": "인증서"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals",
+    "title": "서비스·에이전트"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals?tab=agents",
+    "title": "서비스·에이전트"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "principals?tab=tokens",
+    "title": "서비스·에이전트"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "tls",
+    "title": "서버 TLS"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases",
+    "title": "업데이트 서명"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases?tab=policy",
+    "title": "업데이트 서명"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "releases?tab=attempts",
+    "title": "업데이트 서명"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "trust",
+    "title": "신뢰 자료"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "audit",
+    "title": "감사 기록"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "health",
+    "title": "운영 상태"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings",
+    "title": "설정·구성"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=lifecycle",
+    "title": "설정·구성"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=identity",
+    "title": "설정·구성"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=backup",
+    "title": "설정·구성"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "settings?tab=integration",
+    "title": "설정·구성"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "reviews",
+    "title": "인증서 요청 검토"
+  },
+  {
+    "error": false,
+    "overflow": false,
+    "route": "account",
+    "title": "내 계정"
+  }
+]

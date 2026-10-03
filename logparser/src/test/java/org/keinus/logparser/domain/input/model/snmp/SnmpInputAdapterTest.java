@@ -1,4 +1,4 @@
-package org.keinus.logparser.domain.input.model;
+package org.keinus.logparser.domain.input.model.snmp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

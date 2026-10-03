@@ -90,15 +90,19 @@ services:
       LOGPARSER_CRYPTO_SALT: ${LOGPARSER_CRYPTO_SALT:-00112233445566778899aabbccddeeff}
       LOGPARSER_KEYSTORE_PASSWORD: ${LOGPARSER_KEYSTORE_PASSWORD:-changeit}
       LOGPARSER_TRUSTSTORE_PASSWORD: ${LOGPARSER_TRUSTSTORE_PASSWORD:-changeit}
+      ROUTER_KEYSTORE_PASSWORD: ${ROUTER_KEYSTORE_PASSWORD:-}
+      ROUTER_TRUSTSTORE_PASSWORD: ${ROUTER_TRUSTSTORE_PASSWORD:-}
       CASTRELSIGN_KEYSTORE_PASSWORD: ${CASTRELSIGN_KEYSTORE_PASSWORD:-changeit}
       CLICKHOUSE_USER: ${MANAGER_CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${MANAGER_CLICKHOUSE_PASSWORD:-change-clickhouse-me}
     volumes:
       - logparser-data:/root/logparser/data
+      - ${ROUTER_CERT_DIR:-./deploy/router-certs}:/etc/logparser/router:ro
       - castrelsign-data:/var/lib/castrelsign:ro
     ports:
       - "8765:8765"
       - "9443:9443"
+      - "6514:6514"
 
   manager:
     build:

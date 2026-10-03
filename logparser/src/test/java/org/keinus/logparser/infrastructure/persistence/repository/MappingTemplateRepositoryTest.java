@@ -38,12 +38,17 @@ class MappingTemplateRepositoryTest {
     @Test
     void shouldSaveAndFindById() {
         MappingTemplate template = template("template-1", "Access");
+        var snmpRule = new org.keinus.logparser.domain.model.mapping.SubTableRule();
+        snmpRule.setTargetSubTable("event_snmp");
+        snmpRule.setMappings(List.of(new FieldMapping("/metrics/device.name~1~0/value", "metric_device", null)));
+        template.getConfig().setSubTableRules(List.of(snmpRule));
 
         repository.save(template);
 
         assertThat(repository.findById("template-1")).isPresent();
         MappingTemplate found = repository.findById("template-1").orElseThrow();
         assertThat(found.getName()).isEqualTo("Access");
+        assertThat(found.getConfig().getSubTableRules()).isEqualTo(template.getConfig().getSubTableRules());
         assertThat(found.getConfig().getCommonMappings())
                 .extracting(FieldMapping::getTargetField)
                 .containsExactly("event_type");

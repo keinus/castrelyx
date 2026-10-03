@@ -14,6 +14,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ServerCertificateRenewalServiceTest {
+  @org.junit.jupiter.api.AfterEach
+  void closeKeyStore() throws Exception {
+    org.castrelyx.castrelsign.kms.KeyManagementService.closeAt(tempDir);
+  }
   @TempDir
   Path tempDir;
 

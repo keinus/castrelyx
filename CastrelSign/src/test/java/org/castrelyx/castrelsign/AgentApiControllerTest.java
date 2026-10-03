@@ -37,7 +37,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentApiControllerTest {
+  @org.junit.jupiter.api.AfterAll
+  static void closeKeyStore() throws Exception {
+    org.castrelyx.castrelsign.kms.KeyManagementService.closeAt(tempDir);
+  }
   private static final String CERTIFICATE_ATTRIBUTE = "jakarta.servlet.request.X509Certificate";
   private static final ObjectMapper MAPPER = new ObjectMapper();
 

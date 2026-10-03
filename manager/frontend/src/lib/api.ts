@@ -1,5 +1,11 @@
 import type {
+  AlertRule,
+  SnmpTarget,
+  SnmpTargetInput,
+  IntegrationName,
+  IntegrationInput,
   AgentLogEvent,
+  AssetLogPage,
   AlertRow,
   AgentRelease,
   AgentUpdateAttempt,
@@ -100,7 +106,19 @@ export const api = {
     }
     return request<AgentLogEvent[]>(`/api/agent/logs?${params.toString()}`);
   },
+  assetLogs: (assetUid: string, range = '1h', severity = 'ALL', family = 'ALL', query = '', offset = 0, limit = 120) => {
+    const params = new URLSearchParams({ range, severity, family, query, offset: String(offset), limit: String(limit) });
+    return request<AssetLogPage>(`/api/assets/by-uid/${encodeURIComponent(assetUid)}/logs?${params.toString()}`);
+  },
   snmpDashboard: () => request<SnmpDashboard>('/api/dashboards/snmp'),
+  snmpTargets: () => request<SnmpTarget[]>('/api/snmp/targets'),
+  createSnmpTarget: (payload: SnmpTargetInput) => request<SnmpTarget>('/api/snmp/targets', { method: 'POST', body: JSON.stringify(payload) }),
+  setSnmpTargetEnabled: (id: number, enabled: boolean) => request<SnmpTarget>(`/api/snmp/targets/${id}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' }),
+  integration: (name: IntegrationName) => request<IntegrationConfig>(`/api/integrations/${name}`),
+  updateIntegration: (name: IntegrationName, payload: IntegrationInput) => request<IntegrationConfig>(`/api/integrations/${name}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  testIntegration: (name: IntegrationName) => request<{ ok: boolean }>(`/api/integrations/${name}/test`, { method: 'POST' }),
+  alertRules: () => request<AlertRule[]>('/api/alert-rules'),
+  updateAlertRule: (rule: AlertRule) => request<AlertRule>(`/api/alert-rules/${rule.id}`, { method: 'PUT', body: JSON.stringify(rule) }),
   trafficInterfaces: (range = '1h') =>
     request<InterfaceTraffic[]>(`/api/traffic/interfaces?range=${encodeURIComponent(range)}`),
   assetTrafficInterfaces: (assetId: number, range = '1h') =>

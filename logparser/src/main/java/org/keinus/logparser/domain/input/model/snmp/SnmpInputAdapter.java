@@ -1,4 +1,6 @@
-package org.keinus.logparser.domain.input.model;
+package org.keinus.logparser.domain.input.model.snmp;
+
+import org.keinus.logparser.domain.input.model.InputAdapter;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -17,35 +19,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
 import org.keinus.logparser.domain.model.LogEvent;
-import org.snmp4j.CommunityTarget;
-import org.snmp4j.PDU;
-import org.snmp4j.ScopedPDU;
-import org.snmp4j.Snmp;
-import org.snmp4j.UserTarget;
-import org.snmp4j.event.ResponseEvent;
-import org.snmp4j.mp.MPv3;
-import org.snmp4j.mp.SnmpConstants;
-import org.snmp4j.security.AuthHMAC128SHA224;
-import org.snmp4j.security.AuthHMAC192SHA256;
-import org.snmp4j.security.AuthHMAC256SHA384;
-import org.snmp4j.security.AuthHMAC384SHA512;
-import org.snmp4j.security.AuthMD5;
-import org.snmp4j.security.AuthSHA;
-import org.snmp4j.security.PrivAES128;
-import org.snmp4j.security.PrivAES192;
-import org.snmp4j.security.PrivAES256;
-import org.snmp4j.security.PrivDES;
-import org.snmp4j.security.SecurityLevel;
-import org.snmp4j.security.SecurityModel;
-import org.snmp4j.security.SecurityModels;
-import org.snmp4j.security.SecurityProtocols;
-import org.snmp4j.security.USM;
-import org.snmp4j.security.UsmUser;
-import org.snmp4j.smi.OID;
-import org.snmp4j.smi.OctetString;
-import org.snmp4j.smi.UdpAddress;
-import org.snmp4j.smi.VariableBinding;
-import org.snmp4j.transport.DefaultUdpTransportMapping;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -73,6 +46,10 @@ public class SnmpInputAdapter extends InputAdapter {
         this(config, null, true);
     }
 
+    public static void validateConfig(InputAdapterConfig config) throws IOException {
+        CollectorConfig.from(config);
+    }
+
     SnmpInputAdapter(InputAdapterConfig config, SnmpClient snmpClient) throws IOException {
         this(config, snmpClient, false);
     }
@@ -80,7 +57,7 @@ public class SnmpInputAdapter extends InputAdapter {
     private SnmpInputAdapter(InputAdapterConfig config, SnmpClient snmpClient, boolean ownsClient) throws IOException {
         super(config);
         this.collectorConfig = CollectorConfig.from(config);
-        this.snmpClient = snmpClient != null ? snmpClient : new Snmp4jClient();
+        this.snmpClient = snmpClient != null ? snmpClient : new SnmpPollClient(collectorConfig.targets());
         this.ownsClient = ownsClient;
         this.eventQueue = new LinkedBlockingQueue<>(collectorConfig.queueSize());
         this.pollExecutor = Executors.newFixedThreadPool(collectorConfig.workerThreads(), runnable -> {
@@ -148,7 +125,9 @@ public class SnmpInputAdapter extends InputAdapter {
 
     private Map<String, Object> buildSuccessPayload(SnmpTarget target, Instant pollTime, Map<String, Object> metrics) {
         Map<String, Object> payload = buildBasePayload(target, pollTime);
-        payload.put("poll_status", "success");
+        long failures = metrics.values().stream().filter(value -> value instanceof Map<?, ?> metric
+                && metric.containsKey("status") && !"success".equals(metric.get("status"))).count();
+        payload.put("poll_status", failures == 0 ? "success" : failures == metrics.size() ? "error" : "partial");
         payload.put("metrics", metrics);
         return payload;
     }
@@ -163,6 +142,8 @@ public class SnmpInputAdapter extends InputAdapter {
     private Map<String, Object> buildBasePayload(SnmpTarget target, Instant pollTime) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("protocol", "snmp");
+        payload.put("operation", "poll");
+        payload.put("observed_at", pollTime.toString());
         payload.put("poll_time", pollTime.toString());
         payload.put("target_name", target.name());
         payload.put("target_host", target.host());
@@ -189,7 +170,11 @@ public class SnmpInputAdapter extends InputAdapter {
             return;
         }
 
-        pollExecutor.shutdownNow();
+        try {
+            if (ownsClient) snmpClient.close();
+        } finally {
+            pollExecutor.shutdownNow();
+        }
         try {
             if (!pollExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 log.warn("SNMP poll executor did not terminate within timeout");
@@ -198,9 +183,6 @@ public class SnmpInputAdapter extends InputAdapter {
             Thread.currentThread().interrupt();
         }
         eventQueue.clear();
-        if (ownsClient) {
-            snmpClient.close();
-        }
     }
 
     @FunctionalInterface
@@ -245,7 +227,11 @@ public class SnmpInputAdapter extends InputAdapter {
             int queueSize
     ) {
         static CollectorConfig from(InputAdapterConfig config) throws IOException {
+            if (config.getConfigParams() == null || config.getConfigParams().isBlank()) {
+                throw new IllegalArgumentException("SnmpInputAdapter requires configParams");
+            }
             JsonNode root = OBJECT_MAPPER.readTree(config.getConfigParams());
+            if (root == null || !root.isObject()) throw new IllegalArgumentException("SNMP configParams must be an object");
             String defaultCommunity = text(root, "community", "public");
             String defaultVersion = text(root, "version", "2c");
 
@@ -284,6 +270,10 @@ public class SnmpInputAdapter extends InputAdapter {
                 if (host == null || host.isBlank()) {
                     throw new IllegalArgumentException("SNMP target host is required");
                 }
+                int version = SnmpSecurity.version(text(targetNode, "version", defaultVersion));
+                long port = number(targetNode, "port", DEFAULT_PORT);
+                if (port < 1 || port > 65535) throw new IllegalArgumentException("SNMP target port must be 1..65535");
+                if (version == org.snmp4j.mp.SnmpConstants.version3) SnmpSecurity.validate(targetNode, root);
                 targets.add(new SnmpTarget(
                         text(targetNode, "name", host),
                         host,
@@ -313,6 +303,7 @@ public class SnmpInputAdapter extends InputAdapter {
             for (JsonNode oidNode : oidNodes) {
                 if (oidNode.isTextual()) {
                     String oid = oidNode.asText();
+                    validateOid(oid);
                     oids.add(new SnmpOid(oid, oid));
                     continue;
                 }
@@ -321,9 +312,19 @@ public class SnmpInputAdapter extends InputAdapter {
                 if (oid == null || oid.isBlank()) {
                     throw new IllegalArgumentException("SNMP OID value is required");
                 }
+                validateOid(oid);
                 oids.add(new SnmpOid(text(oidNode, "name", oid), oid));
             }
+            if (oids.stream().map(SnmpOid::name).distinct().count() != oids.size()) {
+                throw new IllegalArgumentException("SNMP OID names must be unique");
+            }
             return oids;
+        }
+
+        private static void validateOid(String value) {
+            if (!value.matches("\\.?[0-9]+(?:\\.[0-9]+)+") || !new org.snmp4j.smi.OID(value).isValid()) {
+                throw new IllegalArgumentException("SNMP OID must be a valid numeric OID: " + value);
+            }
         }
 
         private static String text(JsonNode node, String fieldName, String defaultValue) {
@@ -336,11 +337,15 @@ public class SnmpInputAdapter extends InputAdapter {
         }
 
         private static String readSecret(JsonNode targetNode, JsonNode root, String directField, String envField) {
-            String direct = text(targetNode, directField, text(root, directField, null));
+            String direct = text(targetNode, directField, null);
+            String envName = text(targetNode, envField, null);
+            if (direct == null && envName == null) {
+                direct = text(root, directField, null);
+                envName = text(root, envField, null);
+            }
             if (direct != null && !direct.isBlank()) {
                 return direct;
             }
-            String envName = text(targetNode, envField, text(root, envField, null));
             if (envName == null || envName.isBlank()) {
                 return null;
             }
@@ -357,161 +362,4 @@ public class SnmpInputAdapter extends InputAdapter {
         }
     }
 
-    private static final class Snmp4jClient implements SnmpClient {
-        private final DefaultUdpTransportMapping transport;
-        private final Snmp snmp;
-        private final USM usm;
-
-        private Snmp4jClient() throws IOException {
-            this.transport = new DefaultUdpTransportMapping();
-            this.snmp = new Snmp(transport);
-            SecurityProtocols.getInstance().addDefaultProtocols();
-            USM configuredUsm = snmp.getUSM();
-            if (configuredUsm == null) {
-                configuredUsm = new USM(
-                        SecurityProtocols.getInstance(),
-                        new OctetString(MPv3.createLocalEngineID()),
-                        0
-                );
-                SecurityModels.getInstance().addSecurityModel(configuredUsm);
-            }
-            this.usm = configuredUsm;
-            this.transport.listen();
-        }
-
-        @Override
-        public Map<String, Object> get(SnmpTarget target, List<SnmpOid> oids, int timeoutMs, int retries) throws IOException {
-            PDU pdu = target.isVersion3() ? new ScopedPDU() : new PDU();
-            pdu.setType(PDU.GET);
-            for (SnmpOid oid : oids) {
-                pdu.add(new VariableBinding(new OID(oid.oid())));
-            }
-
-            ResponseEvent<UdpAddress> response = target.isVersion3()
-                    ? sendVersion3(target, pdu, timeoutMs, retries)
-                    : sendCommunity(target, pdu, timeoutMs, retries);
-            PDU responsePdu = response == null ? null : response.getResponse();
-            if (responsePdu == null) {
-                throw new IOException("No SNMP response from " + target.host());
-            }
-            if (responsePdu.getErrorStatus() != PDU.noError) {
-                throw new IOException(responsePdu.getErrorStatusText());
-            }
-
-            Map<String, Object> metrics = new LinkedHashMap<>();
-            for (int i = 0; i < responsePdu.size(); i++) {
-                VariableBinding binding = responsePdu.get(i);
-                SnmpOid requestedOid = oids.get(i);
-                metrics.put(requestedOid.name(), binding.getVariable().toString());
-            }
-            return metrics;
-        }
-
-        private ResponseEvent<UdpAddress> sendCommunity(
-                SnmpTarget target,
-                PDU pdu,
-                int timeoutMs,
-                int retries
-        ) throws IOException {
-            CommunityTarget<UdpAddress> communityTarget = new CommunityTarget<>();
-            communityTarget.setCommunity(new OctetString(target.community()));
-            communityTarget.setAddress(new UdpAddress(target.host() + "/" + target.port()));
-            communityTarget.setVersion(toSnmpVersion(target.version()));
-            communityTarget.setTimeout(timeoutMs);
-            communityTarget.setRetries(retries);
-
-            return snmp.send(pdu, communityTarget);
-        }
-
-        private ResponseEvent<UdpAddress> sendVersion3(
-                SnmpTarget target,
-                PDU pdu,
-                int timeoutMs,
-                int retries
-        ) throws IOException {
-            OctetString securityName = new OctetString(required(target.securityName(), "securityName"));
-            int securityLevel = securityLevel(target.securityLevel());
-            OID authProtocol = securityLevel >= SecurityLevel.AUTH_NOPRIV ? authProtocolOid(target.authProtocol()) : null;
-            OID privProtocol = securityLevel == SecurityLevel.AUTH_PRIV ? privProtocolOid(target.privProtocol()) : null;
-            OctetString authPassphrase = securityLevel >= SecurityLevel.AUTH_NOPRIV
-                    ? passphrase(target.authPassphrase(), "authPassphrase")
-                    : null;
-            OctetString privPassphrase = securityLevel == SecurityLevel.AUTH_PRIV
-                    ? passphrase(target.privPassphrase(), "privPassphrase")
-                    : null;
-            UsmUser user = new UsmUser(securityName, authProtocol, authPassphrase, privProtocol, privPassphrase);
-            usm.addUser(securityName, user);
-
-            UserTarget<UdpAddress> userTarget = new UserTarget<>();
-            userTarget.setAddress(new UdpAddress(target.host() + "/" + target.port()));
-            userTarget.setVersion(SnmpConstants.version3);
-            userTarget.setSecurityName(securityName);
-            userTarget.setSecurityModel(SecurityModel.SECURITY_MODEL_USM);
-            userTarget.setSecurityLevel(securityLevel);
-            userTarget.setTimeout(timeoutMs);
-            userTarget.setRetries(retries);
-
-            return snmp.send(pdu, userTarget);
-        }
-
-        private int toSnmpVersion(String version) throws IOException {
-            String normalized = version == null ? "2c" : version.trim().toLowerCase();
-            return switch (normalized) {
-                case "1", "v1" -> SnmpConstants.version1;
-                case "2", "2c", "v2c" -> SnmpConstants.version2c;
-                case "3", "v3" -> SnmpConstants.version3;
-                default -> throw new IOException("Unsupported SNMP version: " + version);
-            };
-        }
-
-        private int securityLevel(String securityLevel) throws IOException {
-            String normalized = securityLevel == null ? "authpriv" : securityLevel.trim().toLowerCase();
-            return switch (normalized) {
-                case "noauthnopriv", "no_auth_no_priv" -> SecurityLevel.NOAUTH_NOPRIV;
-                case "authnopriv", "auth_no_priv" -> SecurityLevel.AUTH_NOPRIV;
-                case "authpriv", "auth_priv" -> SecurityLevel.AUTH_PRIV;
-                default -> throw new IOException("Unsupported SNMPv3 securityLevel: " + securityLevel);
-            };
-        }
-
-        private OID authProtocolOid(String protocol) throws IOException {
-            String normalized = protocol == null ? "sha256" : protocol.trim().toLowerCase();
-            return switch (normalized) {
-                case "md5" -> AuthMD5.ID;
-                case "sha", "sha1" -> AuthSHA.ID;
-                case "sha224" -> AuthHMAC128SHA224.ID;
-                case "sha256" -> AuthHMAC192SHA256.ID;
-                case "sha384" -> AuthHMAC256SHA384.ID;
-                case "sha512" -> AuthHMAC384SHA512.ID;
-                default -> throw new IOException("Unsupported SNMPv3 authProtocol: " + protocol);
-            };
-        }
-
-        private OID privProtocolOid(String protocol) throws IOException {
-            String normalized = protocol == null ? "aes128" : protocol.trim().toLowerCase();
-            return switch (normalized) {
-                case "des" -> PrivDES.ID;
-                case "aes", "aes128" -> PrivAES128.ID;
-                case "aes192" -> PrivAES192.ID;
-                case "aes256" -> PrivAES256.ID;
-                default -> throw new IOException("Unsupported SNMPv3 privProtocol: " + protocol);
-            };
-        }
-
-        private OctetString passphrase(String value, String fieldName) throws IOException {
-            return new OctetString(required(value, fieldName));
-        }
-
-        private String required(String value, String fieldName) throws IOException {
-            if (value == null || value.isBlank()) {
-                throw new IOException("SNMPv3 " + fieldName + " is required");
-            }
-            return value;
-        }
-
-        @Override
-        public void close() throws IOException {
-            snmp.close();
-        }
-    }
 }

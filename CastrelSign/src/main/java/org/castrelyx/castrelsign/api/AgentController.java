@@ -35,6 +35,7 @@ public class AgentController {
   }
 
   @PostMapping("/enroll")
+  @org.springframework.transaction.annotation.Transactional
   public EnrollmentResponse enroll(@RequestHeader(name = "Authorization", required = false) String authorization,
       @RequestBody EnrollmentRequest request) {
     validate(request);
@@ -47,6 +48,7 @@ public class AgentController {
   }
 
   @PostMapping("/renew")
+  @org.springframework.transaction.annotation.Transactional
   public EnrollmentResponse renew(HttpServletRequest servletRequest, @RequestBody EnrollmentRequest request) {
     var identity = certificateService.requireClientIdentity(servletRequest);
     validate(request);

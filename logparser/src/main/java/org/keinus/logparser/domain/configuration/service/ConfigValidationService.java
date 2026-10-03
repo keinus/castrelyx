@@ -1,5 +1,9 @@
 package org.keinus.logparser.domain.configuration.service;
 
+import org.keinus.logparser.domain.configuration.model.InputAdapterConfig;
+import org.keinus.logparser.domain.input.model.snmp.SnmpInputAdapter;
+import org.keinus.logparser.domain.input.model.snmp.SnmpNotificationInputAdapter;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -61,7 +65,8 @@ public class ConfigValidationService {
                     errors.add("Path is required for File");
                 }
             }
-            case "snmpinputadapter" -> validateSnmpConfigParams(entity, errors);
+            case "snmp", "snmpinputadapter" -> validateSnmpConfigParams(entity, errors);
+            case "snmp_notification", "snmpnotificationinputadapter" -> validateSnmpNotificationConfig(entity, errors);
             case "rabbitmq", "rabbitmqinputadapter" -> {
                 validateRabbitMqConfigParams(entity, errors);
                 validateRabbitMqTlsConfigParams(entity, errors, false);
@@ -80,7 +85,36 @@ public class ConfigValidationService {
             }
         }
 
+        if (Set.of("tcp", "tcpinputadapter", "tls_tcp", "tlstcp", "tlstcpinputadapter").contains(type)) {
+            try {
+                InputAdapterConfig config = snmpConfig(entity);
+                config.setMessagetype(Boolean.TRUE.equals(entity.getEnabled()) ? entity.getMessagetype() : "");
+                org.keinus.logparser.domain.input.model.TcpInputSettings.from(config);
+            } catch (Exception e) { errors.add(e.getMessage()); }
+        }
+
         return new ValidationResult(errors.isEmpty(), errors);
+    }
+
+    private void validateSnmpNotificationConfig(InputAdapterEntity entity, List<String> errors) {
+        try {
+            SnmpNotificationInputAdapter.validateConfig(snmpConfig(entity));
+        } catch (Exception e) {
+            errors.add(e.getMessage() == null ? "Invalid SNMP notification configuration" : e.getMessage());
+        }
+    }
+
+    private InputAdapterConfig snmpConfig(InputAdapterEntity entity) {
+        var config = new InputAdapterConfig();
+        config.setId(entity.getId());
+        config.setType(entity.getType());
+        config.setHost(entity.getHost());
+        config.setPort(entity.getPort());
+        config.setConfigParams(entity.getConfigParams());
+        config.setQueueSize(entity.getQueueSize());
+        config.setWorkerThreads(entity.getWorkerThreads());
+        config.setTimeoutMs(entity.getTimeoutMs());
+        return config;
     }
 
     private void validateSnmpConfigParams(InputAdapterEntity entity, List<String> errors) {
@@ -99,6 +133,9 @@ public class ConfigValidationService {
                 errors.add("configParams.oids must contain at least one OID");
             }
             validateSnmpV3Targets(root, errors);
+            if (errors.isEmpty()) SnmpInputAdapter.validateConfig(snmpConfig(entity));
+        } catch (IllegalArgumentException e) {
+            errors.add(e.getMessage());
         } catch (Exception e) {
             errors.add("configParams must be valid JSON for SnmpInputAdapter");
         }

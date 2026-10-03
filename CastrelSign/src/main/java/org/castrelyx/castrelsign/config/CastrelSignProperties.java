@@ -11,6 +11,12 @@ import jakarta.validation.constraints.NotBlank;
 @Validated
 @ConfigurationProperties(prefix = "castrelsign")
 public class CastrelSignProperties {
+  private org.castrelyx.castrelsign.kms.KmsSettings kms = new org.castrelyx.castrelsign.kms.KmsSettings();
+  public org.castrelyx.castrelsign.kms.KmsSettings getKms() { return kms; }
+  public void setKms(org.castrelyx.castrelsign.kms.KmsSettings value) { kms = value; }
+  private Path portalUsersFile;
+  public Path getPortalUsersFile() { return portalUsersFile; }
+  public void setPortalUsersFile(Path value) { portalUsersFile = value; }
   private Path dataDir = Path.of(System.getProperty("user.home"), "castrelsign");
 
   @NotBlank
@@ -18,7 +24,6 @@ public class CastrelSignProperties {
 
   private String enrollmentToken;
 
-  @NotBlank
   private String adminToken;
 
   @Min(1)

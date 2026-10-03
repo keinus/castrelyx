@@ -35,3 +35,26 @@ dependencies {
 tasks.named('test') {
   useJUnitPlatform()
 }
+
+def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? ['cmd', '/c', 'npm'] : ['npm']
+tasks.register('frontendInstall', Exec) {
+  workingDir 'frontend'
+  commandLine npmCommand + ['ci', '--no-audit', '--no-fund']
+  inputs.files('frontend/package.json', 'frontend/package-lock.json')
+  // Hash the installation marker, not every vendor font and source file.
+  outputs.file('frontend/node_modules/.castrelsign-install-stamp')
+  outputs.upToDateWhen { file('frontend/node_modules/vite/bin/vite.js').exists() }
+  doLast { file('frontend/node_modules/.castrelsign-install-stamp').text = 'installed' }
+}
+tasks.register('frontendBuild', Exec) {
+  dependsOn 'frontendInstall'
+  workingDir 'frontend'
+  commandLine npmCommand + ['run', 'build']
+  inputs.dir('frontend/src')
+  inputs.files('frontend/index.html', 'frontend/vite.config.js', 'frontend/package-lock.json')
+  outputs.dir('frontend/dist')
+}
+tasks.named('processResources') {
+  dependsOn 'frontendBuild'
+  from('frontend/dist') { into 'static/console' }
+}

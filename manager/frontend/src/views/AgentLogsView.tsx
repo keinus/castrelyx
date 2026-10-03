@@ -1,9 +1,11 @@
 import { FileText, RefreshCw, Search, Server } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { MetricCards } from '../components/MetricCards';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
-import type { AgentLogEvent } from '../lib/types';
+import type { AgentLogEvent, Asset } from '../lib/types';
+import { useRemoteData } from '../lib/useRemoteData';
+import { ViewFeedback } from '../components/ViewFeedback';
 
 const rangeOptions = [
   ['15m', '15 min'],
@@ -21,35 +23,19 @@ const severityOptions = [
   ['CRITICAL', 'Critical']
 ] as const;
 
-export function AgentLogsView() {
+export function AgentLogsView({ assets = [] }: { assets?: Asset[] }) {
   const [range, setRange] = useState('1h');
   const [severity, setSeverity] = useState('ALL');
-  const [logs, setLogs] = useState<AgentLogEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [selectedAsset, setSelectedAsset] = useState('ALL');
 
-  async function load(selectedRange = range, selectedSeverity = severity) {
-    setLoading(true);
-    setError('');
-    try {
-      setLogs(await api.agentLogs(selectedRange, selectedSeverity, 300));
-    } catch {
-      setLogs([]);
-      setError('Agent logs를 불러오지 못했습니다.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void load(range, severity);
-  }, [range, severity]);
+  const fetchLogs = useCallback(() => api.agentLogs(range, severity, 300, selectedAsset), [range, severity, selectedAsset]);
+  const { data, loading, error, reload: load } = useRemoteData(fetchLogs, 'Agent logs를 불러오지 못했습니다.');
+  const logs = data ?? [];
 
   const assetOptions = useMemo(
-    () => [...new Set(logs.map((log) => log.assetUid).filter((asset): asset is string => Boolean(asset)))].sort(),
-    [logs]
+    () => [...new Set([...assets.map((asset) => asset.assetUid), ...logs.map((log) => log.assetUid), ...(selectedAsset === 'ALL' ? [] : [selectedAsset])].filter((asset): asset is string => Boolean(asset)))].sort(),
+    [assets, logs, selectedAsset]
   );
   const visibleLogs = useMemo(
     () => filterLogs(logs, selectedAsset, query),
@@ -60,6 +46,7 @@ export function AgentLogsView() {
   return (
     <ViewFrame
       title="Agent Logs"
+      subtitle="기간·심각도·자산으로 로그를 조회하고, 수집된 메시지에서 필요한 근거를 찾습니다."
       actions={(
         <>
           <select aria-label="Log range" value={range} onChange={(event) => setRange(event.target.value)}>
@@ -72,14 +59,13 @@ export function AgentLogsView() {
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
-          <button className="icon-button" aria-label="Refresh agent logs" onClick={() => void load()} type="button">
+          <button className="icon-button" aria-label="Refresh agent logs" disabled={loading} onClick={() => void load()} type="button">
             <RefreshCw size={18} />
           </button>
         </>
       )}
     >
-      {error && <div className="notice error">{error}</div>}
-      {loading && <div className="notice">Agent logs를 갱신하는 중입니다.</div>}
+      <ViewFeedback loading={loading} error={error} hasData={!!data} />
 
       <div className="agent-log-control-bar">
         <label className="traffic-filter-field">
@@ -104,19 +90,20 @@ export function AgentLogsView() {
 
       <MetricCards
         items={[
-          ['Visible logs', String(visibleLogs.length)],
-          ['Warning+', String(summary.warningOrHigher)],
-          ['Auth', String(summary.auth)],
-          ['Assets', String(summary.assets)]
+          ['Visible logs', data ? String(visibleLogs.length) : '—'],
+          ['Warning+', data ? String(summary.warningOrHigher) : '—'],
+          ['Auth', data ? String(summary.auth) : '—'],
+          ['Assets', data ? String(summary.assets) : '—']
         ]}
       />
 
       <section className="data-panel">
         <div className="panel-heading">
           <h3>Collected logs</h3>
-          <span>{logs.length} loaded</span>
+          <span>{data ? `${logs.length} loaded · 최대 300건` : '미확인'}</span>
         </div>
         <AgentLogTable logs={visibleLogs} loading={loading} />
+        <p className="cc-help">문자 검색은 현재 조회된 로그에 적용됩니다. 더 오래된 로그는 기간·자산 필터로 범위를 조정하세요.</p>
       </section>
     </ViewFrame>
   );
@@ -141,7 +128,7 @@ function AgentLogTable({ logs, loading }: { logs: AgentLogEvent[]; loading: bool
             <tr key={`${log.assetUid}-${log.eventType}-${log.observedAt}-${log.dedupKey ?? log.message}`}>
               <td>{formatDate(log.observedAt)}</td>
               <td>{log.assetUid ?? log.sourceId ?? '-'}</td>
-              <td><span className={`badge ${severityClass(log.severity)}`}>{log.severity ?? 'INFO'}</span></td>
+              <td><span className={`badge ${severityClass(log.severity)}`}>{log.severity ?? '미제공'}</span></td>
               <td>
                 <div className="agent-log-meta">
                   <strong>{log.eventType ?? '-'}</strong>

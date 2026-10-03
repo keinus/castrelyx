@@ -43,6 +43,18 @@ public class LogEvent implements Serializable {
     @Getter
     private String sourceHost;
 
+    @Getter @Setter @JsonIgnore
+    private transient String authenticatedSourceId;
+    @Getter @Setter @JsonIgnore
+    private transient String authenticatedAssetUid;
+    @Setter @JsonIgnore
+    private transient Runnable storedCallback;
+    @Setter @JsonIgnore
+    private transient java.util.function.Consumer<String> quarantineCallback;
+
+    public void acknowledgeStored() { if (storedCallback != null) storedCallback.run(); }
+    public void quarantine(String reason) { if (quarantineCallback != null) quarantineCallback.accept(reason); }
+
     // === Raw Data ===
     @Getter
     @JsonIgnore  // 출력 시 제외 (origin_text로 별도 처리)

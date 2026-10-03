@@ -8,6 +8,7 @@ Logparser는 Java 21과 Spring Boot 기반 로그 처리 파이프라인입니�
 
 - `application/pipeline`: `InputAdapter`에서 온 `LogEvent`를 dispatcher, parser, transform, structured mapping, output 단계로 연결합니다.
 - `application/service`: Live Tail, 문서 제공, thread monitoring 같은 애플리케이션 서비스를 둡니다.
+- `domain/input/model/snmp`: SNMP polling, Trap/Inform, USM session과 engine 상태 구현입니다.
 - `domain/input`: 입력 어댑터 모델입니다. File, TCP, TLS TCP, UDP, HTTP, HTTPS, Kafka, SNMP, RabbitMQ, TLS RabbitMQ, TCP mTLS gzip, Fake 입력이 있습니다.
 - `domain/output`: 출력 어댑터 모델입니다. Console, TCP, HTTP, Kafka, OpenSearch, RabbitMQ, MariaDB, ClickHouse, Benchmark 출력이 있습니다.
 - `domain/parse`: JSON, Grok, Regex, RFC3164, RFC5424, HTTP parser가 있습니다.
@@ -79,6 +80,7 @@ $env:JAVA_HOME='C:\Path\To\Java21'
 | `HttpsInputAdapter` | `https` |
 | `KafkaInputAdapter` | `kafka` |
 | `SnmpInputAdapter` | `snmp` |
+| `SnmpNotificationInputAdapter` | `snmp_notification` |
 | `RabbitMqInputAdapter` | `rabbitmq` |
 | `TlsRabbitMqInputAdapter` | `tls_rabbitmq`, `tlsrabbitmq` |
 | `TcpMtlsGzipInputAdapter` | `tcp_mtls_gzip` |

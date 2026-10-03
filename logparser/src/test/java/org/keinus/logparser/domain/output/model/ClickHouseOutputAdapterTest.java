@@ -25,6 +25,104 @@ class ClickHouseOutputAdapterTest {
     @TempDir Path tempDir;
 
     @Test
+    void writesCommonHostMetricsForPlainAndStructuredSnmpWithoutDuplicatingRawOidMetrics() throws Exception {
+        List<CapturedRequest> requests = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> handle(exchange, requests));
+        server.start();
+        try {
+            var config = Map.of("configParams", """
+                    {"endpointUrl":"http://127.0.0.1:%d","tableName":"snmp_raw","batchSize":10,
+                    "flushIntervalMs":60000,"autoCreateSchema":false,"writeTelemetryTables":true}
+                    """.formatted(server.getAddress().getPort()));
+            var payload = Map.of("protocol", "snmp", "operation", "poll", "target_host", "192.0.2.22",
+                    "observed_at", "2026-10-04T00:00:00Z", "metrics", Map.of(
+                            "renamedTotal", Map.of("oid", "1.3.6.1.4.1.2021.4.5.0", "value", 1000),
+                            "renamedAvailable", Map.of("oid", "1.3.6.1.4.1.2021.4.27.0", "value", "300"),
+                            "invalid", Map.of("value", "NaN")));
+            try (var output = new ClickHouseOutputAdapter(config)) {
+                LogEvent plain = new LogEvent(OBJECT_MAPPER.writeValueAsString(payload), "192.0.2.22", "snmp");
+                assertTrue(new org.keinus.logparser.domain.parse.model.JsonParser().parse(plain));
+                output.send(plain);
+                LogEvent structured = new LogEvent("{}", "192.0.2.22", "snmp");
+                structured.setField("subDomainType", "event_snmp");
+                structured.setField("subFields", payload);
+                output.send(structured);
+            }
+            String body = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
+            assertFalse(body.contains("snmp.renamed"));
+            assertFalse(body.contains("NaN"));
+            var rows = body.lines().map(line -> {
+                try { return OBJECT_MAPPER.readTree(line); } catch (Exception e) { throw new RuntimeException(e); }
+            }).toList();
+            assertEquals(6, rows.size());
+            assertTrue(rows.stream().allMatch(row -> row.path("source_type").asText().equals("SNMP")));
+            var memory = rows.stream().filter(row -> row.path("metric_name").asText().equals("memory.usage")).toList();
+            assertEquals(2, memory.size());
+            assertEquals(70, memory.getFirst().path("metric_value").asDouble());
+            assertEquals("percent", memory.getFirst().path("unit").asText());
+            assertTrue(requestContaining(requests, "INSERT+INTO+default.snmp_raw").body().contains("renamedAvailable"));
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    void writesSnmpPollMetricsAndNotificationsToTelemetryTables() throws Exception {
+        List<CapturedRequest> requests = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> handle(exchange, requests));
+        server.start();
+        try {
+            var config = Map.of("configParams", """
+                    {"endpointUrl":"http://127.0.0.1:%d","tableName":"snmp_raw","batchSize":10,
+                    "flushIntervalMs":60000,"autoCreateSchema":false,"writeTelemetryTables":true}
+                    """.formatted(server.getAddress().getPort()));
+            try (var output = new ClickHouseOutputAdapter(config)) {
+                for (String operation : List.of("poll", "trap", "inform")) {
+                    Map<String, Object> payload = Map.of("protocol", "snmp", "operation", operation,
+                            "target_host", "192.0.2.1", "observed_at", "2026-09-03T00:00:00Z",
+                            "metrics", operation.equals("poll") ? Map.of("ifInOctets", Map.of("value", 12345, "syntax", "Counter32")) : Map.of(),
+                            "trap_oid", "1.3.6.1.6.3.1.1.5.3");
+                    LogEvent event = new LogEvent(OBJECT_MAPPER.writeValueAsString(payload), "192.0.2.1", "snmp");
+                    assertTrue(new org.keinus.logparser.domain.parse.model.JsonParser().parse(event));
+                    output.send(event);
+                }
+            }
+            String metricBody = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
+            assertTrue(metricBody.contains("host.network.rx_bytes"));
+            assertTrue(metricBody.contains("12345"));
+            String events = requestContaining(requests, "INSERT+INTO+default.manager_events").body();
+            assertTrue(events.contains("snmp.trap"));
+            assertTrue(events.contains("snmp.inform"));
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    void writesMetricsAfterApplyingAnSnmpMibStructuredTemplate() throws Exception {
+        List<CapturedRequest> requests = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> handle(exchange, requests));
+        server.start();
+        try {
+            var config = Map.of("configParams", """
+                    {"endpointUrl":"http://127.0.0.1:%d","tableName":"snmp_raw","batchSize":10,
+                    "flushIntervalMs":60000,"autoCreateSchema":false,"writeTelemetryTables":true}
+                    """.formatted(server.getAddress().getPort()));
+            var event = new LogEvent("{}", "192.0.2.10", "snmp");
+            event.setField("common", Map.of("eventCategory", "snmp"));
+            event.setField("subDomainType", "event_snmp");
+            event.setField("subFields", Map.of("protocol", "snmp", "operation", "poll",
+                    "target_host", "192.0.2.10", "observed_at", "2026-09-04T00:00:00Z",
+                    "metrics", Map.of("temperature", Map.of("value", 42, "syntax", "Integer32")),
+                    "metric_temperature", 42));
+            try (var output = new ClickHouseOutputAdapter(config)) { output.send(event); }
+            String metrics = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
+            assertTrue(metrics.contains("snmp.temperature"));
+            assertTrue(metrics.contains("192.0.2.10"));
+            assertTrue(metrics.contains("42"));
+        } finally { server.stop(0); }
+    }
+
+    @Test
     void parsesConfigParamsAndResolvesCredentialsFromEnvironment() throws Exception {
         Map<String, String> rawConfig = Map.of(
                 "configParams", """

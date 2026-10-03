@@ -237,6 +237,19 @@ public class AssetService {
     return timestamp == null ? null : timestamp.toInstant();
   }
 
+  @org.springframework.transaction.annotation.Transactional
+  public AssetSourceBinding bindRouterSource(long assetId, String sourceId) {
+    getAsset(assetId);
+    if (sourceId == null || !sourceId.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}"))
+      throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Invalid router source ID");
+    var matches=jdbcTemplate.query("select asset_id from asset_source_bindings where source_type='SECURITY_ROUTER' and source_id=?",(rs,n)->rs.getLong(1),sourceId);
+    if (!matches.isEmpty()) {
+      if (matches.stream().anyMatch(id->id!=assetId)) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,"Router source is already bound to another asset");
+      return sources(assetId).stream().filter(v->v.sourceType()==SourceType.SECURITY_ROUTER && v.sourceId().equals(sourceId)).findFirst().orElseThrow();
+    }
+    return bindSource(assetId,SourceType.SECURITY_ROUTER,sourceId,"syslog-tls",100);
+  }
+
   private static String normalizeRequired(String value) {
     return value == null ? null : value.trim();
   }

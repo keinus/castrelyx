@@ -113,7 +113,7 @@ public class StructuredTransformService {
 
         for (FieldMapping mapping : config.getCommonMappings()) {
             String srcKey = mapping.getSourceField();
-            Object value = sourceData.get(srcKey);
+            Object value = sourceValue(sourceData, srcKey);
             
             if (value == null && mapping.getDefaultValue() != null) {
                 value = mapping.getDefaultValue();
@@ -138,7 +138,7 @@ public class StructuredTransformService {
                 
                 for (FieldMapping mapping : rule.getMappings()) {
                     String srcKey = mapping.getSourceField();
-                    Object value = sourceData.get(srcKey);
+                    Object value = sourceValue(sourceData, srcKey);
                     // System.out.println("Mapping " + srcKey + " (" + value + ") to " + mapping.getTargetField());
                     
                     if (value == null && mapping.getDefaultValue() != null) {
@@ -173,6 +173,22 @@ public class StructuredTransformService {
                 .subFields(subFields)
                 .additionalAttributes(additionalAttributes)
                 .build();
+    }
+
+    // Preserve exact flat keys; otherwise support nested dot paths and JSON Pointer.
+    // Nested mappings leave their source object intact in additionalAttributes.
+    private Object sourceValue(Map<String, Object> source, String path) {
+        if (path == null) return null;
+        if (source.containsKey(path)) return source.get(path);
+        boolean pointer = path.startsWith("/");
+        String[] parts = pointer ? path.substring(1).split("/", -1) : path.split("\\.", -1);
+        Object value = source;
+        for (String part : parts) {
+            String key = pointer ? part.replace("~1", "/").replace("~0", "~") : part;
+            if (value instanceof Map<?, ?> map) value = map.get(key);
+            else return null;
+        }
+        return value;
     }
 
     private StructuredEvent createDefaultEvent(LogEvent logEvent) {

@@ -108,6 +108,24 @@ beforeEach(() => {
 });
 
 describe("unified console", () => {
+  it("adds and saves an SNMPv3 notification user through the common editor", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceProvider><AdapterEditor stage="input"
+      adapter={{ id: 77, type: "SnmpNotificationInputAdapter", messagetype: "notifications", enabled: false, configParams: "{}" }}
+      onSaved={() => {}} /></WorkspaceProvider>);
+    await user.click(await screen.findByRole("tab", { name: "Security" }));
+    await user.click(screen.getByRole("button", { name: "Add user" }));
+    await user.type(screen.getByLabelText("Security name"), "receiver");
+    await user.type(screen.getByLabelText("Authentication passphrase env"), "SNMP_AUTH");
+    await user.type(screen.getByLabelText("Privacy passphrase env"), "SNMP_PRIV");
+    await user.click(screen.getByRole("button", { name: "Save input" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => url === "/api/v1/input-adapters/77" && init?.method === "PUT");
+      expect(call).toBeDefined();
+      const config = JSON.parse(JSON.parse(call![1]!.body as string).configParams);
+      expect(config.users[0]).toMatchObject({ securityName: "receiver", securityLevel: "authPriv", authProtocol: "SHA256", authPassphraseEnv: "SNMP_AUTH", privPassphraseEnv: "SNMP_PRIV" });
+    });
+  });
   it("edits and saves the connection fields of an adapter stored with an alias", async () => {
     const user = userEvent.setup();
     render(
@@ -170,7 +188,12 @@ describe("unified console", () => {
     await user.click(
       await screen.findByRole("button", { name: /Field mapping/ }),
     );
+    fireEvent.change(screen.getByLabelText("Original sample event"), {
+      target: { value: '{"host":"web-01"}' },
+    });
     await user.click(await screen.findByRole("button", { name: "Auto-map" }));
+    expect(screen.getByRole("combobox", { name: "Source field" })).toHaveValue("host");
+    expect(screen.getByRole("button", { name: "Save mapping" })).toBeEnabled();
     await user.click(
       screen.getByRole("button", { name: "Test selected step" }),
     );

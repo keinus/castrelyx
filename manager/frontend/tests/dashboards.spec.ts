@@ -7,8 +7,8 @@ test('renders overview, traffic, agent, and snmp dashboards', async ({ page }) =
 
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Network', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Action Rail Command Center' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '전체 장비 리소스 상태' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '커맨드 센터', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '전체 장비 리소스 상태', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '전체 장비 리소스 매트릭스' })).toBeVisible();
   await expect(page.locator('.ar-inspector')).toBeVisible();
   await expect(page.getByRole('heading', { name: '이벤트 스트림' })).toBeVisible();
@@ -59,7 +59,8 @@ test('renders overview, traffic, agent, and snmp dashboards', async ({ page }) =
   await expect(page.getByText('ssh.service')).toBeVisible();
 
   await page.getByRole('button', { name: 'SNMP' }).click();
-  await expect(page.getByText('Poll health')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '등록된 대상' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '인터페이스 트래픽' })).toBeVisible();
 });
 
 test('overview dashboard stacks cleanly on a narrow viewport', async ({ page }) => {
@@ -69,9 +70,9 @@ test('overview dashboard stacks cleanly on a narrow viewport', async ({ page }) 
 
   await page.goto('/');
 
-  await expect(page.locator('.ar-mobile-header strong')).toHaveText('Action Rail Command Center');
-  await expect(page.getByRole('button', { name: '메뉴 열기' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '전체 장비 리소스 상태' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '커맨드 센터', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '모바일 메뉴 열기' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '전체 장비 리소스 상태', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '전체 장비 리소스 매트릭스' })).toBeVisible();
 
   const idleCard = page.getByRole('listitem', { name: 'idle-node 리소스 상태' });
@@ -97,4 +98,17 @@ test('overview dashboard stacks cleanly on a narrow viewport', async ({ page }) 
     scroll: document.documentElement.scrollWidth
   }));
   expect(widths.scroll).toBe(widths.client);
+
+  await expect(page.getByLabel('전체 장비 평균 CPU 36.9%')).toBeVisible();
+  await expect(page.getByLabel('전체 장비 평균 RAM 39.1%')).toBeVisible();
+  const menuButton = page.getByRole('button', { name: '모바일 메뉴 열기' });
+  await menuButton.click();
+  await expect(page.getByRole('button', { name: 'Assets', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menuButton).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Assets', exact: true })).not.toBeVisible();
+  await menuButton.click();
+  await page.getByRole('button', { name: 'Network', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Traffic', exact: true })).toBeVisible();
+  await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
 });

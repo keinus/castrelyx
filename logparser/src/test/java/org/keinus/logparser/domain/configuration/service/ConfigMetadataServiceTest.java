@@ -18,6 +18,7 @@ class ConfigMetadataServiceTest {
         assertTrue(types.stream().anyMatch(t -> t.type().equals("TlsTcpInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("HttpsInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("SnmpInputAdapter")));
+        assertTrue(types.stream().anyMatch(t -> t.type().equals("SnmpNotificationInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("RabbitMqInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("TlsRabbitMqInputAdapter")));
         assertTrue(types.stream().anyMatch(t -> t.type().equals("TcpMtlsGzipInputAdapter")));
@@ -65,6 +66,10 @@ class ConfigMetadataServiceTest {
         schema = service.getInputAdapterSchema("SnmpInputAdapter");
         assertEquals("SnmpInputAdapter", schema.type());
         assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
+
+        schema = service.getInputAdapterSchema("SnmpNotificationInputAdapter");
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("configParams") && f.required()));
+        assertTrue(schema.fields().stream().anyMatch(f -> f.name().equals("port")));
 
         schema = service.getInputAdapterSchema("RabbitMqInputAdapter");
         assertEquals("RabbitMqInputAdapter", schema.type());

@@ -54,12 +54,17 @@ public class ApplicationPrincipalRepository {
     return principal(current.principalId()).orElseThrow();
   }
 
+  @org.springframework.transaction.annotation.Transactional
   public void setStatus(String principalId, String status) {
     jdbcTemplate.update("""
         update application_principals
         set status = ?, updated_at = ?
         where principal_id = ?
         """, status, Instant.now().toString(), requirePrincipalId(principalId));
+    if ("BLOCKED".equals(status)) {
+      jdbcTemplate.update("update application_certificates set status='REVOKED' where principal_id=? and status='ACTIVE'", requirePrincipalId(principalId));
+      jdbcTemplate.update("update application_enrollment_tokens set revoked_at=? where principal_id=? and used_at is null and revoked_at is null", Instant.now().toString(), requirePrincipalId(principalId));
+    }
   }
 
   public Optional<ApplicationPrincipalRecord> principal(String principalId) {
@@ -169,6 +174,7 @@ public class ApplicationPrincipalRepository {
         """, Instant.now().toString(), id) == 1;
   }
 
+  @org.springframework.transaction.annotation.Transactional
   public void saveCertificate(String principalId, X509Certificate certificate) {
     String normalized = requirePrincipalId(principalId);
     jdbcTemplate.update("update application_certificates set status = 'SUPERSEDED' where principal_id = ? and status = 'ACTIVE'", normalized);
@@ -192,6 +198,14 @@ public class ApplicationPrincipalRepository {
         where principal_id = ? and serial_number = ? and status = 'ACTIVE' and not_after > ?
         """, Integer.class, requirePrincipalId(principalId), serialNumber, Instant.now().toString());
     return count != null && count > 0;
+  }
+
+  public Optional<X509Certificate> activeCertificate(String principalId, String serialNumber) {
+    return jdbcTemplate.query("select pem from application_certificates where principal_id=? and serial_number=? and status='ACTIVE' and not_after>?",
+        (rs, n) -> {
+          try { return org.castrelyx.castrelsign.kms.KeyManagementService.certificate(rs.getString("pem")); }
+          catch (java.security.cert.CertificateException e) { throw new IllegalStateException("invalid stored application certificate", e); }
+        }, requirePrincipalId(principalId), serialNumber, Instant.now().toString()).stream().findFirst();
   }
 
   private String permissionsJson(List<String> permissions) {

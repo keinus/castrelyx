@@ -1,31 +1,28 @@
 package org.castrelyx.castrelsign.security;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-
-import org.castrelyx.castrelsign.config.CastrelSignProperties;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class AdminTokenService {
-  private final CastrelSignProperties properties;
+  private final org.castrelyx.castrelsign.kms.KmsAuthentication authentication;
 
-  public AdminTokenService(CastrelSignProperties properties) {
-    this.properties = properties;
+  public AdminTokenService(org.castrelyx.castrelsign.kms.KmsAuthentication authentication) {
+    this.authentication = authentication;
   }
 
   public void requireValid(String authorizationHeader) {
-    String prefix = "Bearer ";
-    if (authorizationHeader == null || !authorizationHeader.startsWith(prefix)) {
-      throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "missing admin token");
+    var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+    if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servlet) {
+      var request = servlet.getRequest();
+      var identity = authentication.authenticate(request);
+      if (java.util.Set.of("GET", "HEAD").contains(request.getMethod())) {
+        if (!identity.roles().contains("AUDITOR") && !identity.roles().contains("OPERATOR"))
+          throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "administrator permission denied");
+      } else identity.require("OPERATOR", null);
+      return;
     }
-    byte[] presented = authorizationHeader.substring(prefix.length()).getBytes(StandardCharsets.UTF_8);
-    byte[] expected = properties.getAdminToken().getBytes(StandardCharsets.UTF_8);
-    if (!MessageDigest.isEqual(presented, expected)) {
-      throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid admin token");
-    }
+    authentication.authenticate(authorizationHeader, null, false);
+    /* All HTTP callers are authenticated by AdminSecurityFilter before reaching controllers. */
   }
-}
 
+}

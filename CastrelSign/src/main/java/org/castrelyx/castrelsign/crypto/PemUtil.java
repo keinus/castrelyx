@@ -24,6 +24,15 @@ public final class PemUtil {
     return toPem("PRIVATE KEY", encoded);
   }
 
+  public static String encryptedPrivateKeyToPem(PrivateKey key, char[] password) throws Exception {
+    var encryptor = new org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder(
+        org.bouncycastle.openssl.PKCS8Generator.AES_256_CBC)
+        .setProvider(BouncyCastleSupport.PROVIDER).setRandom(new java.security.SecureRandom())
+        .setIterationCount(100_000).setPassword(password).build();
+    var object = new org.bouncycastle.openssl.jcajce.JcaPKCS8Generator(key, encryptor).generate();
+    return toPem(object.getType(), object.getContent());
+  }
+
   public static String toPem(String type, byte[] der) {
     String encoded = Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(der);
     return "-----BEGIN " + type + "-----\n" + encoded + "\n-----END " + type + "-----\n";

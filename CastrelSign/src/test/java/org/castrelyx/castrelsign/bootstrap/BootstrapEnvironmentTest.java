@@ -10,6 +10,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.env.MockEnvironment;
 
 class BootstrapEnvironmentTest {
+  @org.junit.jupiter.api.AfterEach
+  void closeKeyStore() throws Exception {
+    org.castrelyx.castrelsign.kms.KeyManagementService.closeAt(tempDir);
+  }
   private static final String BUNDLE_PREFIX = "spring.ssl.bundle.pem.castrelyx-generated";
 
   @TempDir
@@ -32,6 +36,29 @@ class BootstrapEnvironmentTest {
         .isEqualTo(certDir.resolve("ca.pem").toUri().toString());
     assertThat(certDir.resolve("server.p12")).exists();
     assertThat(certDir.resolve("truststore.p12")).exists();
+  }
+
+  @Test
+  void springSslBundleLoadsEncryptedPrivateKeyWithConfiguredPassword() {
+    MockEnvironment environment = baseEnvironment(tempDir);
+    BootstrapEnvironment.apply(environment);
+    new org.springframework.boot.test.context.runner.ApplicationContextRunner()
+        .withUserConfiguration(org.springframework.boot.autoconfigure.ssl.SslAutoConfiguration.class)
+        .withPropertyValues(
+            BUNDLE_PREFIX + ".keystore.certificate=" + environment.getProperty(BUNDLE_PREFIX + ".keystore.certificate"),
+            BUNDLE_PREFIX + ".keystore.private-key=" + environment.getProperty(BUNDLE_PREFIX + ".keystore.private-key"),
+            BUNDLE_PREFIX + ".keystore.private-key-password=" + environment.getProperty(BUNDLE_PREFIX + ".keystore.private-key-password"),
+            BUNDLE_PREFIX + ".keystore.verify-keys=true",
+            BUNDLE_PREFIX + ".truststore.certificate=" + environment.getProperty(BUNDLE_PREFIX + ".truststore.certificate"),
+            BUNDLE_PREFIX + ".key.password=" + environment.getProperty(BUNDLE_PREFIX + ".key.password"))
+        .run(context -> {
+          assertThat(context).hasNotFailed();
+          var bundle = context.getBean(org.springframework.boot.ssl.SslBundles.class).getBundle("castrelyx-generated");
+          assertThat(bundle.createSslContext()).isNotNull();
+          var store = bundle.getStores().getKeyStore();
+          assertThat(store.size()).isEqualTo(1);
+          assertThat(store.getKey(store.aliases().nextElement(), "test-password".toCharArray())).isNotNull();
+        });
   }
 
   @Test

@@ -45,6 +45,13 @@ public class SchemaDefinitionService {
 
     private Map<String, List<ColumnMetadataDto>> getSubSchemas() {
         Map<String, List<ColumnMetadataDto>> map = new HashMap<>();
+
+        map.put("event_snmp", Arrays.asList(
+            col("target_host", "VARCHAR", "Polled device address"),
+            col("version", "VARCHAR", "SNMP version"),
+            col("poll_status", "VARCHAR", "Polling result"),
+            col("metrics", "JSON", "OID bindings; imported MIB metrics also have individual attributes")
+        ));
         
         map.put("event_network", Arrays.asList(
             col("bytes_in", "BIGINT", "Bytes In"),

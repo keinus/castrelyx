@@ -22,6 +22,7 @@ public class InputAdapterConfig {
         "HttpsInputAdapter",
         "KafkaInputAdapter",
         "SnmpInputAdapter",
+        "SnmpNotificationInputAdapter",
         "RabbitMqInputAdapter",
         "TlsRabbitMqInputAdapter",
         "TcpMtlsGzipInputAdapter",
@@ -35,6 +36,7 @@ public class InputAdapterConfig {
         "https",
         "kafka",
         "snmp",
+        "snmp_notification",
         "rabbitmq",
         "tls_rabbitmq",
         "tlsrabbitmq",
@@ -51,12 +53,12 @@ public class InputAdapterConfig {
     // === Network 관련 설정 ===
 
     @Range(min = 1, max = 65535)
-    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
+    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "SnmpNotificationInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
     @Description("네트워크 포트 번호")
     private Integer port;
 
     @Default("0.0.0.0")
-    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
+    @AdapterSpecific(adapters = {"TcpInputAdapter", "TlsTcpInputAdapter", "UdpInputAdapter", "HttpInputAdapter", "HttpsInputAdapter", "SnmpNotificationInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter"})
     @Description("바인딩할 호스트 주소")
     private String host;
 
@@ -127,7 +129,7 @@ public class InputAdapterConfig {
     @Description("내부 큐 최대 크기")
     private Integer queueSize;
 
-    @AdapterSpecific(adapters = {"SnmpInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter", "HttpsInputAdapter", "TlsTcpInputAdapter"})
+    @AdapterSpecific(adapters = {"TcpInputAdapter", "SnmpInputAdapter", "SnmpNotificationInputAdapter", "RabbitMqInputAdapter", "TlsRabbitMqInputAdapter", "TcpMtlsGzipInputAdapter", "HttpsInputAdapter", "TlsTcpInputAdapter"})
     @Description("Adapter-specific JSON configuration")
     private String configParams;
 
@@ -160,6 +162,8 @@ public class InputAdapterConfig {
                 break;
             case "SnmpInputAdapter":
             case "snmp":
+            case "SnmpNotificationInputAdapter":
+            case "snmp_notification":
                 if (configParams == null || configParams.trim().isEmpty()) {
                     throw new IllegalArgumentException(type + " requires 'configParams' field");
                 }

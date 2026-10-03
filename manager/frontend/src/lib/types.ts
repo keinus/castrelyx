@@ -32,7 +32,36 @@ export type AlertRow = {
   status: 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED';
   title: string;
   detail?: string;
+  assetId?: number | null;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
 };
+
+export type AlertRule = {
+  id: number;
+  name: string;
+  ruleType: string;
+  severity: AlertRow['severity'];
+  expressionJson: string;
+  enabled: boolean;
+};
+
+export type SnmpTarget = {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  credentialId: number | null;
+  enabled: boolean;
+  pollIntervalMs: number;
+  logparserAdapterId: number | null;
+};
+
+export type SnmpTargetInput = Pick<SnmpTarget, 'name' | 'host' | 'port' | 'credentialId' | 'enabled' | 'pollIntervalMs'> & { oids: string[] };
+export type IntegrationName = 'castrelsign' | 'logparser';
+export type IntegrationInput = { baseUrl: string; enabled: boolean; adminToken?: string; apiToken?: string };
 
 export type DashboardSummary = {
   activeAssets: number;
@@ -263,7 +292,7 @@ export type AgentEventSummary = {
   program?: string;
   provider?: string;
   pid?: string;
-  eventId?: number;
+  eventId?: number | string;
   recordId?: number;
   eventTime?: string;
   actor?: string;
@@ -274,6 +303,24 @@ export type AgentEventSummary = {
 };
 
 export type AgentLogEvent = AgentEventSummary;
+
+export type AssetLogEvent = AgentLogEvent & {
+  sourceType?: string;
+  logFamily?: string;
+  receivedAt?: string;
+  storedAt?: string;
+  jobId?: string;
+  target?: string;
+  raw?: Record<string, unknown>;
+};
+export type AssetLogPage = {
+  items: AssetLogEvent[];
+  hasMore: boolean;
+  nextOffset: number;
+  storageAvailable: boolean;
+  receiver?: { available: boolean; configured?: boolean; pendingRecords?: number; quarantinedRecords?: number; lastReceivedAt?: string; lastStoredAt?: string };
+  status: { lastReceivedAt?: string; lastStoredAt?: string; storedRows?: number };
+};
 
 export type AssetFileRoot = {
   name: string;
@@ -499,7 +546,17 @@ export type AgentUpdateAttempt = {
   updatedAt?: string;
 };
 
-export type LogparserStatus = Record<string, unknown>;
+export type LogparserStatus = {
+  configured?: boolean;
+  status?: 'RUNNING' | 'STOPPED' | 'RELOADING' | 'STOPPING' | 'ERROR';
+  inputAdapterCount?: number;
+  parserCount?: number;
+  transformCount?: number;
+  outputAdapterCount?: number;
+  queueSize?: number;
+  queueCapacity?: number;
+  throughput?: number;
+};
 
 export type DeepLink = {
   label: string;

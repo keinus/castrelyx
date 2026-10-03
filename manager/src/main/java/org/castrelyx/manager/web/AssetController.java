@@ -64,6 +64,13 @@ public class AssetController {
     return assetService.sources(id);
   }
 
+  public record RouterSourceRequest(@jakarta.validation.constraints.NotBlank String sourceId) {}
+
+  @PostMapping("/{id}/router-source")
+  public AssetSourceBinding bindRouterSource(@PathVariable long id, @Valid @RequestBody RouterSourceRequest request) {
+    return assetService.bindRouterSource(id,request.sourceId());
+  }
+
   @GetMapping("/merge-candidates")
   public List<MergeCandidate> mergeCandidates() {
     return assetService.mergeCandidates();

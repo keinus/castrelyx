@@ -964,6 +964,40 @@ public class ClickHouseClient {
         .toList();
   }
 
+  public Map<String,Object> queryAssetLogEvents(String range, String severity, String assetUid,
+      String family, String search, int limit, int offset) {
+    String table=tableReference(properties.clickhouse().database(), "manager_events");
+    String familyFilter="ALL".equals(family) ? "" : "AND JSONExtractString(event_json, 'log_family') = "+sqlString(family);
+    String searchFilter=search.isBlank() ? "" : "AND positionCaseInsensitiveUTF8(concat(event_type, ' ', source_id, ' ', event_json), "+sqlString(search)+") > 0";
+    String sql="""
+        SELECT * FROM (
+          SELECT asset_uid, source_type, source_id, event_type, severity, event_json, observed_at,
+            if(source_type = 'SECURITY_ROUTER', JSONExtractString(event_json, 'event_id'),
+              toString(cityHash64(concat(toString(observed_at), event_type, event_json)))) AS log_key
+          FROM %s
+          WHERE asset_uid = %s AND source_type IN ('AGENT', 'SECURITY_ROUTER')
+            AND observed_at >= now() - %s
+            %s %s %s
+          ORDER BY observed_at DESC, source_id DESC, log_key DESC
+          LIMIT 1 BY source_type, source_id, log_key
+        ) ORDER BY observed_at DESC, source_id DESC, log_key DESC
+        LIMIT %d OFFSET %d FORMAT JSONEachRow
+        """.formatted(table,sqlString(assetUid),rangeInterval(range),agentLogSeverityFilter(severity),familyFilter,searchFilter,
+            Math.min(Math.max(limit,1),300)+1,Math.max(offset,0));
+    List<Map<String,Object>> rows=queryJsonRows(sql);
+    boolean more=rows.size()>limit;
+    var items=rows.stream().limit(limit).map(ClickHouseClient::canonicalEventRow).toList();
+    List<Map<String,Object>> status=queryJsonRows("""
+        SELECT max(JSONExtractString(event_json, 'received_at')) AS last_received_at,
+          max(JSONExtractString(event_json, 'stored_at')) AS last_stored_at,
+          countIf(source_type = 'SECURITY_ROUTER') AS stored_rows
+        FROM %s WHERE asset_uid = %s AND observed_at >= now() - INTERVAL 30 DAY
+        FORMAT JSONEachRow
+        """.formatted(table,sqlString(assetUid)));
+    return Map.of("items",items,"hasMore",more,"nextOffset",offset+items.size(),
+        "storageAvailable",true,"status", status.isEmpty()?Map.of():normalizeDashboardKeys(status.getFirst()));
+  }
+
   public Map<String, Object> querySnmpDashboard(Long targetId) {
     return Map.of(
         "polls", Map.of("success", 0, "failure", 0),
@@ -1116,7 +1150,7 @@ public class ClickHouseClient {
   }
 
   private static String sqlString(String value) {
-    return "'" + (value == null ? "" : value.replace("'", "''")) + "'";
+    return "'" + (value == null ? "" : value.replace("\\", "\\\\").replace("'", "''")) + "'";
   }
 
   static String rangeInterval(String range) {

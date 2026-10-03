@@ -21,6 +21,44 @@ import static org.mockito.Mockito.when;
 
 class ConfigValidationServiceTest {
 
+    @ParameterizedTest
+    @ValueSource(strings = {"SnmpNotificationInputAdapter", "snmp_notification"})
+    void validatesNotificationUsersAndCommunityAccess(String type) {
+        InputAdapterEntity entity = InputAdapterEntity.builder().type(type).messagetype("notifications")
+                .configParams("{\"communities\":[\"example-community\"]}").build();
+        assertTrue(configValidationService.validateInputAdapter(entity).isValid());
+        entity.setConfigParams("{}");
+        assertFalse(configValidationService.validateInputAdapter(entity).isValid());
+        entity.setConfigParams("""
+                {"users":[{"securityName":"receiver","authPassphraseEnv":"SNMP_TEST_AUTH",
+                "privPassphraseEnv":"SNMP_TEST_PRIV","engineId":"8000000001"}]}
+                """);
+        assertTrue(configValidationService.validateInputAdapter(entity).isValid(), "Saving env references must not require local secret resolution");
+        entity.setPort(70000);
+        assertFalse(configValidationService.validateInputAdapter(entity).isValid());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"users\":[{\"securityName\":\"u\",\"securityLevel\":\"invalid\"}]}",
+            "{\"communities\":[\"c\"],\"queueSize\":0}",
+            "{\"communities\":[\"c\"],\"engineId\":\"bad\"}",
+            "{\"communities\":\"c\"}",
+            "{\"users\":[{\"securityName\":\"u\",\"securityLevel\":\"noAuthNoPriv\"},{\"securityName\":\"u\",\"securityLevel\":\"noAuthNoPriv\"}]}"
+    })
+    void rejectsInvalidNotificationConfiguration(String params) {
+        var entity = InputAdapterEntity.builder().type("snmp_notification").messagetype("n").configParams(params).build();
+        assertFalse(configValidationService.validateInputAdapter(entity).isValid());
+    }
+
+    @Test void validatesPollingAliasAndNumericOids() {
+        var entity = InputAdapterEntity.builder().type("snmp").messagetype("n")
+                .configParams("{\"targets\":[{\"host\":\"127.0.0.1\"}],\"oids\":[\"1.3.6.1.2.1.1.5.0\"]}").build();
+        assertTrue(configValidationService.validateInputAdapter(entity).isValid());
+        entity.setConfigParams("{\"targets\":[{\"host\":\"127.0.0.1\"}],\"oids\":[\"sysName\"]}");
+        assertFalse(configValidationService.validateInputAdapter(entity).isValid());
+    }
+
     private InputAdapterRepository inputAdapterRepository;
     private ParserRepository parserRepository;
     private TransformRepository transformRepository;

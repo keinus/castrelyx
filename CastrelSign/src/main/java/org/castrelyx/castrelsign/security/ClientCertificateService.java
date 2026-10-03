@@ -32,7 +32,7 @@ public class ClientCertificateService {
     X509Certificate certificate = certificates[0];
     try {
       certificate.checkValidity();
-      certificate.verify(authority.rootCertificate().getPublicKey());
+      if (!authority.trustsClientCertificate(certificate)) throw new IllegalArgumentException("issuer is not trusted");
       requireClientAuth(certificate);
     } catch (Exception e) {
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "client certificate is invalid", e);

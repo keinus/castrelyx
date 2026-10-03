@@ -15,12 +15,13 @@ public class ConfigMetadataService {
     public List<AdapterTypeInfo> getInputAdapterTypes() {
         return Arrays.asList(
                 new AdapterTypeInfo("TcpInputAdapter", "TCP Input", "Listen for TCP connections"),
-                new AdapterTypeInfo("TlsTcpInputAdapter", "TCP TLS Input", "Listen for newline-delimited TCP over TLS"),
+                new AdapterTypeInfo("TlsTcpInputAdapter", "TCP TLS Input", "TLS TCP with line or octet-counted framing"),
                 new AdapterTypeInfo("UdpInputAdapter", "UDP Input", "Listen for UDP datagrams"),
                 new AdapterTypeInfo("HttpInputAdapter", "HTTP Input", "HTTP REST endpoint"),
                 new AdapterTypeInfo("HttpsInputAdapter", "HTTPS Input", "HTTP REST endpoint over TLS"),
                 new AdapterTypeInfo("KafkaInputAdapter", "Kafka Input", "Consume from Kafka topic"),
                 new AdapterTypeInfo("SnmpInputAdapter", "SNMP Collector", "Poll SNMP v1/v2c/v3 targets"),
+                new AdapterTypeInfo("SnmpNotificationInputAdapter", "SNMP Notifications", "Receive SNMP traps and informs over UDP"),
                 new AdapterTypeInfo("RabbitMqInputAdapter", "RabbitMQ Input", "Consume from RabbitMQ queue"),
                 new AdapterTypeInfo("TlsRabbitMqInputAdapter", "RabbitMQ TLS Input", "Consume from RabbitMQ queue over TLS"),
                 new AdapterTypeInfo("TcpMtlsGzipInputAdapter", "Castrelyx TCP mTLS Gzip Input", "Receive gzip batches over TCP/mTLS"),
@@ -66,7 +67,10 @@ public class ConfigMetadataService {
 
     public AdapterSchema getInputAdapterSchema(String type) {
         return switch (type) {
-            case "TcpInputAdapter", "UdpInputAdapter" -> new AdapterSchema(
+            case "TcpInputAdapter" -> new AdapterSchema(type, List.of(
+                    new FieldSchema("port", "Integer", true, "Port to listen on"),
+                    new FieldSchema("configParams", "String", false, "framing: line|octet-counted; maxFrameBytes: 1024..2097152")));
+            case "UdpInputAdapter" -> new AdapterSchema(
                     type,
                     List.of(
                             new FieldSchema("port", "Integer", true, "Port to listen on")
@@ -76,7 +80,7 @@ public class ConfigMetadataService {
                     type,
                     Arrays.asList(
                             new FieldSchema("port", "Integer", true, "Port to listen on"),
-                            new FieldSchema("configParams", "String", true, "TLS server JSON configuration")
+                            new FieldSchema("configParams", "String", true, "TLS, framing, maxFrameBytes; security-router requires clientAuth=need, inboxDirectory and clientSourceBindings")
                     )
             );
             case "HttpInputAdapter" -> new AdapterSchema(
@@ -100,6 +104,15 @@ public class ConfigMetadataService {
                             new FieldSchema("bootstrapservers", "String", true, "Kafka bootstrap servers"),
                             new FieldSchema("topicid", "String", true, "Topic to consume from"),
                             new FieldSchema("groupId", "String", false, "Consumer group ID")
+                    )
+            );
+            case "SnmpNotificationInputAdapter" -> new AdapterSchema(
+                    type,
+                    Arrays.asList(
+                            new FieldSchema("host", "String", false, "Listen address; default 0.0.0.0"),
+                            new FieldSchema("port", "Integer", false, "UDP listen port; default 162"),
+                            new FieldSchema("configParams", "String", true, "Allowed communities/communityEnvs, v3 users and engine state path"),
+                            new FieldSchema("queueSize", "Integer", false, "Bounded notification memory queue; Inform ACK means enqueue")
                     )
             );
             case "SnmpInputAdapter" -> new AdapterSchema(

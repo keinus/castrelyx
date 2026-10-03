@@ -9,10 +9,14 @@ import org.springframework.web.client.RestClient;
 @Component
 public class LogparserClient {
   private final RestClient restClient;
+  private final RestClient routerStatusClient;
   private final IntegrationService integrationService;
 
   public LogparserClient(RestClient.Builder builder, IntegrationService integrationService) {
     this.restClient = builder.build();
+    var factory=new org.springframework.http.client.SimpleClientHttpRequestFactory();
+    factory.setConnectTimeout(1000);factory.setReadTimeout(1000);
+    this.routerStatusClient=builder.clone().requestFactory(factory).build();
     this.integrationService = integrationService;
   }
 
@@ -27,9 +31,18 @@ public class LogparserClient {
       return Map.of("configured", false);
     }
     return restClient.get()
-        .uri(URI.create(config.baseUrl() + "/api/v1/pipeline"))
+        .uri(URI.create(config.baseUrl() + "/api/v1/pipeline/status"))
         .retrieve()
         .body(Object.class);
+  }
+
+  public Object routerStatus(String assetUid) {
+    try {
+      IntegrationConfig config=integrationService.get("logparser");
+      if(!config.enabled() || config.baseUrl()==null || config.baseUrl().isBlank())return Map.of("available",false);
+      return routerStatusClient.get().uri(URI.create(config.baseUrl()+"/api/v1/router/status?assetUid="+
+          java.net.URLEncoder.encode(assetUid,java.nio.charset.StandardCharsets.UTF_8))).retrieve().body(Object.class);
+    } catch(RuntimeException e) { return Map.of("available",false); }
   }
 
   public List<Map<String, String>> deepLinks() {

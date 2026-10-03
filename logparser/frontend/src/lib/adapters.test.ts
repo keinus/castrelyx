@@ -15,6 +15,7 @@ import type { Adapter } from "./types";
 describe("shared adapter form model", () => {
   it.each([
     ["input", "tcp", "TcpInputAdapter", "port"],
+    ["input", "snmp_notification", "SnmpNotificationInputAdapter", "configParams.users"],
     ["input", "tls_rabbitmq", "TlsRabbitMqInputAdapter", "configParams.queue"],
     ["output", "tcp", "TcpOutputAdapter", "port"],
     ["output", "rabbitmq", "RabbitMQAdapter", "rmqPort"],
@@ -115,6 +116,13 @@ describe("shared adapter form model", () => {
       "configParams.targets": expect.any(String),
       "configParams.oids": expect.any(String),
     });
+  });
+  it("validates notification access and preserves engine-scoped v3 users", () => {
+    const draft = newAdapter("input", "SnmpNotificationInputAdapter", "notifications");
+    expect(validate(draft, "input")["configParams.users"]).toBeTruthy();
+    draft.configParams.users = [{ securityName: "receiver", engineId: "8000000001", authPassphraseEnv: "AUTH", privPassphraseEnv: "PRIV" }];
+    expect(validate(draft, "input")).toEqual({});
+    expect(JSON.parse(serialize(draft).configParams).users[0].engineId).toBe("8000000001");
   });
   it("places mTLS credentials and capacity fields on dedicated tabs", () => {
     const mtls = TYPE_DEFS.input.find(

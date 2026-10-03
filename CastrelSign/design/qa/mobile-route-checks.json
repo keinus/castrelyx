@@ -1,0 +1,198 @@
+[
+  {
+    "route": "keys",
+    "heading": "키 관리",
+    "main": "관리 콘솔  키 관리키 관리현재 버전과 다음 교체를 한곳에서 확인하세요.ca-root 서명 만료까지 21일·새 버전 준비 완료",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "keys?tab=grants",
+    "heading": "키 관리",
+    "main": "관리 콘솔  키 관리키 관리현재 버전과 다음 교체를 한곳에서 확인하세요.ca-root 서명 만료까지 21일·새 버전 준비 완료",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "keys?tab=dependencies",
+    "heading": "키 관리",
+    "main": "관리 콘솔  키 관리키 관리현재 버전과 다음 교체를 한곳에서 확인하세요.ca-root 서명 만료까지 21일·새 버전 준비 완료",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "rotation",
+    "heading": "키 교체 준비",
+    "main": "관리 콘솔  키 교체 준비키 교체 준비새 버전을 준비하고, 신뢰 자료 배포 후 활성화를 요청합니다.1대상 선택2버전 준비3신뢰",
+    "scrollWidth": 390,
+    "width": 390
+  },
+  {
+    "route": "approvals",
+    "heading": "승인 요청",
+    "main": "관리 콘솔  승인 요청승인 요청변경 내용과 영향을 확인하고 다른 담당자가 승인합니다.요청 목록 (2건 대기)ca-root v3",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "certificates",
+    "heading": "인증서",
+    "main": "관리 콘솔  인증서인증서발급 대상과 서명 키를 확인하고 현재 상태를 조회하세요.발급 인증서발급 대상일련번호상태만료일상세paym",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "principals",
+    "heading": "서비스·에이전트",
+    "main": "관리 콘솔  서비스·에이전트서비스·에이전트등록 대상과 접근 상태를 관리하세요.애플리케이션에이전트등록 토큰관리 작업은 서비스 운",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "principals?tab=agents",
+    "heading": "서비스·에이전트",
+    "main": "관리 콘솔  서비스·에이전트서비스·에이전트등록 대상과 접근 상태를 관리하세요.애플리케이션에이전트등록 토큰관리 작업은 서비스 운",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "principals?tab=tokens",
+    "heading": "서비스·에이전트",
+    "main": "관리 콘솔  서비스·에이전트서비스·에이전트등록 대상과 접근 상태를 관리하세요.애플리케이션에이전트등록 토큰관리 작업은 서비스 운",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "tls",
+    "heading": "서버 TLS",
+    "main": "관리 콘솔  서버 TLS서버 TLSHTTPS 인증서의 현재 버전과 발급 이력을 확인하세요.현재 서버 인증서유효한 인증서kms.",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "releases",
+    "heading": "업데이트 서명",
+    "main": "관리 콘솔  업데이트 서명업데이트 서명릴리스의 서명 키와 배포 상태를 관리하세요.릴리스배포 정책서명된 릴리스릴리스 등록버전대상",
+    "scrollWidth": 390,
+    "width": 390
+  },
+  {
+    "route": "releases?tab=policy",
+    "heading": "업데이트 서명",
+    "main": "관리 콘솔  업데이트 서명업데이트 서명릴리스의 서명 키와 배포 상태를 관리하세요.릴리스배포 정책기본 배포 정책업데이트 배포활성",
+    "scrollWidth": 390,
+    "width": 390
+  },
+  {
+    "route": "trust",
+    "heading": "신뢰 자료",
+    "main": "관리 콘솔  신뢰 자료신뢰 자료검증에 사용하는 공개 인증서와 공개키를 확인하세요.공개 자료 다운로드준비·사용 중·검증 전용 버",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "audit",
+    "heading": "감사 기록",
+    "main": "관리 콘솔  감사 기록감사 기록관리 작업과 서명 이력을 요청 단위로 확인하세요.감사 이벤트전체 결과성공거부예시 내보내기순번발생",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "health",
+    "heading": "운영 상태",
+    "main": "관리 콘솔  운영 상태운영 상태키 사용 가능 여부와 저장소 무결성을 확인하세요.저장소 검사 통과 · 예시확인 시각 2026.0",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "settings",
+    "heading": "설정·구성",
+    "main": "관리 콘솔  설정·구성설정·구성현재 적용된 정책과 운영 절차를 확인하세요.키 보호수명주기관리자·MFA백업·복구HSM·모니터링현",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "settings?tab=lifecycle",
+    "heading": "설정·구성",
+    "main": "관리 콘솔  설정·구성설정·구성현재 적용된 정책과 운영 절차를 확인하세요.키 보호수명주기관리자·MFA백업·복구HSM·모니터링현",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "settings?tab=identity",
+    "heading": "설정·구성",
+    "main": "관리 콘솔  설정·구성설정·구성현재 적용된 정책과 운영 절차를 확인하세요.키 보호수명주기관리자·MFA백업·복구HSM·모니터링현",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "settings?tab=backup",
+    "heading": "설정·구성",
+    "main": "관리 콘솔  설정·구성설정·구성현재 적용된 정책과 운영 절차를 확인하세요.키 보호수명주기관리자·MFA백업·복구HSM·모니터링현",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "settings?tab=integration",
+    "heading": "설정·구성",
+    "main": "관리 콘솔  설정·구성설정·구성현재 적용된 정책과 운영 절차를 확인하세요.키 보호수명주기관리자·MFA백업·복구HSM·모니터링현",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "services",
+    "heading": "내 서비스",
+    "main": "서비스 워크스페이스  내 서비스내 서비스서비스 연결과 인증서 상태를 확인하세요.사용 이력서비스 목록서비스 이름상태인증서 만료일",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "my-certificates",
+    "heading": "내 인증서",
+    "main": "서비스 워크스페이스  내 인증서내 인증서내 서비스에 발급된 공개 인증서를 확인하세요.사용 이력발급 인증서발급 대상일련번호상태만",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "enroll",
+    "heading": "인증서 요청",
+    "main": "서비스 워크스페이스  인증서 요청인증서 요청서비스 환경에서 만든 CSR을 제출하세요.사용 이력1CSR 등록2내용 확인3요청 완",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "my-requests",
+    "heading": "내 요청",
+    "main": "서비스 워크스페이스  내 요청내 요청등록·갱신 요청의 진행 상태를 확인하세요.사용 이력내 요청새 인증서 요청요청 번호서비스업무",
+    "scrollWidth": 390,
+    "width": 390
+  },
+  {
+    "route": "guide",
+    "heading": "연결 가이드",
+    "main": "서비스 워크스페이스  연결 가이드연결 가이드인증서 발급부터 신뢰 자료 적용까지 안내합니다.사용 이력서비스 연결 가이드CSR 준",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "my-activity",
+    "heading": "사용 이력",
+    "main": "서비스 워크스페이스  사용 이력사용 이력내 서비스의 인증서 요청과 다운로드 이력입니다.사용 이력내 서비스 이력전체 결과성공거부",
+    "scrollWidth": 390,
+    "width": 390
+  },
+  {
+    "route": "account",
+    "heading": "내 계정",
+    "main": "서비스 워크스페이스  내 계정내 계정내 역할과 접근 가능한 서비스를 확인하세요.사용 이력내 계정dev.lee역할서비스 담당자접",
+    "scrollWidth": 375,
+    "width": 375
+  },
+  {
+    "route": "login",
+    "heading": "키와 신뢰를 관리하는 작업 공간",
+    "main": "CastrelSign KMS키와 신뢰를 관리하는 작업 공간확인할 역할을 선택하면 예시 화면으로 이동합니다.키 관리자KEY_AD",
+    "scrollWidth": 390,
+    "width": 390
+  }
+]

@@ -23,7 +23,12 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class AdminAgentControllerTest {
+  @org.junit.jupiter.api.AfterAll
+  static void closeKeyStore() throws Exception {
+    org.castrelyx.castrelsign.kms.KeyManagementService.closeAt(tempDir);
+  }
   @TempDir
   static Path tempDir;
 

@@ -30,17 +30,20 @@ public class ApplicationController {
   private final CsrService csrService;
   private final CertificateAuthority authority;
   private final CastrelSignProperties properties;
+  private final org.castrelyx.castrelsign.kms.KmsAuthentication authentication;
 
   public ApplicationController(ApplicationEnrollmentTokenService tokenService, ApplicationPrincipalRepository repository,
-      CsrService csrService, CertificateAuthority authority, CastrelSignProperties properties) {
+      CsrService csrService, CertificateAuthority authority, CastrelSignProperties properties, org.castrelyx.castrelsign.kms.KmsAuthentication authentication) {
     this.tokenService = tokenService;
     this.repository = repository;
     this.csrService = csrService;
     this.authority = authority;
     this.properties = properties;
+    this.authentication = authentication;
   }
 
   @PostMapping("/enroll")
+  @org.springframework.transaction.annotation.Transactional
   public ApplicationEnrollmentResponse enroll(@RequestHeader(name = "Authorization", required = false) String authorization,
       @RequestBody ApplicationEnrollmentRequest request) {
     if (request == null || request.principalId() == null || request.principalId().isBlank()) {
@@ -65,7 +68,8 @@ public class ApplicationController {
   @GetMapping("/{principalId}/vault-access")
   public Map<String, Object> vaultAccess(@PathVariable String principalId,
       @RequestParam String permission,
-      @RequestParam(name = "serial_number") String serialNumber) {
+      @RequestParam(name = "serial_number") String serialNumber, jakarta.servlet.http.HttpServletRequest servletRequest) {
+    if (properties.getKms().production()) authentication.authenticate(servletRequest).require("VERIFIER", null);
     var principal = repository.principal(principalId)
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "application principal was not found"));
     if (!"ACTIVE".equals(principal.status())) {
@@ -74,7 +78,7 @@ public class ApplicationController {
     if (!principal.permissions().contains(permission)) {
       return decision(false, "application principal is missing Vault permission");
     }
-    if (!repository.hasActiveCertificate(principalId, serialNumber)) {
+    if (repository.activeCertificate(principalId, serialNumber).filter(authority::trustsClientCertificate).isEmpty()) {
       return decision(false, "application certificate is not active");
     }
     return decision(true, "allowed");

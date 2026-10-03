@@ -1,0 +1,139 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+}
+.app-shell {
+  min-height: 100vh;
+}
+.content {
+  padding-bottom: 12px;
+}
+.console-tools {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.console-tools small {
+  max-width: 250px;
+}
+.load-error {
+  margin-top: 12px;
+}
+.console-login {
+  max-width: 540px;
+}
+.console-login form {
+  margin-top: 28px;
+}
+.field input[type="checkbox"] {
+  width: 18px;
+}
+.json-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.8 Consolas,
+    monospace;
+  background: #1c1f22;
+  padding: 18px;
+  border-radius: 4px;
+}
+.page-heading > .actions {
+  justify-content: flex-end;
+}
+.count-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.table .row-link {
+  overflow-wrap: anywhere;
+}
+.table td {
+  max-width: 330px;
+}
+.pem-view {
+  max-height: 250px;
+  overflow: auto;
+  font:
+    12px/1.6 Consolas,
+    monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.dialog-actions .button {
+  flex: none;
+}
+.field-hint {
+  margin-bottom: 18px;
+}
+.session-realm {
+  margin-top: 20px;
+}
+.key-split .panel:first-child {
+  min-height: 400px;
+}
+.login-error {
+  margin-top: 18px;
+}
+.settings-content .facts dd {
+  word-break: break-word;
+}
+.status.good {
+  color: #a7c6b2;
+}
+.service-split .inspector > .actions {
+  flex-wrap: wrap;
+}
+.field textarea {
+  max-height: 350px;
+}
+button[aria-current="page"] {
+  font-weight: 700;
+}
+.app-version {
+  padding: 8px 0;
+}
+.approval-payload {
+  max-height: 240px;
+  overflow: auto;
+}
+.footer-actions {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+@media (max-width: 760px) {
+  .app-shell {
+    min-height: 100vh;
+  }
+  .sidebar.open {
+    top: 62px;
+    min-height: calc(100dvh - 62px);
+    max-height: calc(100dvh - 62px);
+  }
+  .page-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .page-heading > .actions {
+    justify-content: flex-start;
+  }
+  .identity span {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .console-tools small {
+    display: none;
+  }
+  .button.fd-button {
+    white-space: normal;
+  }
+  .table td {
+    max-width: none;
+  }
+}

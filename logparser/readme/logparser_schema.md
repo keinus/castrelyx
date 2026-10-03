@@ -83,7 +83,7 @@ REST 설정에는 canonical type 사용을 권장합니다.
 | `HttpInputAdapter` | `http` | canonical/alias 동작 |
 | `HttpsInputAdapter` | `https` | canonical/alias 동작 |
 | `KafkaInputAdapter` | `kafka` | canonical/alias 동작 |
-| `SnmpInputAdapter` | `snmp` | factory에는 alias가 있지만 현재 REST validator는 `snmp`를 거부하므로 canonical type 사용 |
+| `SnmpInputAdapter` | `snmp` | factory/API 지원 |
 | `RabbitMqInputAdapter` | `rabbitmq` | canonical/alias 동작 |
 | `TlsRabbitMqInputAdapter` | `tls_rabbitmq`, `tlsrabbitmq` | canonical/alias 동작 |
 | `TcpMtlsGzipInputAdapter` | `tcp_mtls_gzip` | canonical/alias 동작 |
@@ -225,6 +225,12 @@ OID는 문자열 또는 object로 지정합니다.
 ```
 
 object의 `oid`는 필수이고 `name` 기본값은 OID 문자열입니다.
+
+### 3.8.1 SnmpNotificationInputAdapter
+
+Type은 `SnmpNotificationInputAdapter`, alias는 `snmp_notification`입니다. `configParams` JSON 문자열에 `users`, `communities`, `communityEnvs` 중 하나 이상의 유효한 수신 인증 설정이 필요합니다. top-level `host`, `port`, `queueSize`와 세부 configParams 필드/기본값은 [SNMP 상세 스키마](snmp.md#trapinform-수신)를 따릅니다. Inform ACK는 메모리 큐 수락입니다.
+
+Polling의 `metrics.<name>`은 `{oid,syntax,status,value}` 객체이며 exception에서는 value를 생략합니다. 기존 문자열 mapping은 `.value` 경로로 변경합니다. `poll_status`는 `success`, `partial`, `error`입니다.
 
 ### 3.9 RabbitMqInputAdapter / TlsRabbitMqInputAdapter
 
@@ -510,7 +516,7 @@ Structured transform은 일반 transform 뒤, output 앞에서 항상 실행됩�
 
 | FieldMapping 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `sourceField` | String | parser/transform 결과의 exact top-level key |
+| `sourceField` | String | exact top-level key 우선. 없으면 중첩 Map의 점 경로(`metrics.temperature.value`) 또는 JSON Pointer(`/metrics/temperature/value`, `~0`/`~1` escape 지원). 배열 인덱스·JSONPath·표현식은 지원하지 않음 |
 | `targetField` | String | common target 또는 sub field 이름 |
 | `defaultValue` | String/null | source가 null일 때 사용할 문자열 기본값 |
 
@@ -580,6 +586,7 @@ rule은 배열 순서대로 평가하며 첫 match만 적용합니다. 조건식
 
 - mapping된 source field는 `additionalAttributes`에서 제외됩니다.
 - mapping되지 않은 source field는 `additionalAttributes`에 보존됩니다.
+- 중첩 sourceField로 일부 값을 매핑하면 원래 상위 객체는 `additionalAttributes`에 유지됩니다. MIB 생성 템플릿은 `event_snmp` sub-domain에 수집 메타데이터, 원래 `metrics`와 개별 `metric_<name>` 값을 보존합니다. MIB 업로드 API와 템플릿 생성 절차는 `snmp.md`를 참고합니다.
 - 저장 mapping이 없으면 `common.ingestTime`, `common.rawLog`, `common.logSource`만 만들고 모든 기존 field를 `additionalAttributes`에 보존합니다.
 - common conversion이 실패하면 해당 target은 null/미설정이 될 수 있습니다.
 
@@ -816,7 +823,7 @@ schema 1.1 chunk event는 `source_id + batch_id + chunk_index`별로 `chunk_item
 | --- | --- | --- |
 | Input HTTP | metadata에 `codec`, `path_pattern`이 있으나 runtime 미사용 | route/codec 제어 인자로 간주하지 않음 |
 | Input network `host` | metadata는 bind host처럼 설명하지만 TCP/UDP/HTTP listener가 사용하지 않음 | bind 제한이 필요하면 코드 변경 필요 |
-| Input `snmp` alias | factory/DB trigger에는 있으나 REST validator 누락 | `SnmpInputAdapter` 사용 |
+| Input `snmp` alias | factory/API/DB trigger 지원 | `snmp` 또는 `SnmpInputAdapter` 사용 |
 | Parser alias | validator/DB에는 있으나 runtime reflection 정규화 없음 | canonical parser class 이름 사용 |
 | Transform alias | validator/DB에는 있으나 runtime reflection 정규화 없음 | canonical transform class 이름 사용 |
 | OpenSearch field | metadata는 `index`, REST entity는 `indexTemplate` | API payload에는 `indexTemplate` 사용 |
@@ -863,3 +870,10 @@ schema 1.1 chunk event는 `source_id + batch_id + chunk_index`별로 `chunk_item
 - `SchemaDefinitionService`
 - `StructuredTransformController` endpoint DTO
 - mapping/template repository schema와 cache invalidation
+
+
+## Security Router TLS pipeline
+
+TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
+
+TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.
