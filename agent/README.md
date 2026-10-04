@@ -1,6 +1,6 @@
 # Castrelyx Agent
 
-## Security Router 제어 (0.3.0)
+## Security Router 제어 (0.4.0)
 
 Manager의 자산 상세 `Router 제어`에서 상태·포트·서비스·지원 기능 조회, 설정/VLAN/ACL 정책 검증과 차이 확인,
 적용, 운영 모드 전환, 허용 서비스 재시작, 설정 스냅샷 백업·복원, 작업·감사 조회를 제공합니다.
@@ -44,12 +44,81 @@ Manager가 사설 CA를 사용하는 CastrelSign에 접속할 때 공개 CA 파�
   `rolled_back`, `rollback_failed`, `rejected`, `UNKNOWN`, `EXPIRED`를 성공으로 처리하지 않습니다.
 - Router 자체 엔진이 설정 검증·직렬 적용·장비 검증·executor watchdog 롤백을 담당합니다.
   관리망 변경, 미지원 기능, 관리 포트 보호는 Router의 기존 capability 검사를 그대로 따릅니다.
-  Manager 연결 여부를 기준으로 하는 별도 confirmed-commit 기능은 제공하지 않습니다.
+  확인 기한을 지원하는 Router에서는 Manager가 `confirmWithinSeconds: 120`으로 임시 적용합니다.
+  통신 확인 후 `confirm`하거나 `rollback`으로 복구합니다. 기한 만료 시 독립 executor가 복구하며,
+  제어기 재시작 시에도 미확정 변경을 복구합니다. 응답을 받지 못한 작업은 성공으로 표시하지 않습니다.
+  지원 전 장비는 기존 적용 흐름을 유지합니다. API 직접 호출에서 기한을 생략하면 기존 즉시 확정 방식입니다.
 - 설정 변경 전 `${spool_dir}/router-control`에 0600 설정 스냅샷을 저장합니다. 이는 계정·인증서·비밀값·DB 전체 백업이 아닙니다.
   복원도 현재 revision을 기준으로 검증·적용하며 device ID 변경은 거부합니다. 전체 암호화 백업은 Router의 별도 `switchctl backup` 절차를 사용합니다.
 - 지원 재시작 대상은 switchd, switch-zeek, switch-telemetryd, switch-lldpd, switch-syslog, switch-agentx, switch-snmpd입니다.
   진행 중이거나 복구가 필요한 Router job이 있으면 재시작을 거부합니다. 임의 셸 명령은 받지 않습니다.
 - 감사/Zeek 로그는 기존 Router → Logparser → ClickHouse → Manager 경로를 사용합니다.
+  `Hunt → Agent Logs`에서도 Router의 Zeek 로그를 함께 조회합니다. `Zeek`는 네트워크 분석 로그,
+  `Host logs`는 Zeek를 제외한 Agent 로그를 표시합니다. 검색은 선택한 기간의 저장 로그 전체에 먼저 적용하고 최근 300건을 표시합니다.
+  Router의 같은 로그 파일을 Agent에 추가해 이중 수집하지 않습니다.
+
+### 라우팅·ACL·보안 편집
+
+`설정·정책`은 라우팅·NAT, ACL, 포트·VLAN, 포트 보안, 고급 JSON 탭을 제공합니다. 다른 설정 필드는 보존합니다.
+IPv4/IPv6 VLAN 인터페이스와 정적 경로, IPv4 SNAT/DNAT, ACL 기본 허용/차단과 규칙·포트 연결,
+정적 MAC/IP 바인딩, DAI/IP Source Guard, BPDU Guard와 Storm Control을 편집할 수 있습니다.
+기존 ACL의 기본값은 허용이며 새 UI 프로필은 차단으로 시작합니다. 포트 기본 차단에는 ARP 허용도 필요합니다.
+라우팅 ACL은 별도로 반드시 지정하고 DNAT 후/SNAT 전 주소를 검사합니다. `routing.stateful`을 켜면 허용된 연결의 established/related 패킷을 자동 허용합니다. 기본값은 false입니다.
+같은 VLAN에 IPv4/IPv6 주소를 각각 1개씩 넣어 함께 사용할 수 있습니다. IPv6 다음 홉은 해당 VLAN의 직접 연결 주소 또는 링크 로컬 주소를 지원하며 RA/autoconf는 사용하지 않습니다.
+`상태·포트`에 실제 SVI 주소·커널 경로·ARP/NDP 이웃과 설정 일치 여부를 표시합니다. 확정 기한 만료 후 작업 결과도 자동 조회합니다.
+
+동작에는 함께 변경된 `D:/study/security_router`의 모델·executor·controller가 필요합니다.
+Router 배포 렌더러의 `--enable-routing`으로 전용 네트워크 네임스페이스와 nftables 어댑터를 활성화합니다.
+이 실행부는 `CAP_SYS_ADMIN`을 추가로 요구하며 서비스 전용 `/run/security-switch-routing`을 `/run/netns`에 바인드합니다.
+호스트 관리망의 경로·방화벽·forwarding은 변경하지 않습니다. 라우팅을 켜려면 데이터 포트 VLAN과 겹치는 관리망이 없는
+IPv4 또는 IPv6 인터페이스 및 명시적 ACL이 필요합니다. 전체 적용 시 데이터 포트가 잠시 내려가고 기존 NAT 연결이 종료될 수 있습니다.
+OSPF/BGP, 802.1X/AAA, MACsec와 패킷 로그·페이로드 검사는 아직 구현되지 않았습니다. 이 항목은 별도 실행 어댑터와 상대 장비 연동이 필요하며 지원 완료로 표시하지 않습니다.
+
+이전 0.3.0 구현의 검증 기록: Router Go 전체 패키지·race 검사, 격리된 실제 OVS/nft 패킷 시험(정적 경로·SNAT·DNAT·입출력 ACL·IPSG·독립 롤백),
+Agent TLS 전달·재전송 시험, Manager 권한·기한 검사, Playwright 데스크톱/모바일 확정·복구 흐름.
+Browser plugin not available: UI 검증은 저장소의 Playwright를 사용했습니다. 운영 데이터 포트의 물리 링크 인수 시험은 별도입니다.
+
+2026-10-04 배포 확인: `.21~.25`의 Agent 실행 파일은 0.4.0이며 서비스는 active입니다. `.25`의 Router는 0.3.0,
+Manager 이미지는 `castrelyx-manager:router-l3-20261004-035428`입니다. Router revision 6에서 기존 정책 동일성,
+120초 임시 적용·확정과 30초 기한 만료 복구를 확인했습니다. 운영 라우팅은 비활성 상태이며 실제 데이터 링크는 DOWN입니다.
+Manager 테스트는 70개 통과/1개 인프라 의존 테스트 제외, 프론트 단위 시험 34개 및 Playwright 5개가 통과했습니다.
+CastrelSign Agent 목록의 등록 버전은 기존 0.3.0으로 남아 있으므로 이번 배포 버전은 실행 파일의 `-version`으로 확인했습니다.
+최종 Router 백업은 `.25:/var/backups/castrelyx/router-l3-20261004-035807`, Manager 백업은
+`.21:/home/keinus/.codex-releases/router-l3-manager-20261004-035428`에 있습니다.
+
+### 2026-10-04 추가 배포 및 UI 인수 상태
+
+- Router 0.3.1을 `.25`에 배포했습니다. 복구본: `/var/backups/castrelyx/router-ui-20261004-042456`.
+- Manager 이미지: `castrelyx-manager:router-l3-20261004-042529`. 복구본: `.21:/home/keinus/.codex-releases/router-l3-manager-20261004-042529`.
+- Go 전체 실행 패키지 빌드, TypeScript/Vite 빌드, `bootJar -x test -PskipFrontend`가 성공했습니다. 이번 요청에서는 테스트 코드를 실행하지 않았습니다.
+- 배포 절차에서 서비스 준비 상태와 기존 Router 정책 보존을 확인했습니다. 라우팅은 계속 비활성 상태입니다.
+- **Router 제어의 기능별 UI 인수는 미완료입니다.** 초기에는 `ERR_CERT_AUTHORITY_INVALID`로 접속이 막혔으나,
+  검증한 Manager CA를 Windows 현재 사용자 신뢰 저장소에 등록한 뒤 HTTPS UI에 정상 접속했습니다. 인증서 검증을 비활성화하지 않았습니다.
+- 데이터 포트 `enp2s0`, `enp3s0`는 NO-CARRIER입니다. 설정 적용 확인과 별개로 실제 상대 장비까지의 통신 시험은 아직 할 수 없습니다.
+- UI 확인 대기 항목: 로그인 → security 자산 → Router 상태/기능 조회 → 원본 백업 → 포트/VLAN/MTU 편집 → ACL IPv4/IPv6/기본 동작/속도 제한 → 정적 MAC/IP·DAI/IPSG·BPDU·DHCP 응답 차단·Storm Control → IPv4/IPv6 SVI/정적 경로·SNAT/DNAT·상태 추적 → 변경 검증/차이 → 임시 적용/확정/즉시 복구/기한 복구 → 운영 모드/서비스 재시작 → 작업/감사 이력 → 원본 복원.
+- 미수행 항목은 통과로 처리하지 않습니다. 위의 0.3.0 자동 시험 결과는 이번 0.3.1 UI 인수를 대체하지 않습니다.
+
+2026-10-04 Zeek 표시 수정의 실제 UI 확인: `Hunt → Agent Logs`에서 `zeek.conn`, `zeek.dns`, `zeek.ssl`,
+`zeek.ssh`를 확인했습니다. Zeek/security 자산 필터, UID 검색, 심각도 제외, 다른 자산으로의 필터 전환,
+15분/1시간/24시간 조회, 새로고침, Host logs 복귀를 직접 조작했습니다. 최신 300건의 가장 오래된 로그는 13:40:09였고,
+`zeek.ssh` 검색으로 13:38:11부터 00:14:26까지의 34건을 찾아 표시 범위 밖의 서버 검색도 확인했습니다.
+테스트 코드는 실행하지 않았으며 이 확인은 Router 정책 변경·패킷 전달 인수를 대신하지 않습니다.
+Zeek 표시 수정의 최종 Manager 이미지는 `castrelyx-manager:router-l3-20261004-044604`이며,
+복구본은 `.21:/home/keinus/.codex-releases/router-l3-manager-20261004-044604`에 있습니다.
+
+### 2026-10-04 Security Log Hunt 해석·연관 분석
+
+- Manager의 `Hunt → 분석·조사`에서 개별 로그를 위협 의심, 운영 문제, 확인 필요, 통신·활동 기록, 판단 보류로 구분합니다. 원천 INFO/WARNING 등급과 조사 우선순위 P1~P4는 분리합니다.
+- 각 로그에 한국어 해석, 직접 근거, 다음 확인 사항, 아직 알 수 없는 점을 표시합니다. Zeek 센서 트래픽 부족, TCP 응답 미관측, DNS 실패, TLS 인증서 문제, Docker 상태 점검 실패 등을 구분하며 단순 오류를 침해 확정으로 취급하지 않습니다.
+- 반복 인증 실패·실패 후 성공, 실패한 TCP 포트/호스트 탐색, DNS 실패 반복, 운영 문제 반복을 5분 구간으로 연관 분석합니다. 동일 자산·수집원·Zeek UID의 관련 로그와 조사 근거 시간 흐름에서 원본으로 이동할 수 있습니다.
+- 분석은 조회 시점의 최신 10,000건까지입니다. 한도 초과·실제 관측 범위·규칙 임계값을 화면에 표시합니다. 검색/종류/원천 등급/분류는 분석 후 표시 필터이며, 기간/자산으로 분석 범위를 좁힐 수 있습니다. 기존 전체 기간 원문 검색은 별도 탭으로 유지합니다.
+- 외부 위협 정보 조회, 공격 확정 판정, 자동 차단, 지속 감시·영구 사건 저장은 포함하지 않습니다. 지원하지 않는 로그를 안전으로 분류하지 않습니다.
+- 최종 Manager 이미지: `castrelyx-manager:router-l3-20261004-051418`. 복구본: `.21:/home/keinus/.codex-releases/router-l3-manager-20261004-051418`.
+- TypeScript/Vite, Java 컴파일 및 `bootJar -x test -PskipFrontend` 빌드가 성공했습니다. 테스트 코드는 실행하지 않았습니다.
+- 실제 HTTPS UI에서 Docker 실패 8건의 연관 조사와 개별 로그 이동, Zeek CaptureLoss 알림의 운영 문제 해석, 동일 UID의 TLS/conn 2건 조회, 검색·자산·종류·심각도·분류 필터, 50건 단위 이전/다음 이동, 24시간 조회의 10,000건 제한 경고, 원문 검색에서 당일 00:14:26 SSH 기록까지 조회를 확인했습니다.
+- 데스크톱 및 390px 모바일 뷰포트에서 검색·로그 상세를 조작했고 가로 넘침이 없었습니다. 근거/다음 확인/불확실성 표시, 규칙 안내 펼침, 새로고침을 확인했으며 최종 배포 후 브라우저 콘솔 오류·경고는 없었습니다. 배포 중 재시작 구간의 일시적 502는 새로고침 후 해소됐습니다.
+- 실제 조회 데이터에 공격 연관 규칙을 만족하는 사례가 없어 공격 탐지 양성 경로는 UI 인수 미완료입니다. 운영 문제 연관 분석 확인을 공격 탐지 검증으로 대체하지 않습니다. Router 정책 제어·물리적 패킷 전달 인수 상태도 위 항목과 동일합니다.
+
 
 검증: Agent 어댑터는 HTTPS·identity·revision·중복 실행·재시작 journal을 검사하고,
 Java 테스트는 권한·다른 자산의 결과 접근·전달 재시도·작업 lease를 검사합니다.

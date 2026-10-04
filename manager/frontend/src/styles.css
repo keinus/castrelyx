@@ -3444,6 +3444,7 @@ tr:last-child td {
   display: grid;
   gap: 3px;
   min-width: 0;
+  white-space: normal;
 }
 
 .agent-log-meta strong,

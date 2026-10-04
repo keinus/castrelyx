@@ -89,4 +89,16 @@ class RouterControlControllerTest {
     doReturn(List.of(Map.of("agent_id","agent-25","status","ACTIVE"))).when(client).listAgents();
     mvc.perform(put(base+"/binding").cookie(cookie(Role.ADMIN)).contentType("application/json").content("{\"agentId\":\"agent-25\",\"routerId\":\"router-control-test\"}")).andExpect(status().isOk()).andExpect(jsonPath("$.enabled").value(true));
   }
+  @Test void confirmationRequiresAdminAndBoundsDeadline()throws Exception {
+    Cookie admin=cookie(Role.ADMIN);String job="a".repeat(32);
+    for(String action:List.of("confirm","rollback")) {
+      mvc.perform(post(base+"/commands").cookie(cookie(Role.VIEWER)).contentType("application/json").content(operation(UUID.randomUUID().toString(),Map.of("action",action,"jobId",job)))).andExpect(status().isForbidden());
+      mvc.perform(post(base+"/queries").cookie(admin).contentType("application/json").content(operation(UUID.randomUUID().toString(),Map.of("action",action,"jobId",job)))).andExpect(status().isBadRequest());
+      mvc.perform(post(base+"/commands").cookie(admin).contentType("application/json").content(operation(UUID.randomUUID().toString(),Map.of("action",action,"jobId",job)))).andExpect(status().isAccepted());
+    }
+    for(Object duration:List.of(0,29,301,120.5,"120")) {
+      mvc.perform(post(base+"/commands").cookie(admin).contentType("application/json").content(operation(UUID.randomUUID().toString(),Map.of("action","apply","kind","config","expectedRevision",4,"confirmWithinSeconds",duration)))).andExpect(status().isBadRequest());
+    }
+    mvc.perform(post(base+"/commands").cookie(admin).contentType("application/json").content(operation(UUID.randomUUID().toString(),Map.of("action","confirm","jobId","../../other")))).andExpect(status().isBadRequest());
+  }
 }

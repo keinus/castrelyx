@@ -42,6 +42,11 @@ public class DashboardQueryService {
     return clickHouseClient.queryAgentLogEvents(range, severity, assetUid, limit);
   }
 
+  public List<Map<String, Object>> agentLogs(String range, String severity, String assetUid, int limit,
+      String family, String query) {
+    return clickHouseClient.queryAgentLogEvents(range, severity, assetUid, limit, family, query);
+  }
+
   public Map<String, Object> snmpDashboard() {
     return snmpDashboard(null);
   }

@@ -78,6 +78,53 @@ func TestReplayUsesDurableResultAndDoesNotSubmitAgain(t *testing.T) {
 		t.Fatal("missing pre-change backup")
 	}
 }
+
+func TestConfirmedApplyAndSettlementUseTypedRouterAPI(t *testing.T) {
+	c, _ := fixture(t)
+	calls := []string{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/login":
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "private-token"})
+		case "/api/v1/state":
+			_ = json.NewEncoder(w).Encode(map[string]any{"config": map[string]any{"device": map[string]string{"id": "router-25"}}})
+		case "/api/v1/jobs":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["confirmWithinSeconds"] != float64(120) {
+				t.Errorf("confirmation deadline lost: %v", body)
+			}
+			calls = append(calls, "apply")
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": strings.Repeat("a", 32), "status": "accepted"})
+		default:
+			if r.Method != "POST" || !(strings.HasSuffix(r.URL.Path, "/confirm") || strings.HasSuffix(r.URL.Path, "/rollback")) {
+				t.Errorf("unexpected request %s", r.URL.Path)
+			}
+			calls = append(calls, r.URL.Path)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+		}
+	}))
+	defer server.Close()
+	c.cfg.URL = server.URL
+	c.http = server.Client()
+	body := []byte(`{"action":"apply","routerId":"router-25","expectedRevision":4,"kind":"port.admin","parameters":{"port":"eth1","state":"down"},"confirmWithinSeconds":120}`)
+	if _, err := c.Execute(context.Background(), "confirm-apply", body); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"confirm", "rollback"} {
+		payload, _ := json.Marshal(map[string]string{"action": action, "routerId": "router-25", "jobId": strings.Repeat("a", 32)})
+		if _, err := c.Execute(context.Background(), action, payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Execute(context.Background(), action, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(calls) != 3 {
+		t.Fatal("replay submitted a duplicate mutation", calls)
+	}
+}
 func TestRejectWrongIdentityMissingRevisionAndInjection(t *testing.T) {
 	c, calls := fixture(t)
 	for i, body := range []string{

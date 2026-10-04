@@ -29,7 +29,7 @@ import (
 	"castrelyx/agent/internal/updater"
 )
 
-const agentVersion = "0.3.0"
+const agentVersion = "0.4.0"
 const renewBefore = 7 * 24 * time.Hour
 const identityCheckInterval = time.Hour
 const identityRetryBase = time.Minute

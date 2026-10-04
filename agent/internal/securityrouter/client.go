@@ -30,17 +30,18 @@ type Config struct {
 	URL, CAFile, CredentialsFile, RouterID, StateDir string
 }
 type Request struct {
-	Action           string            `json:"action"`
-	RouterID         string            `json:"routerId"`
-	ExpectedRevision *int64            `json:"expectedRevision,omitempty"`
-	Kind             string            `json:"kind,omitempty"`
-	Config           json.RawMessage   `json:"config,omitempty"`
-	Parameters       map[string]string `json:"parameters,omitempty"`
-	JobID            string            `json:"jobId,omitempty"`
-	BackupID         string            `json:"backupId,omitempty"`
-	Mode             string            `json:"mode,omitempty"`
-	Until            string            `json:"until,omitempty"`
-	Service          string            `json:"service,omitempty"`
+	Action               string            `json:"action"`
+	RouterID             string            `json:"routerId"`
+	ExpectedRevision     *int64            `json:"expectedRevision,omitempty"`
+	Kind                 string            `json:"kind,omitempty"`
+	Config               json.RawMessage   `json:"config,omitempty"`
+	Parameters           map[string]string `json:"parameters,omitempty"`
+	JobID                string            `json:"jobId,omitempty"`
+	BackupID             string            `json:"backupId,omitempty"`
+	Mode                 string            `json:"mode,omitempty"`
+	Until                string            `json:"until,omitempty"`
+	Service              string            `json:"service,omitempty"`
+	ConfirmWithinSeconds int               `json:"confirmWithinSeconds,omitempty"`
 }
 type Client struct {
 	cfg     Config
@@ -161,7 +162,7 @@ func resultError(message string) error {
 }
 
 func (c *Client) run(ctx context.Context, id string, r Request) (map[string]any, error) {
-	allowed := map[string]bool{"state": true, "jobs": true, "audit": true, "validate": true, "apply": true, "mode": true, "backup": true, "backups": true, "restore": true, "restart": true}
+	allowed := map[string]bool{"state": true, "jobs": true, "audit": true, "validate": true, "apply": true, "mode": true, "backup": true, "backups": true, "restore": true, "restart": true, "confirm": true, "rollback": true}
 	if !allowed[r.Action] {
 		return nil, errors.New("unsupported router action")
 	}
@@ -176,10 +177,15 @@ func (c *Client) run(ctx context.Context, id string, r Request) (map[string]any,
 	}
 	switch r.Action {
 	case "state":
-		state["controlVersion"] = "1"
-		state["actions"] = []string{"state", "jobs", "audit", "validate", "apply", "mode", "backup", "backups", "restore", "restart"}
+		state["controlVersion"] = "2"
+		state["actions"] = []string{"state", "jobs", "audit", "validate", "apply", "mode", "backup", "backups", "restore", "restart", "confirm", "rollback"}
 		state["restartServices"] = restartServices
 		return state, nil
+	case "confirm", "rollback":
+		if !identifier.MatchString(r.JobID) {
+			return nil, errors.New("valid router job ID required")
+		}
+		return c.call(ctx, "POST", "/api/v1/jobs/"+r.JobID+"/"+r.Action, map[string]any{})
 	case "jobs", "audit":
 		path := "/api/v1/" + r.Action
 		if r.JobID != "" {
@@ -280,6 +286,12 @@ func (c *Client) run(ctx context.Context, id string, r Request) (map[string]any,
 		}
 	}
 	body := map[string]any{"idempotencyKey": "castrelyx-" + id, "expectedRevision": *r.ExpectedRevision, "kind": r.Kind}
+	if r.ConfirmWithinSeconds != 0 {
+		if r.ConfirmWithinSeconds < 30 || r.ConfirmWithinSeconds > 300 {
+			return nil, errors.New("confirmation window must be 30..300 seconds")
+		}
+		body["confirmWithinSeconds"] = r.ConfirmWithinSeconds
+	}
 	if len(r.Config) > 0 {
 		body["config"] = r.Config
 	}

@@ -1,0 +1,34 @@
+# Merge these settings into the existing deployment override. Compose >= 2.24.4
+# is required for !override; it replaces the public 8780 binding completely.
+services:
+  manager:
+    environment:
+      MANAGER_PUBLIC_BASE_URL: https://192.168.50.21
+      SERVER_FORWARD_HEADERS_STRATEGY: native
+    ports: !override
+      - "127.0.0.1:8780:8780"
+  manager-https:
+    # Pin to the verified image digest used by the target deployment.
+    image: ${MANAGER_HTTPS_IMAGE:?Set the verified nginx image digest}
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;"]
+    restart: unless-stopped
+    depends_on:
+      manager:
+        condition: service_started
+    ports:
+      - "443:443"
+    volumes:
+      - /etc/castrelyx/manager-https/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/castrelyx/manager-https/tls:/etc/nginx/tls:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m
+      - /var/run:size=1m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

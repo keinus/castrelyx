@@ -22,8 +22,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class RouterControlService {
   private static final Set<String> READS = Set.of("state", "jobs", "audit", "backups");
-  private static final Set<String> WRITES = Set.of("validate", "apply", "mode", "backup", "restore", "restart");
-  private static final Set<String> FIELDS = Set.of("action", "expectedRevision", "kind", "config", "parameters", "jobId", "backupId", "mode", "until", "service");
+  private static final Set<String> WRITES = Set.of("validate", "apply", "mode", "backup", "restore", "restart", "confirm", "rollback");
+  private static final Set<String> FIELDS = Set.of("action", "expectedRevision", "kind", "config", "parameters", "jobId", "backupId", "mode", "until", "service", "confirmWithinSeconds");
   private static final Set<String> OPEN = Set.of("QUEUED", "PENDING", "RUNNING");
   private final JdbcTemplate jdbc;
   private final CastrelSignClient client;
@@ -65,6 +65,13 @@ public class RouterControlService {
     String action=String.valueOf(request.get("action"));
     if(query ? !READS.contains(action) : !WRITES.contains(action)) throw new IllegalArgumentException("unsupported router operation");
     if(!query) requireAdmin(user);
+    if(request.containsKey("confirmWithinSeconds")) {
+      if(!(request.get("confirmWithinSeconds") instanceof Number window) || window.doubleValue()!=window.intValue()
+          || window.intValue()<30 || window.intValue()>300 || !Set.of("validate","apply","restore").contains(action))
+        throw new IllegalArgumentException("confirmation window must be 30..300 seconds for configuration changes");
+    }
+    if(Set.of("confirm","rollback").contains(action) && (!(request.get("jobId") instanceof String jobId) || !jobId.matches("[a-f0-9]{32}")))
+      throw new IllegalArgumentException("valid Router jobId is required");
     if(requestId==null || !UUID.fromString(requestId).toString().equals(requestId)) throw new IllegalArgumentException("requestId must be a UUID");
     long asset=assetId(uid);
     Binding binding=binding(uid); if(!binding.enabled()) throw new IllegalStateException("router control is not configured for this asset");

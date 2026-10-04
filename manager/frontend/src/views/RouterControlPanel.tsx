@@ -7,14 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
-import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { routerControl, type RouterBinding, type RouterCommand, type RouterState } from '@/lib/routerControl';
+import { routerControl, type RouterBinding, type RouterCommand, type RouterState, type RouterJob } from '@/lib/routerControl';
+import { RouterPolicyEditor } from './RouterPolicyEditor';
+import { RouterRoutingStatus } from './RouterRoutingStatus';
 import type { Role } from '@/lib/types';
 
 type Draft = { request: Record<string, unknown>; title: string; diff?: unknown };
-type RouterJob = { id: string; status: string; error?: string; request?: { kind?: string }; updatedAt?: string };
 const print = (value: unknown) => JSON.stringify(value, null, 2);
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -34,9 +34,12 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [pending, setPending] = useState<RouterJob | null>(null);
+  const [now, setNow] = useState(Date.now());
   const control = useRef<AbortController | null>(null);
   const generation = useRef(0);
   const lock = useRef(false);
+  const expiryRefresh = useRef('');
 
   const perform = useCallback(async (work: (signal: AbortSignal) => Promise<void>) => {
     if (lock.current) return;
@@ -48,7 +51,7 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
     finally {
       if (generation.current === current) {
         lock.current = false; setBusy(false);
-        if (!abort.signal.aborted) routerControl.history(assetUid).then(setHistory).catch(() => {});
+        if (!abort.signal.aborted) routerControl.history(assetUid).then(value => { if (generation.current === current) setHistory(value); }).catch(() => {});
       }
     }
   }, [assetUid]);
@@ -56,12 +59,12 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
   const loadState = useCallback(async (signal: AbortSignal) => {
     const data = await routerControl.run(assetUid, { action: 'state' }, signal) as unknown as RouterState;
     if (signal.aborted) return;
-    setState(data); setConfig(print(data.config)); setDraft(null);
+    setState(data); setConfig(print(data.config)); setDraft(null); setPending(data.pendingJob ?? null);
   }, [assetUid]);
 
   useEffect(() => {
     generation.current++; control.current?.abort(); lock.current = false;
-    setBusy(false); setBinding(null); setState(null); setHistory([]); setJobs([]); setBackups([]); setDraft(null); setError(''); setNotice(''); setAudit(null);
+    setBusy(false); setBinding(null); setState(null); setHistory([]); setJobs([]); setBackups([]); setDraft(null); setError(''); setNotice(''); setAudit(null); setPending(null);
     if (!active) return;
     let cancelled = false;
     routerControl.binding(assetUid).then(value => {
@@ -72,7 +75,25 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
     return () => { cancelled = true; generation.current++; control.current?.abort(); lock.current = false; };
   }, [active, assetUid, loadState, perform]);
 
+  useEffect(() => { if (!pending) return; const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, [pending]);
+  useEffect(() => {
+    if (!active || !pending || !pending.confirmBy || busy || Date.parse(pending.confirmBy) + 1500 > now || expiryRefresh.current === pending.id) return;
+    const id = pending.id;
+    expiryRefresh.current = id;
+    void perform(async signal => {
+      const job = await routerControl.run(assetUid, { action: 'jobs', jobId: id }, signal) as unknown as RouterJob;
+      if (signal.aborted) return;
+      setJobs(previous => [job, ...previous.filter(item => item.id !== id)]);
+      await loadState(signal);
+      if (job.status === 'rolled_back') setNotice('확정 기한이 지나 변경 전 설정으로 자동 복구되었습니다.');
+      else setNotice(`확정 기한이 지났습니다. 현재 작업 상태: ${job.status}. 상태를 새로고침해 복구 완료를 확인하세요.`);
+    });
+  }, [active, assetUid, busy, loadState, now, pending, perform]);
+  const protectedApply = state?.capabilities?.some(cap => cap.id === 'AUTO-05.confirmed-commit' && cap.state === 'supported');
+
   const prepare = (request: Record<string, unknown>, title: string) => void perform(async signal => {
+    if (pending) throw new Error('현재 변경을 확정하거나 되돌린 뒤 다음 변경을 검증하세요.');
+    if (protectedApply) request = { ...request, confirmWithinSeconds: 120 };
     setDraft(null);
     const diff = await routerControl.run(assetUid, { ...request, action: 'validate' }, signal);
     if (!signal.aborted) setDraft({ request, title, diff });
@@ -84,14 +105,25 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
       const result = await routerControl.run(assetUid, selected.request, signal);
       if (signal.aborted) return;
       if (result.id) {
-        setNotice(`Router 작업 ${String(result.id)} 접수됨. 실제 적용 결과는 작업 이력에서 확인하세요.`);
-        const list = await routerControl.run(assetUid, { action: 'jobs' }, signal);
-        if (!signal.aborted) setJobs((list.items ?? []) as RouterJob[]);
+        const job = await routerControl.waitJob(assetUid, result as unknown as RouterJob, signal);
+        if (signal.aborted) return;
+        setJobs(previous => [job, ...previous.filter(item => item.id !== job.id)]);
+        if (job.status === 'awaiting_confirmation') { await loadState(signal); if (signal.aborted) return; setPending(job); setNow(Date.now()); setNotice('설정이 임시 적용되었습니다. 통신을 확인한 뒤 제한 시간 안에 확정하세요.'); return; }
+        if (job.status !== 'committed') throw new Error(`Router ${job.status}: ${job.error ?? job.id}`);
+        setNotice('Router 적용 및 읽기 검증이 완료되었습니다.');
       } else setNotice('작업이 완료되었습니다.');
       await loadState(signal);
     });
   };
   const revision = state?.appliedRevision;
+  const settle = (action: 'confirm' | 'rollback') => { if (!pending) return; const id = pending.id; void perform(async signal => {
+    const job = await routerControl.run(assetUid, { action, jobId: id }, signal) as unknown as RouterJob;
+    if (signal.aborted) return;
+    await loadState(signal);
+    setJobs(previous => [job, ...previous.filter(item => item.id !== job.id)]);
+    if (job.status !== (action === 'confirm' ? 'committed' : 'rolled_back')) throw new Error(`Router ${job.status}: ${job.error ?? '작업 상태를 확인하세요.'}`);
+    setNotice(action === 'confirm' ? '변경을 확정했습니다.' : '변경 전 설정으로 복구했습니다.');
+  }); };
 
   if (!active) return null;
   return <div className="flex min-w-0 flex-col gap-4" aria-busy={busy}>
@@ -118,21 +150,22 @@ export function RouterControlPanel({ assetUid, role, active }: { assetUid: strin
       </CardContent>
     </Card>
     {state ? <>
+      {pending ? <Alert><AlertTitle>변경 확정 대기 · {Math.max(0, Math.ceil((Date.parse(pending.confirmBy ?? '') - now) / 1000))}초</AlertTitle><AlertDescription><p>통신을 확인하고 확정하세요. 시간이 지나거나 제어기가 재시작되면 Router가 변경 전 설정으로 복구합니다. 작업 {pending.id}</p>{admin ? <div className="flex flex-wrap gap-2"><Button disabled={busy || Date.parse(pending.confirmBy ?? '') <= now} onClick={() => settle('confirm')}>통신 확인·변경 확정</Button><Button variant="outline" disabled={busy} onClick={() => settle('rollback')}>즉시 되돌리기</Button></div> : null}</AlertDescription></Alert> : null}
       {draft ? <Card><CardHeader><CardTitle>{draft.title} — 적용 전 확인</CardTitle><CardDescription>버전 {revision} 기준입니다. 변경 후 Router가 검증하며 실패 시 자체 롤백을 수행합니다.</CardDescription></CardHeader>
         <CardContent className="flex flex-col gap-3">{draft.diff ? <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">{print(draft.diff)}</pre> : <p>{print(draft.request)}</p>}
           <div className="flex gap-2"><Button disabled={busy} onClick={apply}>확인 후 적용</Button><Button variant="outline" disabled={busy} onClick={() => setDraft(null)}>취소</Button></div></CardContent></Card> : null}
       <Tabs defaultValue="status">
         <TabsList className="h-auto flex-wrap"><TabsTrigger value="status">상태·포트</TabsTrigger><TabsTrigger value="configuration">설정·정책</TabsTrigger><TabsTrigger value="operations">운영·복원</TabsTrigger><TabsTrigger value="history">작업 이력</TabsTrigger></TabsList>
-        <TabsContent value="status"><Card><CardHeader><CardTitle>데이터 포트</CardTitle><CardDescription>관리 포트와 업링크 보호 규칙은 장비에서 검증합니다.</CardDescription></CardHeader><CardContent>
-          <Table><TableHeader><TableRow><TableHead>포트</TableHead><TableHead>역할</TableHead><TableHead>관리 / 링크</TableHead>{admin ? <TableHead>제어</TableHead> : null}</TableRow></TableHeader><TableBody>
-            {(state.snapshot.ports ?? []).map(port => <TableRow key={port.name}><TableCell>{port.name}</TableCell><TableCell>{port.role}</TableCell><TableCell>{port.admin ? 'UP' : 'DOWN'} / {port.oper ? 'UP' : 'DOWN'}</TableCell>
+        <TabsContent value="status" className="flex flex-col gap-4"><Card><CardHeader><CardTitle>데이터 포트</CardTitle><CardDescription>관리 포트와 업링크 보호 규칙은 장비에서 검증합니다.</CardDescription></CardHeader><CardContent>
+          <Table><TableHeader><TableRow><TableHead>포트</TableHead><TableHead>역할</TableHead><TableHead>관리 / 링크</TableHead><TableHead>MTU / MAC</TableHead><TableHead>패킷 수 (수신 / 송신)</TableHead>{admin ? <TableHead>제어</TableHead> : null}</TableRow></TableHeader><TableBody>
+            {(state.snapshot.ports ?? []).map(port => <TableRow key={port.name}><TableCell>{port.name}</TableCell><TableCell>{port.role}</TableCell><TableCell>{port.admin ? 'UP' : 'DOWN'} / {port.oper ? 'UP' : 'DOWN'}</TableCell><TableCell>{port.mtu ?? '미확인'} / {port.mac ?? '미확인'}</TableCell><TableCell>{port.countersAvailable ? `${port.rxPackets ?? 0} / ${port.txPackets ?? 0}` : '미확인'}</TableCell>
               {admin ? <TableCell><Button size="sm" variant="outline" disabled={busy || !['access', 'mirror-output'].includes(port.role)} onClick={() => prepare({ action: 'apply', kind: 'port.admin', expectedRevision: revision, parameters: { port: port.name, state: port.admin ? 'down' : 'up' } }, `${port.name} ${port.admin ? '비활성화' : '활성화'}`)}>변경 검증</Button></TableCell> : null}</TableRow>)}
           </TableBody></Table>
           <details className="mt-4"><summary>지원 기능과 제한</summary><Table><TableBody>{(state.capabilities ?? []).map(cap => <TableRow key={cap.id}><TableCell>{cap.id}</TableCell><TableCell>{cap.state}</TableCell><TableCell>{cap.reason}</TableCell></TableRow>)}</TableBody></Table></details>
-        </CardContent></Card></TabsContent>
+        </CardContent></Card><RouterRoutingStatus routing={state.snapshot.details?.routing} /></TabsContent>
         <TabsContent value="configuration"><Card><CardHeader><CardTitle>설정 검증 및 적용</CardTitle><CardDescription>VLAN·ACL·보안 정책을 편집한 뒤 검증 결과의 변경 사항을 확인하세요. 비밀값은 표시되지 않습니다.</CardDescription></CardHeader><CardContent><FieldGroup>
-          <Field><FieldLabel htmlFor="router-config">설정 JSON · 버전 {revision}</FieldLabel><Textarea id="router-config" className="min-h-80 font-mono" value={config} disabled={busy} readOnly={!admin} onChange={event => { setConfig(event.target.value); setDraft(null); }} /></Field>
-          {admin ? <Button disabled={busy} onClick={() => { try { const parsed: unknown = JSON.parse(config); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('설정은 JSON 객체여야 합니다.'); prepare({ action: 'apply', kind: 'config', expectedRevision: revision, config: parsed }, '설정 변경'); } catch (failure) { setError(message(failure)); } }}>설정 검증·차이 확인</Button> : null}
+          <RouterPolicyEditor value={config} onChange={value => { setConfig(value); setDraft(null); }} disabled={busy || !admin || !!pending} routingAvailable={!!state.capabilities?.some(cap => cap.id === 'L3-01.ipv4-routing' && cap.state === 'supported')} ipv6Available={!!state.capabilities?.some(cap => cap.id === 'L3-03.ipv6-routing' && cap.state === 'supported')} />
+          {admin ? <Button disabled={busy || !!pending} onClick={() => { try { const parsed: unknown = JSON.parse(config); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('설정은 JSON 객체여야 합니다.'); prepare({ action: 'apply', kind: 'config', expectedRevision: revision, config: parsed }, '설정 변경'); } catch (failure) { setError(message(failure)); } }}>설정 검증·차이 확인</Button> : null}
         </FieldGroup></CardContent></Card></TabsContent>
         <TabsContent value="operations"><div className="flex flex-col gap-4"><Card><CardHeader><CardTitle>운영 모드·서비스</CardTitle><CardDescription>유지보수는 1시간 후 만료됩니다. 서비스 재시작은 진행 중인 Router 작업이 없을 때 허용됩니다.</CardDescription></CardHeader><CardContent className="flex flex-col gap-4">
           {admin ? <div className="flex flex-wrap gap-2">{[{ mode: 'automatic', label: '자동 운영' }, { mode: 'maintenance', label: '1시간 유지보수' }, { mode: 'emergency-stop', label: '자동 변경 중지' }].map(item => <Button key={item.mode} variant="outline" disabled={busy} onClick={() => setDraft({ title: item.label, request: { action: 'mode', mode: item.mode, ...(item.mode === 'maintenance' ? { until: new Date(Date.now() + 3600_000).toISOString() } : {}) } })}>{item.label}</Button>)}</div> : null}

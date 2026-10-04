@@ -302,11 +302,47 @@ export type AgentEventSummary = {
   observedAt?: string;
 };
 
-export type AgentLogEvent = AgentEventSummary;
-
-export type AssetLogEvent = AgentLogEvent & {
+export type AgentLogEvent = AgentEventSummary & {
   sourceType?: string;
   logFamily?: string;
+  logKey?: string;
+};
+
+export type HuntCategory = 'THREAT' | 'OPERATIONAL' | 'REVIEW' | 'OBSERVATION' | 'UNKNOWN';
+export type HuntAssessment = {
+  category: HuntCategory;
+  priority: string;
+  title: string;
+  explanation: string;
+  evidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
+  evidence: string[];
+  nextSteps: string[];
+  caveat: string;
+  ruleId: string;
+};
+export type HuntLogRef = {
+  id: string; observedAt: string; assetUid: string; eventType: string;
+  sourceIp: string; targetIp: string; targetPort: string; connectionUid: string; protocol: string; message: string;
+};
+export type HuntLog = HuntLogRef & {
+  event: AgentLogEvent & { raw?: Record<string, unknown> };
+  assessment: HuntAssessment;
+  interpretation: HuntAssessment;
+  relatedCount: number;
+  related: HuntLogRef[];
+};
+export type HuntFinding = {
+  id: string; assessment: HuntAssessment; count: number; firstSeen: string; lastSeen: string;
+  assetUid: string; timeline: HuntLogRef[];
+};
+export type SecurityHuntPage = {
+  items: HuntLog[]; total: number; hasMore: boolean; nextOffset: number;
+  summary: Record<HuntCategory, number>; findings: HuntFinding[]; findingCount: number; ruleVersion: string;
+  coverage: { analyzed: number; limit: number; truncated: boolean; oldest: string; newest: string; generatedAt: string; range: string };
+  rules: { name: string; condition: string }[];
+};
+
+export type AssetLogEvent = AgentLogEvent & {
   receivedAt?: string;
   storedAt?: string;
   jobId?: string;

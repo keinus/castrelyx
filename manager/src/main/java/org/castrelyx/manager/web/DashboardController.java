@@ -2,6 +2,7 @@ package org.castrelyx.manager.web;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.castrelyx.manager.telemetry.DashboardQueryService;
 import org.castrelyx.manager.telemetry.TelemetrySyncWorker;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -9,6 +10,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 public class DashboardController {
@@ -40,7 +43,16 @@ public class DashboardController {
       @RequestParam(defaultValue = "1h") String range,
       @RequestParam(defaultValue = "ALL") String severity,
       @RequestParam(required = false) String assetUid,
-      @RequestParam(defaultValue = "200") int limit) {
+      @RequestParam(defaultValue = "200") int limit,
+      @RequestParam(defaultValue = "ALL") String family,
+      @RequestParam(defaultValue = "") String query) {
+    if (!Set.of("ALL", "host", "zeek").contains(family) || query.length() > 256) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid log filter");
+    }
+    return dashboardQueryService.agentLogs(range, severity, assetUid, limit, family, query.trim());
+  }
+
+  public List<Map<String, Object>> agentLogs(String range, String severity, String assetUid, int limit) {
     return dashboardQueryService.agentLogs(range, severity, assetUid, limit);
   }
 

@@ -5,6 +5,7 @@ import type {
   IntegrationName,
   IntegrationInput,
   AgentLogEvent,
+  SecurityHuntPage,
   AssetLogPage,
   AlertRow,
   AgentRelease,
@@ -99,12 +100,16 @@ export const api = {
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   overview: () => request<DashboardSummary>('/api/dashboards/overview'),
   agentDashboard: () => request<AgentDashboard>('/api/dashboards/agent'),
-  agentLogs: (range = '1h', severity = 'ALL', limit = 300, assetUid?: string) => {
-    const params = new URLSearchParams({ range, severity, limit: String(limit) });
+  agentLogs: (range = '1h', severity = 'ALL', limit = 300, assetUid?: string, family = 'ALL', query = '') => {
+    const params = new URLSearchParams({ range, severity, family, query, limit: String(limit) });
     if (assetUid && assetUid !== 'ALL') {
       params.set('assetUid', assetUid);
     }
     return request<AgentLogEvent[]>(`/api/agent/logs?${params.toString()}`);
+  },
+  securityHunt: (filters: { range: string; assetUid: string; family: string; severity: string; query: string; category: string; offset: number }) => {
+    const params = new URLSearchParams({ ...filters, offset: String(filters.offset), limit: '50' });
+    return request<SecurityHuntPage>(`/api/security/hunt?${params.toString()}`);
   },
   assetLogs: (assetUid: string, range = '1h', severity = 'ALL', family = 'ALL', query = '', offset = 0, limit = 120) => {
     const params = new URLSearchParams({ range, severity, family, query, offset: String(offset), limit: String(limit) });

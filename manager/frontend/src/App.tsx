@@ -3,7 +3,7 @@ import { api, bootstrap as loadBootstrap } from './lib/api';
 import type { AlertRow, Asset, BootstrapState, DashboardSummary, Role } from './lib/types';
 import { menuItemsForRole, type MenuItem } from './lib/uiModel';
 import { AgentDashboardView } from './views/AgentDashboardView';
-import { AgentLogsView } from './views/AgentLogsView';
+import { SecurityHuntView } from './views/SecurityHuntView';
 import { AlertsView } from './views/AlertsView';
 import { AssetsView } from './views/AssetsView';
 import { CastrelSignView } from './views/CastrelSignView';
@@ -398,7 +398,7 @@ function ViewSwitch({
     case 'agent':
       return <AgentDashboardView role={role} />;
     case 'agentLogs':
-      return <AgentLogsView assets={assets} />;
+      return <SecurityHuntView assets={assets} />;
     case 'snmp':
       return <SnmpDashboardView role={role} />;
     case 'alerts':

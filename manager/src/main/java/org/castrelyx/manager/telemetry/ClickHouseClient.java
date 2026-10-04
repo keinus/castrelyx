@@ -937,31 +937,69 @@ public class ClickHouseClient {
   }
 
   public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit) {
+    return queryAgentLogEvents(range, severity, assetUid, limit, "ALL", "");
+  }
+
+  public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit,
+      String family, String search) {
     String table = tableReference(properties.clickhouse().database(), "manager_events");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
+    String zeekEvent = "(JSONExtractString(event_json, 'log_family') = 'zeek' OR startsWith(event_type, 'zeek.'))";
+    String familyFilter = switch (family) {
+      case "zeek" -> "AND " + zeekEvent;
+      case "host" -> "AND source_type = 'AGENT' AND NOT " + zeekEvent;
+      default -> "";
+    };
+    String searchFilter = search.isBlank() ? "" : "AND positionCaseInsensitiveUTF8("
+        + "concat(asset_uid, ' ', source_id, ' ', event_type, ' ', severity, ' ', event_json), "
+        + sqlString(search) + ") > 0";
     String sql = """
-        SELECT
-          asset_uid,
-          source_id,
-          event_type,
-          severity,
-          event_json,
-          observed_at
-        FROM %s
-        WHERE observed_at >= now() - %s
-          AND asset_uid != ''
-          AND source_type = 'AGENT'
-          AND JSONExtractString(event_json, 'message') != ''
-          %s
-          %s
-        ORDER BY observed_at DESC
+        SELECT * FROM (
+          SELECT asset_uid, source_type, source_id, event_type, severity, event_json, observed_at,
+            if(source_type = 'SECURITY_ROUTER' AND JSONExtractString(event_json, 'event_id') != '',
+              JSONExtractString(event_json, 'event_id'),
+              toString(cityHash64(concat(toString(observed_at), event_type, event_json)))) AS log_key
+          FROM %s
+          WHERE observed_at >= now() - %s
+            AND asset_uid != ''
+            AND (source_type = 'AGENT' OR
+              (source_type = 'SECURITY_ROUTER' AND JSONExtractString(event_json, 'log_family') = 'zeek'))
+            AND JSONExtractString(event_json, 'message') != ''
+            %s %s %s %s
+          ORDER BY observed_at DESC, source_id DESC, log_key DESC
+          LIMIT 1 BY asset_uid, source_type, source_id, log_key
+        ) ORDER BY observed_at DESC, source_id DESC, log_key DESC
         LIMIT %d
         FORMAT JSONEachRow
-        """.formatted(table, rangeInterval(range), assetFilter, agentLogSeverityFilter(severity), agentLogLimit(limit));
+        """.formatted(table, rangeInterval(range), assetFilter, agentLogSeverityFilter(severity),
+            familyFilter, searchFilter, agentLogLimit(limit));
     return queryJsonRows(sql).stream()
         .map(ClickHouseClient::canonicalEventRow)
         .map(ClickHouseClient::normalizeDashboardKeys)
         .toList();
+  }
+
+  /** Bounded, deduplicated context for on-demand hunt analysis; includes Router security/audit events. */
+  public List<Map<String, Object>> querySecurityHuntEvents(String range, String assetUid, int limit) {
+    String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
+    String sql = """
+        SELECT * FROM (
+          SELECT asset_uid, source_type, source_id, event_type, severity, event_json, observed_at,
+            if(source_type = 'SECURITY_ROUTER' AND JSONExtractString(event_json, 'event_id') != '',
+              JSONExtractString(event_json, 'event_id'),
+              if(JSONExtractString(event_json, 'dedup_key') != '', JSONExtractString(event_json, 'dedup_key'),
+                toString(cityHash64(concat(toString(observed_at), event_type, event_json))))) AS log_key
+          FROM %s
+          WHERE observed_at >= now() - %s AND observed_at <= now() + INTERVAL 1 MINUTE
+            AND asset_uid != '' AND source_type IN ('AGENT', 'SECURITY_ROUTER')
+            AND JSONExtractString(event_json, 'message') != '' %s
+          ORDER BY observed_at DESC, source_id DESC, log_key DESC
+          LIMIT 1 BY asset_uid, source_type, source_id, log_key
+        ) ORDER BY observed_at DESC, source_id DESC, log_key DESC
+        LIMIT %d FORMAT JSONEachRow
+        """.formatted(tableReference(properties.clickhouse().database(), "manager_events"), rangeInterval(range),
+            assetFilter, Math.min(Math.max(limit, 1), 10001));
+    return queryJsonRows(sql).stream().map(ClickHouseClient::canonicalEventRow).toList();
   }
 
   public Map<String,Object> queryAssetLogEvents(String range, String severity, String assetUid,
