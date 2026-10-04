@@ -27,6 +27,10 @@ public class RbacInterceptor implements HandlerInterceptor {
     if (user.role() == Role.ADMIN) {
       return true;
     }
+    if (path.matches("/api/assets/[^/]+/router-control/queries") && HttpMethod.POST.matches(request.getMethod())) {
+      // This endpoint only admits an explicit read-operation allowlist.
+      return true;
+    }
     if (isAssetFilePath(path) && user.role() == Role.VIEWER) {
       throw new ForbiddenException("viewer role cannot access asset files");
     }

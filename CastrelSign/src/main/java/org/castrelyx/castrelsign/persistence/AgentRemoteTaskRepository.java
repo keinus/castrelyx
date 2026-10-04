@@ -15,14 +15,24 @@ public class AgentRemoteTaskRepository {
   }
 
   public RemoteTask create(String agentId, String taskType, String payloadJson, Instant expiresAt) {
-    String taskId = UUID.randomUUID().toString();
+    return create(agentId, taskType, payloadJson, expiresAt, UUID.randomUUID().toString());
+  }
+
+  public RemoteTask create(String agentId, String taskType, String payloadJson, Instant expiresAt, String taskId) {
+    if (!UUID.fromString(taskId).toString().equals(taskId)) throw new IllegalArgumentException("invalid task ID");
     String now = Instant.now().toString();
     jdbcTemplate.update("""
         insert into agent_remote_tasks(task_id, agent_id, task_type, payload_json, status, created_at, updated_at, expires_at)
         values (?, ?, ?, ?, 'PENDING', ?, ?, ?)
+        on conflict(task_id) do nothing
         """, taskId, require(agentId, "agent_id"), require(taskType, "task_type"), payloadJson == null ? "{}" : payloadJson,
         now, now, expiresAt.toString());
-    return get(taskId);
+      RemoteTask existing = get(taskId);
+      if (!existing.agentId().equals(agentId) || !existing.taskType().equals(taskType)
+          || !existing.payloadJson().equals(payloadJson == null ? "{}" : payloadJson)) {
+        throw new IllegalArgumentException("task ID was reused with different content");
+      }
+    return existing;
   }
 
   public RemoteTask get(String taskId) {
@@ -52,6 +62,20 @@ public class AgentRemoteTaskRepository {
 
   public List<RemoteTask> poll(String agentId, int limit) {
     String now = Instant.now().toString();
+    // Router tasks have bounded execution and a durable agent-side journal.
+    // Reclaim only that task type; legacy SSH tasks have different semantics.
+    jdbcTemplate.update("""
+        update agent_remote_tasks set status='PENDING', claimed_at=null, updated_at=?
+        where agent_id=? and task_type='security_router' and status='RUNNING' and claimed_at<? and expires_at>?
+        """, now, agentId, Instant.now().minusSeconds(180).toString(), now);
+    jdbcTemplate.update("""
+        update agent_remote_tasks set status='EXPIRED', error_message='Task expired before execution', updated_at=?
+        where agent_id=? and task_type='security_router' and status='PENDING' and expires_at<=?
+        """, now, agentId, now);
+    jdbcTemplate.update("""
+        update agent_remote_tasks set status='UNKNOWN', error_message='Execution result unavailable; inspect router jobs', updated_at=?
+        where agent_id=? and task_type='security_router' and status='RUNNING' and expires_at<=? and claimed_at<?
+        """, now, agentId, now, Instant.now().minusSeconds(180).toString());
     List<String> taskIds = jdbcTemplate.query("""
         select task_id
         from agent_remote_tasks
@@ -66,14 +90,20 @@ public class AgentRemoteTaskRepository {
   }
 
   public RemoteTask complete(String agentId, String taskId, String status, String resultJson, String errorMessage) {
+    if (!"COMPLETED".equals(status) && !"FAILED".equals(status)) throw new IllegalArgumentException("invalid result status");
+    if (resultJson != null && resultJson.length() > 4*1024*1024) throw new IllegalArgumentException("result too large");
     String normalizedStatus = "FAILED".equalsIgnoreCase(status) ? "FAILED" : "COMPLETED";
     String now = Instant.now().toString();
     int updated = jdbcTemplate.update("""
         update agent_remote_tasks
         set status = ?, result_json = ?, error_message = ?, completed_at = ?, updated_at = ?
-        where task_id = ? and agent_id = ? and status in ('PENDING', 'RUNNING')
+        where task_id = ? and agent_id = ? and status in ('PENDING', 'RUNNING', 'UNKNOWN')
         """, normalizedStatus, resultJson, errorMessage, now, now, taskId, require(agentId, "agent_id"));
     if (updated == 0) {
+      RemoteTask existing = get(taskId);
+      if (existing.agentId().equals(agentId) && existing.status().equals(normalizedStatus)
+          && java.util.Objects.equals(existing.resultJson(), resultJson)
+          && java.util.Objects.equals(existing.errorMessage(), errorMessage)) return existing;
       throw new IllegalArgumentException("remote task is not open for this agent");
     }
     return get(taskId);

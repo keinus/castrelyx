@@ -2,6 +2,7 @@ package remotetasks
 
 import (
 	"bytes"
+	"castrelyx/agent/internal/securityrouter"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -18,12 +19,14 @@ type Client struct {
 	baseURL    string
 	agentID    string
 	httpClient *http.Client
+	router     *securityrouter.Client
 }
 
 type Config struct {
 	BaseURL   string
 	AgentID   string
 	TLSConfig *tls.Config
+	Router    *securityrouter.Client
 }
 
 type Task struct {
@@ -65,6 +68,7 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		baseURL: strings.TrimRight(config.BaseURL, "/"),
 		agentID: config.AgentID,
+		router:  config.Router,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -80,7 +84,18 @@ func (c *Client) PollAndRun(ctx context.Context) error {
 		return err
 	}
 	for _, task := range tasks {
-		result, runErr := Run(ctx, task.TaskType, []byte(task.PayloadJSON))
+		var result map[string]any
+		var runErr error
+		expires, expiryErr := time.Parse(time.RFC3339Nano, task.ExpiresAt)
+		if task.AgentID != c.agentID {
+			runErr = errors.New("task agent identity mismatch")
+		} else if expiryErr != nil || !time.Now().Before(expires) {
+			runErr = errors.New("task expired before execution")
+		} else if task.TaskType == "security_router" {
+			result, runErr = c.router.Execute(ctx, task.TaskID, []byte(task.PayloadJSON))
+		} else {
+			result, runErr = Run(ctx, task.TaskType, []byte(task.PayloadJSON))
+		}
 		status := "COMPLETED"
 		message := ""
 		if runErr != nil {
@@ -137,7 +152,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body []byte, o
 		return err
 	}
 	defer resp.Body.Close()
-	data, readErr := io.ReadAll(resp.Body)
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if len(data) > 8<<20 {
+		return errors.New("remote task response exceeds size limit")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("remote task endpoint returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}

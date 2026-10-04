@@ -19,6 +19,15 @@ public class DataSourceConfig {
     DriverManagerDataSource dataSource = new DriverManagerDataSource();
     dataSource.setDriverClassName("org.sqlite.JDBC");
     dataSource.setUrl("jdbc:sqlite:" + dbPath);
+    // Agents poll concurrently with enrollment, audit and task-result writes.
+    // WAL keeps readers available during writes; every new connection must also
+    // wait for a short competing writer instead of failing the request.
+    var connectionProperties = new java.util.Properties();
+    connectionProperties.setProperty("busy_timeout", "10000");
+    dataSource.setConnectionProperties(connectionProperties);
+    try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+      statement.execute("PRAGMA journal_mode=WAL");
+    }
     return dataSource;
   }
 }

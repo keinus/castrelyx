@@ -37,6 +37,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { AssetFileManager } from './AssetFileManager';
+import { RouterControlPanel } from './RouterControlPanel';
+import { routerControl } from '../lib/routerControl';
 import { ViewFrame } from '../components/ViewFrame';
 import { api } from '../lib/api';
 import type { AgentLogEvent, AssetLogEvent, AssetLogPage, AgentProcessState, AgentSocketState, Asset, AssetMetricDetail, AssetMetricSummary, AssetMetricsOverview, MetricPoint, Role } from '../lib/types';
@@ -440,6 +442,7 @@ export function AssetsView({ role, assets, onCreate, onUpdate, onDelete }: Asset
 
         {selectedAsset ? (
           <AssetDetailPanel
+            role={role}
             asset={selectedAsset}
             detail={detail?.asset.assetUid === selectedAsset?.assetUid ? detail : null}
             range={range}
@@ -679,6 +682,7 @@ function AssetDetailSnapshotTile({
 }
 
 function AssetDetailPanel({
+  role,
   asset,
   detail,
   range,
@@ -697,6 +701,7 @@ function AssetDetailPanel({
   onDelete,
   onBack
 }: {
+  role: Role;
   asset?: AssetMetricSummary;
   detail: AssetMetricDetail | null;
   range: RangeOption;
@@ -716,6 +721,18 @@ function AssetDetailPanel({
   onBack: () => void;
 }) {
   const [activeDetailTab, setActiveDetailTab] = useState('performance');
+  const [routerAssetUid, setRouterAssetUid] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setRouterAssetUid('');
+    if (asset && asset.assetType !== 'ROUTER') {
+      routerControl.binding(asset.assetUid).then(binding => {
+        if (!cancelled && binding.enabled) setRouterAssetUid(asset.assetUid);
+      }).catch(() => {});
+    }
+    return () => { cancelled = true; };
+  }, [asset?.assetUid, asset?.assetType]);
 
   useEffect(() => {
     setActiveDetailTab('performance');
@@ -884,6 +901,7 @@ function AssetDetailPanel({
             <TabsTrigger value="network">네트워크</TabsTrigger>
             <TabsTrigger value="signals">신호</TabsTrigger>
             <TabsTrigger value="logs">로그</TabsTrigger>
+            {asset.assetType === 'ROUTER' || routerAssetUid === asset.assetUid ? <TabsTrigger value="router">Router 제어</TabsTrigger> : null}
             <TabsTrigger value="files">파일</TabsTrigger>
             <TabsTrigger value="processes">프로세스</TabsTrigger>
           </TabsList>
@@ -986,6 +1004,8 @@ function AssetDetailPanel({
           <TabsContent value="files">
             <AssetFileManager assetUid={asset.assetUid} active={activeDetailTab === 'files'} canAccess={canMutateSelected} />
           </TabsContent>
+
+          {asset.assetType === 'ROUTER' || routerAssetUid === asset.assetUid ? <TabsContent value="router"><RouterControlPanel key={asset.assetUid} assetUid={asset.assetUid} role={role} active={activeDetailTab === 'router'} /></TabsContent> : null}
 
           <TabsContent value="processes">
             <div className="asset-tab-grid">

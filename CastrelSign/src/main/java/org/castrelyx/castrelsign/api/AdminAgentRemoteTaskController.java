@@ -42,8 +42,10 @@ public class AdminAgentRemoteTaskController {
       throw new IllegalArgumentException("type is required");
     }
     long ttlSeconds = request.ttlSeconds() == null ? 120 : Math.max(10, Math.min(request.ttlSeconds(), 3600));
-    return repository.create(agentId, request.type(), objectMapper.writeValueAsString(request.payload()),
-        Instant.now().plus(Duration.ofSeconds(ttlSeconds)));
+    String payload = objectMapper.writeValueAsString(request.payload());
+    if (payload.length()>1024*1024) throw new IllegalArgumentException("task payload too large");
+    return repository.create(agentId, request.type(), payload,
+        Instant.now().plus(Duration.ofSeconds(ttlSeconds)), request.requestId() == null ? java.util.UUID.randomUUID().toString() : request.requestId());
   }
 
   @GetMapping("/agent-tasks/{taskId}")
@@ -56,7 +58,10 @@ public class AdminAgentRemoteTaskController {
   public record RemoteTaskRequest(
       String type,
       Map<String, Object> payload,
-      Long ttlSeconds) {
+      Long ttlSeconds, String requestId) {
+    public RemoteTaskRequest(String type, Map<String, Object> payload, Long ttlSeconds) {
+      this(type, payload, ttlSeconds, null);
+    }
     public RemoteTaskRequest {
       if (payload == null) {
         payload = Map.of();

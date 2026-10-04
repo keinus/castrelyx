@@ -22,13 +22,14 @@ import (
 	"castrelyx/agent/internal/enrollment"
 	"castrelyx/agent/internal/filemanager"
 	"castrelyx/agent/internal/remotetasks"
+	"castrelyx/agent/internal/securityrouter"
 	"castrelyx/agent/internal/sender"
 	"castrelyx/agent/internal/spool"
 	"castrelyx/agent/internal/tlsidentity"
 	"castrelyx/agent/internal/updater"
 )
 
-const agentVersion = "0.2.2"
+const agentVersion = "0.3.0"
 const renewBefore = 7 * 24 * time.Hour
 const identityCheckInterval = time.Hour
 const identityRetryBase = time.Minute
@@ -391,10 +392,19 @@ func buildRemoteTaskClient(cfg config.Config, tlsConfig *tls.Config) *remotetask
 	if !cfg.RemoteTasksEnabled {
 		return nil
 	}
+	router, routerErr := securityrouter.New(securityrouter.Config{
+		Enabled: cfg.SecurityRouterEnabled, URL: cfg.SecurityRouterURL,
+		CAFile: cfg.SecurityRouterCAFile, CredentialsFile: cfg.SecurityRouterCredentialsFile,
+		RouterID: cfg.SecurityRouterID, StateDir: filepath.Join(cfg.SpoolDir, "router-control"),
+	})
+	if routerErr != nil {
+		log.Printf("security router control disabled: %v", routerErr)
+	}
 	client, err := remotetasks.New(remotetasks.Config{
 		BaseURL:   cfg.ManagerURL,
 		AgentID:   cfg.AgentID,
 		TLSConfig: tlsConfig,
+		Router:    router,
 	})
 	if err != nil {
 		log.Printf("remote tasks disabled: %v", err)

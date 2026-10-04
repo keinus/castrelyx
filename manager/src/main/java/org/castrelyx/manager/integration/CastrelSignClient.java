@@ -13,6 +13,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.client.RestClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
+import java.security.cert.CertificateFactory;
+import java.time.Duration;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 
 @Component
 public class CastrelSignClient {
@@ -20,7 +30,25 @@ public class CastrelSignClient {
   private final IntegrationService integrationService;
 
   public CastrelSignClient(RestClient.Builder builder, IntegrationService integrationService) {
-    this.restClient = builder.build();
+    this(builder, integrationService, "");
+  }
+
+  @Autowired
+  public CastrelSignClient(RestClient.Builder builder, IntegrationService integrationService,
+      @Value("${manager.castrelsign.ca-cert-path:}") String caPath) {
+    var http = java.net.http.HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5));
+    if (!caPath.isBlank()) {
+      try (var input = Files.newInputStream(Path.of(caPath))) {
+        KeyStore roots = KeyStore.getInstance(KeyStore.getDefaultType()); roots.load(null);
+        int index = 0;
+        for (var certificate : CertificateFactory.getInstance("X.509").generateCertificates(input)) roots.setCertificateEntry("root-" + index++, certificate);
+        if (index == 0) throw new IllegalArgumentException("empty CA certificate file");
+        var trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()); trust.init(roots);
+        var tls = SSLContext.getInstance("TLS"); tls.init(null, trust.getTrustManagers(), null); http.sslContext(tls);
+      } catch (Exception failure) { throw new IllegalStateException("Could not load CastrelSign CA certificates", failure); }
+    }
+    var factory = new JdkClientHttpRequestFactory(http.build()); factory.setReadTimeout(Duration.ofSeconds(20));
+    this.restClient = builder.clone().requestFactory(factory).build();
     this.integrationService = integrationService;
   }
 
@@ -174,6 +202,15 @@ public class CastrelSignClient {
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
         .retrieve()
         .body(Map.class);
+  }
+
+  public Map<?, ?> createRouterTask(String agentId, String requestId, Map<String, Object> payload, long ttlSeconds) {
+    IntegrationConfig config = integrationService.get("castrelsign");
+    return restClient.post()
+        .uri(URI.create(config.baseUrl() + "/api/admin/agents/" + path(agentId) + "/tasks"))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + integrationService.decryptedSecret("castrelsign"))
+        .body(Map.of("type", "security_router", "requestId", requestId, "payload", payload, "ttlSeconds", ttlSeconds))
+        .retrieve().body(Map.class);
   }
 
   public Map<?, ?> createAgentFileCommand(String agentId, String operation, Map<String, Object> request, long ttlSeconds) {

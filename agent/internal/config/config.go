@@ -14,46 +14,51 @@ import (
 )
 
 type Config struct {
-	ManagerURL                  string
-	EnrollmentToken             string
-	AgentID                     string
-	TenantID                    string
-	BatchInterval               time.Duration
-	SenderFlushInterval         time.Duration
-	SpoolDir                    string
-	MaxSpoolRecord              int64
-	MaxSpoolBytes               int64
-	MaxSpoolRecords             int
-	MaxSpoolAge                 time.Duration
-	MaxBatchItems               int
-	MaxBatchBytes               int64
-	MaxItemBytes                int64
-	CertDir                     string
-	CACertPath                  string
-	ClientCertPath              string
-	ClientKeyPath               string
-	TLSServerName               string
-	IngestTransport             string
-	TCPIngestAddr               string
-	TCPIngestServerName         string
-	TCPIngestMaxIdle            time.Duration
-	EnabledCollectors           []string
-	CollectorIntervals          map[string]time.Duration
-	CollectorFullIntervals      map[string]time.Duration
-	LogCursorPath               string
-	LogMessageMaxBytes          int
-	UpdateEnabled               bool
-	UpdateChannel               string
-	UpdateCheckInterval         time.Duration
-	UpdateDir                   string
-	UpdatePublicKeyPath         string
-	RemoteTasksEnabled          bool
-	RemoteTaskInterval          time.Duration
-	FileManagerEnabled          bool
-	FileManagerRoots            []string
-	FileManagerAllowDelete      bool
-	FileManagerMaxTransferBytes int64
-	FileManagerPollInterval     time.Duration
+	ManagerURL                    string
+	EnrollmentToken               string
+	AgentID                       string
+	TenantID                      string
+	BatchInterval                 time.Duration
+	SenderFlushInterval           time.Duration
+	SpoolDir                      string
+	MaxSpoolRecord                int64
+	MaxSpoolBytes                 int64
+	MaxSpoolRecords               int
+	MaxSpoolAge                   time.Duration
+	MaxBatchItems                 int
+	MaxBatchBytes                 int64
+	MaxItemBytes                  int64
+	CertDir                       string
+	CACertPath                    string
+	ClientCertPath                string
+	ClientKeyPath                 string
+	TLSServerName                 string
+	IngestTransport               string
+	TCPIngestAddr                 string
+	TCPIngestServerName           string
+	TCPIngestMaxIdle              time.Duration
+	EnabledCollectors             []string
+	CollectorIntervals            map[string]time.Duration
+	CollectorFullIntervals        map[string]time.Duration
+	LogCursorPath                 string
+	LogMessageMaxBytes            int
+	UpdateEnabled                 bool
+	UpdateChannel                 string
+	UpdateCheckInterval           time.Duration
+	UpdateDir                     string
+	UpdatePublicKeyPath           string
+	RemoteTasksEnabled            bool
+	RemoteTaskInterval            time.Duration
+	SecurityRouterEnabled         bool
+	SecurityRouterURL             string
+	SecurityRouterCAFile          string
+	SecurityRouterCredentialsFile string
+	SecurityRouterID              string
+	FileManagerEnabled            bool
+	FileManagerRoots              []string
+	FileManagerAllowDelete        bool
+	FileManagerMaxTransferBytes   int64
+	FileManagerPollInterval       time.Duration
 }
 
 func Load(path string) (Config, error) {
@@ -270,6 +275,20 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("invalid remote_task_interval: %w", err)
 			}
 			cfg.RemoteTaskInterval = d
+		case "security_router_enabled":
+			enabled, err := parseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid security_router_enabled: %w", err)
+			}
+			cfg.SecurityRouterEnabled = enabled
+		case "security_router_url":
+			cfg.SecurityRouterURL = value
+		case "security_router_ca_file":
+			cfg.SecurityRouterCAFile = value
+		case "security_router_credentials_file":
+			cfg.SecurityRouterCredentialsFile = value
+		case "security_router_id":
+			cfg.SecurityRouterID = value
 		case "file_manager_enabled":
 			enabled, err := parseBool(value)
 			if err != nil {

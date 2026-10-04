@@ -1,4 +1,6 @@
 manager:
+  castrelsign:
+    ca-cert-path: ${MANAGER_CASTRELSIGN_CA_CERT_PATH:}
   crypto-key: ${MANAGER_CRYPTO_KEY:}
   public-base-url: ${MANAGER_PUBLIC_BASE_URL:http://localhost:8780}
   clickhouse:

@@ -1,5 +1,60 @@
 # Castrelyx Agent
 
+## Security Router 제어 (0.3.0)
+
+Manager의 자산 상세 `Router 제어`에서 상태·포트·서비스·지원 기능 조회, 설정/VLAN/ACL 정책 검증과 차이 확인,
+적용, 운영 모드 전환, 허용 서비스 재시작, 설정 스냅샷 백업·복원, 작업·감사 조회를 제공합니다.
+Manager는 권한·자산 연결·요청/결과 이력을 관리하고, CastrelSign은 기존 mTLS 원격 작업 큐를 중계하며,
+Agent는 로컬 설정에 고정된 Security Router HTTPS API만 호출합니다. 별도 Agent 수신 포트는 필요하지 않습니다.
+
+### 설정 및 연결
+
+```yaml
+remote_tasks_enabled: true
+remote_task_interval: 5s
+security_router_enabled: true
+security_router_url: https://192.168.50.25
+security_router_ca_file: /etc/security-switch/pki/castrelyx-ca.crt
+security_router_credentials_file: /etc/castrelyx/router-credentials.json
+security_router_id: security-router-25
+```
+
+비활성화가 기본값입니다. credential 파일은 Router의 전용 계정으로
+`{"username":"castrelyx-agent","password":"<별도 생성한 비밀값>"}` 형식을 사용하며 Linux에서는 root 소유 0600으로 설치합니다.
+Agent는 CA와 서버 이름을 검증하고 리다이렉트를 거부합니다. 로그인 토큰은 메모리에만 보관하고 만료 시 다시 로그인합니다.
+Router 비밀값과 접속 URL은 Manager의 원격 작업 payload로 전달할 수 없습니다.
+
+Manager에서 기존 자산에 `SECURITY_ROUTER` source를 연결한 후 해당 source ID와 등록된 Agent ID를
+`PUT /api/assets/{assetUid}/router-control/binding`에 저장합니다. Router 유형 자산과 제어 연결이 있는 서버 자산에 탭이 표시됩니다.
+VIEWER/OPERATOR는 조회할 수 있고 연결 설정·정책 변경·검증·복원·재시작은 ADMIN 전용입니다.
+Manager가 사설 CA를 사용하는 CastrelSign에 접속할 때 공개 CA 파일만 읽기 전용으로 마운트하고
+`MANAGER_CASTRELSIGN_CA_CERT_PATH`를 지정합니다. CastrelSign 개인키를 마운트하지 않습니다.
+
+### 구현과 실패 처리
+
+- Agent: `internal/securityrouter`, 기존 `remotetasks`의 `security_router` 작업 유형. 매 요청에서 Router device ID를 검증합니다.
+- Manager: `RouterControlService`, `RouterControlController`, DB migration V5, `RouterControlPanel`.
+  요청 UUID와 사용자·자산·Agent·Router ID를 저장한 후 CastrelSign에 전달하는 outbox 구조입니다.
+- 조회는 `POST .../queries`, 변경은 `POST .../commands`, 결과는 `GET .../commands/{id}`, 이력은 `GET .../commands`입니다.
+  요청 형식은 `{"requestId":"<UUID>","request":{"action":"state"}}`입니다. 종류별 필드와 대상은 서버에서 검증합니다.
+- Router job은 고정 idempotency key와 `expectedRevision`을 사용합니다. Agent journal은 결과 보고 실패·재시작 뒤
+  같은 작업의 결과를 다시 보고하고, CastrelSign은 Router 작업에 한해 180초 실행 lease를 복구합니다.
+  재시작 도중 중단된 서비스 restart는 자동으로 반복하지 않고 결과 불명으로 보고합니다.
+- `COMPLETED`는 Agent 요청 처리 완료입니다. 실제 정책 적용 완료는 Router job의 `committed`를 확인해야 합니다.
+  `rolled_back`, `rollback_failed`, `rejected`, `UNKNOWN`, `EXPIRED`를 성공으로 처리하지 않습니다.
+- Router 자체 엔진이 설정 검증·직렬 적용·장비 검증·executor watchdog 롤백을 담당합니다.
+  관리망 변경, 미지원 기능, 관리 포트 보호는 Router의 기존 capability 검사를 그대로 따릅니다.
+  Manager 연결 여부를 기준으로 하는 별도 confirmed-commit 기능은 제공하지 않습니다.
+- 설정 변경 전 `${spool_dir}/router-control`에 0600 설정 스냅샷을 저장합니다. 이는 계정·인증서·비밀값·DB 전체 백업이 아닙니다.
+  복원도 현재 revision을 기준으로 검증·적용하며 device ID 변경은 거부합니다. 전체 암호화 백업은 Router의 별도 `switchctl backup` 절차를 사용합니다.
+- 지원 재시작 대상은 switchd, switch-zeek, switch-telemetryd, switch-lldpd, switch-syslog, switch-agentx, switch-snmpd입니다.
+  진행 중이거나 복구가 필요한 Router job이 있으면 재시작을 거부합니다. 임의 셸 명령은 받지 않습니다.
+- 감사/Zeek 로그는 기존 Router → Logparser → ClickHouse → Manager 경로를 사용합니다.
+
+검증: Agent 어댑터는 HTTPS·identity·revision·중복 실행·재시작 journal을 검사하고,
+Java 테스트는 권한·다른 자산의 결과 접근·전달 재시도·작업 lease를 검사합니다.
+`manager/frontend/tests/router-control.spec.ts`는 데스크톱/모바일의 검증→확인→적용 및 읽기 전용 UI를 검사합니다.
+
 Castrelyx Agent는 Linux와 Windows 호스트 내부에서 실행되는 경량 Go 수집기입니다. 에이전트는 호스트 식별 정보, 리소스 지표, 네트워크 인터페이스, 프로세스, 서비스, 패키지, 방화벽 상태, 최근 보안/시스템 로그를 수집한 뒤 Castrelyx 서버 측 수신 파이프라인으로 전송합니다.
 
 이 문서는 현재 저장소의 코드 구현을 기준으로 작성되었습니다. `docs/collection-architecture.md`에는 장기 설계 범위가 더 넓게 적혀 있지만, 아래 내용은 실제 `agent`, `CastrelSign`, `logparser`, `manager` 코드에서 확인되는 동작을 설명합니다.
