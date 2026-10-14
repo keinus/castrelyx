@@ -1,0 +1,17 @@
+{
+  "scope": "Secondary learning-rate sensitivity and paper-style best-of-grid reproduction; original fixed-setting protocol is not overwritten",
+  "trigger": "The first primary BERT-none run completed after a compiler workaround but had F1=0, recall=0 and balanced training loss near 0.693",
+  "registered_before": "All additional learning-rate trials, and before any Laya test evaluation",
+  "post_hoc": true,
+  "rates_from_paper_table_I": [0.01, 0.001, 0.0005, 0.0001, 0.00001],
+  "architectures": "All eight Table III UNSW configurations, not selectively BERT",
+  "seeds": [20261005, 20261006, 20261007],
+  "existing_rate_reused": 0.001,
+  "additional_trials": 96,
+  "same_data_and_training_schedule": true,
+  "checkpoint": "Final checkpoint from original training-loss stopping rule",
+  "selection": "Report each learning rate and each repeat, plus best held-out F1 across rates/repeats as the paper does; explicitly test-selected and optimistic",
+  "laya": "One preselected fine-tuning rate, 0.00001, three repeats. Full five-rate Laya search is not performed; tuning effort is asymmetric and no optimal-Laya claim is permitted",
+  "numerical_divergence": "Preserve failure and mark missing performance, never impute zero. Other execution errors halt the grid for inspection",
+  "interpretation": "Cannot attribute non-convergence to architecture alone. A best-of-grid comparison is descriptive, not independent validation or proof of zero-day detection"
+}

@@ -1,0 +1,14 @@
+.tools/
+.venv/
+data/
+models/
+runs/
+vendor/
+__pycache__/
+*.pyc
+ssh_known_hosts
+
+# Local dataset bundle and independently cloned reference repositories.
+/v3/v3-data.tar.gz
+/v5/references/FlowTransformer/
+/v5/references/granomaly/

@@ -1,0 +1,100 @@
+{
+  "created": "2026-10-07",
+  "document": "Laya_Threat_Detection_Paper.ko.docx",
+  "sha256": "199261c12fd3b15e56da158dcfa3e7c060daf7aad355acf6a50666e320341754",
+  "source_hashes": {
+    "stopped/summary.json": "538b1be0a3965f5b9de356b45a13d9677137426afe84549e9f7e6949fb53c722",
+    "runs/grid_comparison.json": "a69b62fa7bfdcd9c0070f9aa5a46cd7c7cf7ce03e8231a96bad9a665e6477dcc",
+    "speed/verified_summary.json": "5e7ef83fa12fa0aa16ebff282cfa0bf46db51fcc3f4bd266b92a5d9351ab54a7",
+    "speed/protocol.json": "4848396c3b20d4d37b12c6b16f82924d824e9d6d8d7784ae5e42af8baee9aac0",
+    "speed/checkpoint_audit.json": "4a048b48edced2844956c4366d38cc10d1732f6febf7befe408130d4853379b8",
+    "train_laya.py": "0fd3c38092bc8acb83b34789e68c3800545384193a2f6dc2f59ada6d70674461",
+    "laya_adapter.py": "b3ec6a034f3e661877851f365b57c85ce93e984a6ee3be00c53bc5aa51661a68",
+    "common.py": "bb612c834bb6fd0c865eba2c47ca0f52582b7fd325df2bf117145efb7d91892c"
+  },
+  "references": [
+    {
+      "number": 1,
+      "text": "L. Daly Manocchio, S. Layeghy, W. W. Lo, G. K. Kulatilleke, M. Sarhan, and M. Portmann. FlowTransformer: A Transformer Framework for Flow-based Network Intrusion Detection Systems. arXiv:2304.14746v1, 2023.",
+      "url": "https://arxiv.org/abs/2304.14746v1"
+    },
+    {
+      "number": 2,
+      "text": "B. Warner et al. Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference. ACL 2025, pp. 2526–2547. DOI 10.18653/v1/2025.acl-long.127.",
+      "url": "https://aclanthology.org/2025.acl-long.127/"
+    },
+    {
+      "number": 3,
+      "text": "Convai Innovations. Laya model card and open model. 본 실험의 가중치 리비전 7b928d828b7b0e022f929d9bd2e44165aa270148. 모델 계열의 최신 설명과 사용 체크포인트를 구분함. 열람 2026-10-07.",
+      "url": "https://huggingface.co/convaiinnovations/laya"
+    },
+    {
+      "number": 4,
+      "text": "D. Almeida. Introducing System One Models & Jev. TypeSafe AI, 2026-09-15. 개발사 기술 소개 자료.",
+      "url": "https://typesafe.ai/blog/introducing-system-one-models-and-jev"
+    },
+    {
+      "number": 5,
+      "text": "T. Deußer, L. Sparrenberg, and R. Sifa. Evaluating and Benchmarking the System One Model Jev. arXiv:2609.37647v1, 2026-09-29. 사전공개 논문.",
+      "url": "https://arxiv.org/abs/2609.37647v1"
+    },
+    {
+      "number": 6,
+      "text": "J. A. dos Santos Barbosa. Calibrated Decision Models for Autonomous Penetration-Testing Harnesses: JEV and Laya as System One Decision Layers for LLM-Driven Pentest Agents. arXiv:2609.28940v1, 2026-09-24. 사전공개 논문.",
+      "url": "https://arxiv.org/abs/2609.28940v1"
+    },
+    {
+      "number": 7,
+      "text": "M. DiGiuseppe and S. Denney. JEV versus LLMs: Accuracy, Cost and Calibration on Seven Political Science Replications. arXiv:2610.06625, 2026-10-05. 사전공개 논문.",
+      "url": "https://arxiv.org/abs/2610.06625"
+    },
+    {
+      "number": 8,
+      "text": "University of Queensland. ML-Based NIDS Datasets. NF-UNSW-NB15-v2 데이터 안내 및 공식 배포. 열람 2026-10-07.",
+      "url": "https://staff.itee.uq.edu.au/marius/NIDS_datasets/"
+    },
+    {
+      "number": 9,
+      "text": "Zeek Project. conn.log. Book of Zeek 9.0.0. 네트워크 연결 로그의 시각, 주체, 대상 및 연결 식별자 정의. 열람 2026-10-07.",
+      "url": "https://docs.zeek.org/en/current/reference/logs/conn.html"
+    },
+    {
+      "number": 10,
+      "text": "MITRE. Working with ATT&CK. 공격 기법 및 완화 지식의 활용 자료. 열람 2026-10-07.",
+      "url": "https://attack.mitre.org/resources/working-with-attack/"
+    },
+    {
+      "number": 11,
+      "text": "L. Daly Manocchio. FlowTransformer source code. 본 실험 고정 커밋 52236c8c9feccdeb44acf578789db7b8b36bacea.",
+      "url": "https://github.com/liamdm/FlowTransformer/tree/52236c8c9feccdeb44acf578789db7b8b36bacea"
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Laya local warm p95 below 200ms",
+      "status": "measured",
+      "source": "speed/verified_summary.json"
+    },
+    {
+      "claim": "Fast decision plus asynchronous explanation is a promising architectural direction",
+      "status": "proposal and interpretation",
+      "source": "design and measured inference feasibility"
+    },
+    {
+      "claim": "Language and correlation reasoning preserved after fine-tuning",
+      "status": "not established"
+    },
+    {
+      "claim": "Laya beats selected FlowTransformer baseline",
+      "status": "not supported for F1 FPR latency"
+    },
+    {
+      "claim": "Jev or Laya is faster than a generative LLM on this detection task",
+      "status": "not directly measured"
+    },
+    {
+      "claim": "Automatic actions reduce attack spread",
+      "status": "proposed not evaluated"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "document": "Laya_Threat_Detection_Paper.ko.docx",
+  "sha256": "199261c12fd3b15e56da158dcfa3e7c060daf7aad355acf6a50666e320341754",
+  "pages": 10,
+  "tables": 6,
+  "references": 11,
+  "native_equations": 3,
+  "figures": 1,
+  "source_hashes": "verified",
+  "accuracy_table": "verified",
+  "confusion_table": "verified",
+  "speed_table": "verified",
+  "prediction_hashes": "verified",
+  "reference_coverage": "verified",
+  "visual_review": "All 10 pages inspected. Final equation change affected only page 4, which was re-inspected; other page image hashes unchanged.",
+  "training_or_inference_performed": false,
+  "status": "passed"
+}

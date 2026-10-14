@@ -1,0 +1,52 @@
+{
+  "pid": 1343,
+  "status": "complete",
+  "training": false,
+  "started": 1791249496.6210756,
+  "completed": [
+    [
+      "encoder_dense",
+      20261005
+    ],
+    [
+      "encoder_projection",
+      20261005
+    ],
+    [
+      "decoder_last",
+      20261005
+    ],
+    [
+      "decoder_flatten",
+      20261005
+    ],
+    [
+      "gpt_lookup",
+      20261005
+    ],
+    [
+      "gpt_dense",
+      20261005
+    ],
+    [
+      "bert_none",
+      20261005
+    ],
+    [
+      "bert_projection",
+      20261005
+    ],
+    [
+      "laya",
+      20261005
+    ],
+    [
+      "laya",
+      20261006
+    ]
+  ],
+  "total": 10,
+  "protocol_sha256": "4848396c3b20d4d37b12c6b16f82924d824e9d6d8d7784ae5e42af8baee9aac0",
+  "current": null,
+  "updated": 1791250345.212357
+}

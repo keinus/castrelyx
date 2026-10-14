@@ -1,0 +1,736 @@
+{
+  "scope": "Existing v3 single-window predictions. Descriptive associations, not causal feature attribution.",
+  "weights_or_thresholds_modified": false,
+  "diagnostic_cutoff_note": "20 prior flows is a post-hoc descriptive grouping, not a recovered model decision rule.",
+  "distributions": {
+    "train_0": {
+      "cases": 1996,
+      "with_tcp_4975_in_sampled_events": 0,
+      "prior_60s_at_least_20_flows": 26,
+      "median_prior_60s_flows": 0.0,
+      "context_contains_publisher_attack": 44
+    },
+    "train_1": {
+      "cases": 1400,
+      "with_tcp_4975_in_sampled_events": 0,
+      "prior_60s_at_least_20_flows": 859,
+      "median_prior_60s_flows": 83.0,
+      "context_contains_publisher_attack": 1400
+    },
+    "calibration_0": {
+      "cases": 230,
+      "with_tcp_4975_in_sampled_events": 0,
+      "prior_60s_at_least_20_flows": 0,
+      "median_prior_60s_flows": 0.0,
+      "context_contains_publisher_attack": 40
+    },
+    "calibration_1": {
+      "cases": 240,
+      "with_tcp_4975_in_sampled_events": 0,
+      "prior_60s_at_least_20_flows": 125,
+      "median_prior_60s_flows": 86.0,
+      "context_contains_publisher_attack": 240
+    },
+    "unseen_test_0": {
+      "cases": 1110,
+      "with_tcp_4975_in_sampled_events": 161,
+      "prior_60s_at_least_20_flows": 160,
+      "median_prior_60s_flows": 6.0,
+      "context_contains_publisher_attack": 233
+    },
+    "unseen_test_1": {
+      "cases": 274,
+      "with_tcp_4975_in_sampled_events": 0,
+      "prior_60s_at_least_20_flows": 0,
+      "median_prior_60s_flows": 7.0,
+      "context_contains_publisher_attack": 266
+    }
+  },
+  "models": {
+    "laya_v3_normal_relation_sft": {
+      "by_capture": {
+        "CTU-IoT-Malware-Capture-20-1": {
+          "tn": 232,
+          "tp": 8,
+          "fp": 18,
+          "fn": 5
+        },
+        "CTU-IoT-Malware-Capture-8-1": {
+          "tn": 237,
+          "tp": 249,
+          "fp": 13,
+          "fn": 1
+        },
+        "CTU-IoT-Malware-Capture-42-1": {
+          "fp": 159,
+          "tn": 91
+        },
+        "CTU-IoT-Malware-Capture-21-1": {
+          "tn": 222,
+          "fp": 28,
+          "fn": 5,
+          "tp": 6
+        },
+        "CTU-Honeypot-Capture-7-1": {
+          "tn": 110
+        }
+      },
+      "false_positives": {
+        "cases": 218,
+        "with_tcp_4975_in_sampled_events": 151,
+        "prior_60s_at_least_20_flows": 150,
+        "median_prior_60s_flows": 29.0,
+        "context_contains_publisher_attack": 14
+      },
+      "false_positives_capture42": {
+        "cases": 159,
+        "with_tcp_4975_in_sampled_events": 151,
+        "prior_60s_at_least_20_flows": 150,
+        "median_prior_60s_flows": 32,
+        "context_contains_publisher_attack": 0
+      },
+      "capture42_fraction_of_false_positives": 0.7293577981651376,
+      "fp42_match_readme_infected_device": 159,
+      "policy": {
+        "temperature": 2.911306365684374,
+        "threshold": 0.05496561990435339,
+        "fpr_target": 0.01,
+        "statistical_guarantee": false,
+        "selection_split": "calibration",
+        "calibration_fpr": 0.004347826086956522,
+        "calibration_f1": 0.9831223628691983
+      },
+      "posthoc_threshold_comparison": [
+        {
+          "threshold": 0.05496561990435339,
+          "tp": 263,
+          "fp": 218,
+          "recall": 0.9598540145985401,
+          "fpr": 0.1963963963963964
+        },
+        {
+          "threshold": 0.5,
+          "tp": 109,
+          "fp": 125,
+          "recall": 0.3978102189781022,
+          "fpr": 0.11261261261261261
+        }
+      ],
+      "examples": [
+        {
+          "id": "181b9b734b5c2636128f33b7",
+          "score": 0.9754399249360215,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 2,
+              "peers": 1,
+              "ports": 1,
+              "out_bytes": 0.0,
+              "in_bytes": 0.0,
+              "failed_fraction": 1.0,
+              "repeat_peer_fraction": 1.0
+            },
+            "prior_60s": {
+              "flows": 27,
+              "peers": 3,
+              "ports": 3,
+              "out_bytes": 720.0,
+              "in_bytes": 1883.0,
+              "failed_fraction": 0.37,
+              "repeat_peer_fraction": 0.556
+            },
+            "events": [
+              {
+                "age_s": 62.374,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 39.254,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.138,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 7.264,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S3",
+                "duration_s": 4.08,
+                "sent": 67.0,
+                "received": 233.0
+              },
+              {
+                "age_s": 4.214,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.092,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 0.134,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        },
+        {
+          "id": "7acdbdc5b1712e93282d7090",
+          "score": 0.9749203346915001,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 2,
+              "peers": 1,
+              "ports": 1,
+              "out_bytes": 0.0,
+              "in_bytes": 0.0,
+              "failed_fraction": 1.0,
+              "repeat_peer_fraction": 1.0
+            },
+            "prior_60s": {
+              "flows": 34,
+              "peers": 3,
+              "ports": 3,
+              "out_bytes": 993.0,
+              "in_bytes": 2617.0,
+              "failed_fraction": 0.324,
+              "repeat_peer_fraction": 0.559
+            },
+            "events": [
+              {
+                "age_s": 64.769,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.139,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 42.708,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "RSTR",
+                "duration_s": 1.04,
+                "sent": 52.0,
+                "received": 124.0
+              },
+              {
+                "age_s": 7.51,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S3",
+                "duration_s": 1.097,
+                "sent": 67.0,
+                "received": 233.0
+              },
+              {
+                "age_s": 4.45,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.108,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 0.37,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        },
+        {
+          "id": "680e7e80c17a069a5d922725",
+          "score": 0.9697366214420631,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 2,
+              "peers": 1,
+              "ports": 1,
+              "out_bytes": 0.0,
+              "in_bytes": 0.0,
+              "failed_fraction": 1.0,
+              "repeat_peer_fraction": 1.0
+            },
+            "prior_60s": {
+              "flows": 35,
+              "peers": 5,
+              "ports": 3,
+              "out_bytes": 1092.0,
+              "in_bytes": 2788.0,
+              "failed_fraction": 0.286,
+              "repeat_peer_fraction": 0.514
+            },
+            "events": [
+              {
+                "age_s": 62.173,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 36.14,
+                "peer": "peer2",
+                "local": true,
+                "port": 53,
+                "proto": "udp",
+                "service": "dns",
+                "status": "SF",
+                "duration_s": 0.0,
+                "sent": 29.0,
+                "received": 45.0
+              },
+              {
+                "age_s": 5.01,
+                "peer": "peer3",
+                "local": false,
+                "port": 123,
+                "proto": "udp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 4.893,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.134,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 0.813,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        }
+      ]
+    },
+    "qwen3_06b_v3_lora": {
+      "by_capture": {
+        "CTU-IoT-Malware-Capture-20-1": {
+          "tn": 249,
+          "tp": 2,
+          "fn": 11,
+          "fp": 1
+        },
+        "CTU-IoT-Malware-Capture-8-1": {
+          "tn": 249,
+          "fn": 78,
+          "tp": 172,
+          "fp": 1
+        },
+        "CTU-IoT-Malware-Capture-42-1": {
+          "tn": 147,
+          "fp": 103
+        },
+        "CTU-IoT-Malware-Capture-21-1": {
+          "tn": 249,
+          "tp": 4,
+          "fn": 7,
+          "fp": 1
+        },
+        "CTU-Honeypot-Capture-7-1": {
+          "tn": 110
+        }
+      },
+      "false_positives": {
+        "cases": 106,
+        "with_tcp_4975_in_sampled_events": 100,
+        "prior_60s_at_least_20_flows": 99,
+        "median_prior_60s_flows": 30.5,
+        "context_contains_publisher_attack": 1
+      },
+      "false_positives_capture42": {
+        "cases": 103,
+        "with_tcp_4975_in_sampled_events": 100,
+        "prior_60s_at_least_20_flows": 99,
+        "median_prior_60s_flows": 32,
+        "context_contains_publisher_attack": 0
+      },
+      "capture42_fraction_of_false_positives": 0.9716981132075472,
+      "fp42_match_readme_infected_device": 103,
+      "policy": {
+        "temperature": 3.2678309064822,
+        "threshold": 0.3872183141501302,
+        "fpr_target": 0.01,
+        "statistical_guarantee": false,
+        "selection_split": "calibration",
+        "calibration_fpr": 0.008695652173913044,
+        "calibration_f1": 0.9702127659574468
+      },
+      "posthoc_threshold_comparison": [
+        {
+          "threshold": 0.3872183141501302,
+          "tp": 178,
+          "fp": 106,
+          "recall": 0.6496350364963503,
+          "fpr": 0.09549549549549549
+        },
+        {
+          "threshold": 0.5,
+          "tp": 165,
+          "fp": 97,
+          "recall": 0.6021897810218978,
+          "fpr": 0.08738738738738738
+        }
+      ],
+      "examples": [
+        {
+          "id": "84a43912de4c84aadab22420",
+          "score": 0.959878288732611,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 5,
+              "peers": 3,
+              "ports": 3,
+              "out_bytes": 191.0,
+              "in_bytes": 555.0,
+              "failed_fraction": 0.2,
+              "repeat_peer_fraction": 0.4
+            },
+            "prior_60s": {
+              "flows": 18,
+              "peers": 2,
+              "ports": 2,
+              "out_bytes": 174.0,
+              "in_bytes": 270.0,
+              "failed_fraction": 0.667,
+              "repeat_peer_fraction": 0.667
+            },
+            "events": [
+              {
+                "age_s": 62.173,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 36.253,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.138,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 6.253,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.11,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 4.01,
+                "peer": "peer2",
+                "local": false,
+                "port": 123,
+                "proto": "udp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 1.283,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S3",
+                "duration_s": 0.89,
+                "sent": 66.0,
+                "received": 232.0
+              },
+              {
+                "age_s": 0.233,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S3",
+                "duration_s": 1.094,
+                "sent": 67.0,
+                "received": 233.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        },
+        {
+          "id": "2e7d8274b0a24ad56a4a35a0",
+          "score": 0.9535529581217855,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 2,
+              "peers": 1,
+              "ports": 1,
+              "out_bytes": 0.0,
+              "in_bytes": 0.0,
+              "failed_fraction": 1.0,
+              "repeat_peer_fraction": 1.0
+            },
+            "prior_60s": {
+              "flows": 37,
+              "peers": 4,
+              "ports": 3,
+              "out_bytes": 1172.0,
+              "in_bytes": 3238.0,
+              "failed_fraction": 0.297,
+              "repeat_peer_fraction": 0.541
+            },
+            "events": [
+              {
+                "age_s": 64.969,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.137,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 38.649,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.099,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 7.006,
+                "peer": "peer2",
+                "local": false,
+                "port": 123,
+                "proto": "udp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 4.409,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.107,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 0.329,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        },
+        {
+          "id": "c9c2cb850f37790ffea3f5b0",
+          "score": 0.9481976356718018,
+          "state": {
+            "window_seconds": 5,
+            "recent": {
+              "flows": 1,
+              "peers": 1,
+              "ports": 1,
+              "out_bytes": 0.0,
+              "in_bytes": 0.0,
+              "failed_fraction": 1.0,
+              "repeat_peer_fraction": 1.0
+            },
+            "prior_60s": {
+              "flows": 35,
+              "peers": 3,
+              "ports": 3,
+              "out_bytes": 1189.0,
+              "in_bytes": 3067.0,
+              "failed_fraction": 0.229,
+              "repeat_peer_fraction": 0.543
+            },
+            "events": [
+              {
+                "age_s": 62.893,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.146,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 24.653,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 0.0,
+                "sent": 0.0,
+                "received": 0.0
+              },
+              {
+                "age_s": 6.588,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S3",
+                "duration_s": 1.088,
+                "sent": 67.0,
+                "received": 233.0
+              },
+              {
+                "age_s": 3.533,
+                "peer": "peer1",
+                "local": false,
+                "port": 4975,
+                "proto": "tcp",
+                "service": "unknown",
+                "status": "S0",
+                "duration_s": 3.092,
+                "sent": 0.0,
+                "received": 0.0
+              }
+            ]
+          },
+          "context_has_attack": false
+        }
+      ]
+    }
+  },
+  "evidence_files": [
+    "prepare_data.py",
+    "train_laya.py",
+    "data/manifest.json",
+    "data/raw/zeek/CTU-IoT-Malware-Capture-42-1/README.md",
+    "runs/online_predictions_laya_v3_normal_relation_sft.jsonl",
+    "runs/online_predictions_qwen3_06b_v3_lora.jsonl"
+  ],
+  "limits": [
+    "Public Benign labels are used as the reference; none were relabeled.",
+    "An infected host can also emit benign traffic. Infection alone does not prove a particular alert is correct.",
+    "Input sampling, normal auxiliary tasks, and host/flow label scope are hypotheses requiring controlled evaluation."
+  ]
+}

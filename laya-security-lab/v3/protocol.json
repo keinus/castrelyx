@@ -1,0 +1,21 @@
+{
+  "version": "v3-real-zeek-20261005",
+  "seed": 20261005,
+  "train_capture_ids": ["CTU-IoT-Malware-Capture-1-1", "CTU-IoT-Malware-Capture-34-1", "CTU-Honeypot-Capture-4-1", "CTU-Honeypot-Capture-5-1"],
+  "proxy_validation_capture_ids": ["CTU-IoT-Malware-Capture-3-1"],
+  "unseen_capture_ids": ["CTU-IoT-Malware-Capture-8-1", "CTU-IoT-Malware-Capture-20-1", "CTU-IoT-Malware-Capture-21-1", "CTU-IoT-Malware-Capture-42-1", "CTU-Honeypot-Capture-7-1"],
+  "unseen_families": ["Hakai", "Torii", "Trojan"],
+  "external_known_capture_ids": ["CTU-IoT-Malware-Capture-44-1"],
+  "partition": "Train captures split into chronologically ordered 30-minute blocks: first 60% train, next 15% validation, next 10% calibration, last 15% known_test. First 60 seconds of each block are context-only and not scored. All context resets at each block.",
+  "window_seconds": 5,
+  "history_seconds": 60,
+  "max_state_events": 6,
+  "caps": {"train_per_capture_label": 700, "validation_per_capture_label": 120, "proxy_validation_per_capture_label": 180, "calibration_per_capture_label": 120, "known_test_per_capture_label": 180, "unseen_test_per_capture_label": 250, "external_known_test_per_capture_label": 250},
+  "models": ["laya_v2_transfer", "laya_v3_sft", "laya_v3_normal_relation_sft", "qwen3_06b_v3_lora", "hist_gradient_boosting", "extra_trees", "isolation_forest"],
+  "pretraining": "Normal training states only: masked final service recovery and real-sequence continuation discrimination with donor normal events. Counterfactuals are auxiliary self-supervised targets, never attack ground truth.",
+  "supervised_training": {"epochs":3,"laya_equal_update_warmup_epochs":1,"warmup_baseline":"attack classification","warmup_enhanced":"normal auxiliary objectives","effective_batch":32,"laya_encoder_lr":0.000008,"laya_head_lr":0.00003,"qwen_lora_lr":0.0001},
+  "threshold": "Select with calibration labels only, maximum F1 at <=1% observed normal FPR; never use final tests",
+  "selection": "Mean AP over validation and entirely weight-training-held-out Muhstik proxy_validation for checkpoints; no checkpoint/threshold adjustment based on final tests",
+  "zero_day_limit": "New domain-fine-tuning malware families/captures, not proven absence from foundation pretraining or new attack techniques",
+  "actuation": false
+}

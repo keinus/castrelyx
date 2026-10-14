@@ -1,0 +1,186 @@
+{
+  "status": "closed_after_user_stop",
+  "report_date": "2026-10-06",
+  "training_resumed": false,
+  "new_inference_performed": true,
+  "laya_completed_repeats": 2,
+  "laya_rows": [
+    {
+      "model": "laya",
+      "seed": 20261005,
+      "epochs": 17,
+      "parameters": 421293827,
+      "prediction_sha256": "118a58321b4803c7517343e7292bc985dad098cb5b67023ca9913181bc985273",
+      "weights_sha256": "75a225222d9b7011ba95b3d1592a673885740b2c963dec69cd5e314cf03e384d",
+      "n": 239027,
+      "TP": 16267,
+      "FP": 1907,
+      "TN": 220849,
+      "FN": 4,
+      "precision": 0.8950698800484208,
+      "recall": 0.9997541638497941,
+      "fpr": 0.008560936630214226,
+      "f1": 0.9445202496733923,
+      "accuracy": 0.9920050872913938,
+      "average_precision": 0.9651908200787237,
+      "roc_auc": 0.9979912767080029,
+      "nonduplicate_f1": 0.9290109560258142,
+      "nonduplicate_recall": 0.9997577323750303,
+      "nonduplicate_fpr": 0.011321478444840006,
+      "duplicate_f1": 0.9975619145386886
+    },
+    {
+      "model": "laya",
+      "seed": 20261006,
+      "epochs": 12,
+      "parameters": 421293827,
+      "prediction_sha256": "ce92d440abaff5b7a95ef649ceb548f8a1fa65c301c2866330663ebe0779d209",
+      "weights_sha256": "609d7204dd1212983c992bd4cd9ab316c1132434c314c085194c3f53e37ef9c4",
+      "n": 239027,
+      "TP": 16258,
+      "FP": 2307,
+      "TN": 220449,
+      "FN": 13,
+      "precision": 0.8757339078911931,
+      "recall": 0.9992010325118309,
+      "fpr": 0.010356623390615742,
+      "f1": 0.9334022275806637,
+      "accuracy": 0.9902939835248737,
+      "average_precision": 0.9407478647003611,
+      "roc_auc": 0.9968289512423744,
+      "nonduplicate_f1": 0.9152366863905326,
+      "nonduplicate_recall": 0.9992731971250909,
+      "nonduplicate_fpr": 0.013682866749377518,
+      "duplicate_f1": 0.9964084145715751,
+      "elapsed_seconds": 21571.194933673003,
+      "warm_training_seconds": 9306.801467242884,
+      "maximum_tokens": 2074,
+      "source": "Remote v5/runs/laya/seed20261006/training.json and predictions_epoch12_sequence.npz, audited on server; NPZ not downloaded before connection loss"
+    }
+  ],
+  "laya_aggregate": {
+    "f1": {
+      "mean": 0.9389612386270281,
+      "sd": 0.007861628815150248
+    },
+    "recall": {
+      "mean": 0.9994775981808125,
+      "sd": 0.0003911229199605649
+    },
+    "fpr": {
+      "mean": 0.009458780010414985,
+      "sd": 0.0012697422851668148
+    },
+    "precision": {
+      "mean": 0.885401893969807,
+      "sd": 0.01367259703320999
+    },
+    "accuracy": {
+      "mean": 0.9911495354081338,
+      "sd": 0.0012099330766201781
+    },
+    "average_precision": {
+      "mean": 0.9529693423895425,
+      "sd": 0.017283779500280393
+    },
+    "roc_auc": {
+      "mean": 0.9974101139751886,
+      "sd": 0.0008218882186917628
+    },
+    "nonduplicate_f1": {
+      "mean": 0.9221238212081734,
+      "sd": 0.009739879464999579
+    },
+    "nonduplicate_recall": {
+      "mean": 0.9995154647500606,
+      "sd": 0.000342618160956076
+    },
+    "nonduplicate_fpr": {
+      "mean": 0.012502172597108762,
+      "sd": 0.0016697536831530792
+    }
+  },
+  "baseline_trials": 120,
+  "baseline_successes": 119,
+  "baseline_divergences": 1,
+  "best_baseline": "encoder_projection",
+  "best_baseline_rows": [
+    {
+      "model": "encoder_projection",
+      "seed": 20261005,
+      "lr": 0.0005,
+      "status": "complete",
+      "f1": 0.9462183894650973,
+      "recall": 0.9980333107983529,
+      "fpr": 0.008143439458420873,
+      "folder": "runs/grid/lr_0.0005/encoder_projection/seed20261005",
+      "prediction_sha256": "a0125677c0887278e7791bd45f3ff5e539e14f685f9ba8039902eeb436417e58",
+      "TP": 16239,
+      "FP": 1814,
+      "FN": 32,
+      "TN": 220942
+    },
+    {
+      "model": "encoder_projection",
+      "seed": 20261006,
+      "lr": 0.0005,
+      "status": "complete",
+      "f1": 0.9426370111934874,
+      "recall": 0.9963124577469117,
+      "fpr": 0.008587871931620248,
+      "folder": "runs/grid/lr_0.0005/encoder_projection/seed20261006",
+      "prediction_sha256": "10868d0e87e149166858419def01f009e9ca465a516fac3b69ee84b3ef743655",
+      "TP": 16211,
+      "FP": 1913,
+      "FN": 60,
+      "TN": 220843
+    },
+    {
+      "model": "encoder_projection",
+      "seed": 20261007,
+      "lr": 0.0005,
+      "status": "complete",
+      "f1": 0.9458208390346152,
+      "recall": 0.9983406059861103,
+      "fpr": 0.00823322379644095,
+      "folder": "runs/grid/lr_0.0005/encoder_projection/seed20261007",
+      "prediction_sha256": "8d8a5d700f53515378f7c6f74bfc7a98cde2cf09d3685ab79caf3bc611798652",
+      "TP": 16244,
+      "FP": 1834,
+      "FN": 27,
+      "TN": 220922
+    }
+  ],
+  "selected_baseline_lr": 0.0005,
+  "matched_pairs": [
+    {
+      "seed": 20261005,
+      "laya_f1": 0.9445202496733923,
+      "baseline_f1": 0.9462183894650973,
+      "delta_f1_pp": -0.16981397917049668,
+      "laya_fp": 1907,
+      "baseline_fp": 1814,
+      "laya_fn": 4,
+      "baseline_fn": 32
+    },
+    {
+      "seed": 20261006,
+      "laya_f1": 0.9334022275806637,
+      "baseline_f1": 0.9426370111934874,
+      "delta_f1_pp": -0.9234783612823705,
+      "laya_fp": 2307,
+      "baseline_fp": 1913,
+      "laya_fn": 13,
+      "baseline_fn": 60
+    }
+  ],
+  "f1_delta_vs_three_baseline_repeats_pp": -0.59308412707052,
+  "f1_delta_on_two_matched_seeds_pp": -0.546646170226428,
+  "timing_measured": true,
+  "unknown_attack_evaluated": false,
+  "causal_context_benefit_evaluated": false,
+  "conclusion": "No demonstrated overall advancement. Observed F1 and FPR are worse than the selected baseline with slightly higher recall. Warm inference measured separately; unknown-attack and closed-loop effectiveness remain untested.",
+  "evidence_limit": "Both completed Laya prediction NPZ files recovered and verified locally; full baseline prediction NPZ files remain on server, with complete trial metrics and hashes in the local bundle.",
+  "timing_summary": "speed/verified_summary.json",
+  "laya_both_meet_200ms": true
+}

@@ -1,0 +1,23 @@
+{
+  "purpose": "Runtime settings chosen from training-only memory/throughput probes; no test-result tuning",
+  "flow_training_gpu": "RTX 2080 Ti, CUDA_VISIBLE_DEVICES=1",
+  "laya_training_gpu": "RTX 4090, CUDA_VISIBLE_DEVICES=0",
+  "timing_gpu": "RTX 4090, CUDA_VISIBLE_DEVICES=0, sequentially after both training workers complete",
+  "laya_attention": "sdpa (original runtime default)",
+  "laya_micro_batch": 8,
+  "laya_effective_batch": 128,
+  "laya_evaluation_batch": 16,
+  "flash_attention_probe": {
+    "selected": false,
+    "reason": "max absolute probability difference 0.017744064331054688 exceeded the 0.01 predeclared adapter tolerance on 16 training cases; no experiment model trained with this path",
+    "argmax_agreement": 1.0,
+    "profile_batch32": "terminated after excessive memory pressure; not used"
+  },
+  "completion": "27 primary training runs plus 96 additional paper-listed learning-rate trials, full held-out predictions, nine same-GPU timing runs, integrity audit, Korean report and raw-results bundle",
+  "bert_xla_workaround": {
+    "failure": "XLA GEMM autotuning BufferComparator fatal check before first optimizer step",
+    "action": "Preserve failed run and restart same seed from scratch with jit_compile=False for both BERT configurations",
+    "learning_protocol_changed": false,
+    "failed_artifact": "diagnostics/bert_none_seed20261005_xla_failure"
+  }
+}

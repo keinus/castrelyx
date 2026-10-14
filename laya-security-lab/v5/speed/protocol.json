@@ -1,0 +1,21 @@
+{
+  "purpose": "User-authorized inference-speed-only addendum after training was stopped",
+  "training_allowed": false,
+  "hardware": "One NVIDIA RTX 4090, selected by observed GPU UUID; sequential subprocesses",
+  "checkpoints": "Eight baseline configurations at the best mean-F1 learning rate already selected in the report, seed 20261005; Laya completed seed 20261005. Laya seed 20261006 is an additional latency-only check.",
+  "not_selected_for_speed": true,
+  "input": "Existing train-fitted 37-feature representations, 8-flow windows; no test-label tuning",
+  "schedule": "First 50 batches of epoch 1 from the previously frozen seed 20261005 training schedule",
+  "batch_sizes": [1, 8, 128],
+  "repeats_per_batch": 4,
+  "warmup_batches_per_shape": 4,
+  "throughput": "Inverse of the mean across 50 within-batch median durations, multiplied by logical batch size",
+  "laya_physical_batch_cap": 16,
+  "latency": "p50 and p95 across all 200 individual warm batch-1 requests, including numeric input assembly for TF and CSV serialization/tokenization for Laya, CPU/GPU transfer and CPU probability materialization",
+  "exclusions": ["model loading and first-use compilation", "raw Zeek parsing and train-fitted numeric normalization", "waiting for eight flows", "concurrent queueing", "network transmission", "device policy actuation"],
+  "latency_target_ms": 200,
+  "latency_scope": "Local inference path with one request at a time; not end-to-end response or sustained-load SLA",
+  "input_cache": "Laya row serialization cache cleared for each serialization-inclusive timed request",
+  "runtimes": "Original inference paths: TF float32 tf.function and Torch float32 weights with BF16 autocast/SDPA; this compares runnable implementations, not identical numerical kernels",
+  "artifacts": "Raw per-request durations, hardware/runtime identity, input schedule and weight hashes; checksum confirms unchanged weights"
+}

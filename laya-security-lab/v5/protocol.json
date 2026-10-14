@@ -1,0 +1,183 @@
+{
+  "version": "v5-flowtransformer-unsw-90-10",
+  "status": "locked before training",
+  "paper": {
+    "title": "FlowTransformer: A Transformer Framework for Flow-based Network Intrusion Detection Systems",
+    "version": "arXiv:2304.14746v1, 2023-04-28",
+    "url": "https://arxiv.org/pdf/2304.14746v1",
+    "sha256": "8464914764838e5f5d96095b8b6b3abe063a44825f6d57ee774edd661cd748de",
+    "code": "https://github.com/liamdm/FlowTransformer",
+    "commit": "52236c8c9feccdeb44acf578789db7b8b36bacea"
+  },
+  "scope": "Table III UNSW-NB15 v2: all 8 settings across all 4 architecture families, plus Laya. Not the complete 3-dataset hyperparameter grid.",
+  "dataset": {
+    "name": "NF-UNSW-NB15-v2",
+    "rows": 2390275,
+    "csv_sha256": "05019e3ac8d55b3f074f9f042623bbbb1af2527b8b78558c69353ccb2ccefa3f",
+    "source": "https://rdm.uq.edu.au/files/8c6e2a00-ef9c-11ed-827d-e762de186848",
+    "split": "First 90% train; last 10% test; source CSV order",
+    "test_rows": 239027,
+    "training_pool_rows": 2151248,
+    "deduplicate": false
+  },
+  "input": {
+    "features": "37 author-selected fields; no IP addresses or labels",
+    "window": 8,
+    "target": "binary attack label of final flow",
+    "preprocessing": "Original StandardPreProcessing(32), fit on train only; unknown categorical behavior preserved; sorted numerical feature names",
+    "laya": "CSV serialization of identical preprocessed information; numeric float32 round-trip 9 significant digits; categorical codes inverted to train mapping values; no truncation; max 8192 tokens"
+  },
+  "models": {
+    "encoder_dense": {
+      "family": "Shallow Encoder",
+      "layers": 2,
+      "heads": 2,
+      "ff": 128,
+      "head": "last",
+      "encoding": "record_dense",
+      "dim": 128,
+      "paper_params": 382081,
+      "paper_f1": 90.45,
+      "paper_recall": 99.89,
+      "paper_fpr": 1.03
+    },
+    "encoder_projection": {
+      "family": "Shallow Encoder",
+      "layers": 2,
+      "heads": 2,
+      "ff": 256,
+      "head": "feature_projection",
+      "encoding": "record_projection",
+      "dim": 64,
+      "paper_params": 350529,
+      "paper_f1": 90.43,
+      "paper_recall": 98.47,
+      "paper_fpr": 0.96
+    },
+    "decoder_last": {
+      "family": "Shallow Decoder",
+      "layers": 2,
+      "heads": 2,
+      "ff": 128,
+      "head": "last",
+      "encoding": "none",
+      "paper_params": 1327649,
+      "paper_f1": 88.94,
+      "paper_recall": 99.79,
+      "paper_fpr": 1.22
+    },
+    "decoder_flatten": {
+      "family": "Shallow Decoder",
+      "layers": 2,
+      "heads": 2,
+      "ff": 128,
+      "head": "flatten",
+      "encoding": "none",
+      "paper_params": 1567777,
+      "paper_f1": 87.91,
+      "paper_recall": 99.61,
+      "paper_fpr": 1.32
+    },
+    "gpt_lookup": {
+      "family": "GPT Deep Decoder",
+      "layers": 12,
+      "heads": 12,
+      "ff": 768,
+      "head": "feature_projection",
+      "encoding": "lookup",
+      "dim": 16,
+      "paper_params": 20312029,
+      "paper_f1": 89.98,
+      "paper_recall": 100.0,
+      "paper_fpr": 1.07
+    },
+    "gpt_dense": {
+      "family": "GPT Deep Decoder",
+      "layers": 12,
+      "heads": 12,
+      "ff": 768,
+      "head": "last",
+      "encoding": "record_dense",
+      "dim": 64,
+      "paper_params": 3606081,
+      "paper_f1": 89.95,
+      "paper_recall": 99.82,
+      "paper_fpr": 1.07
+    },
+    "bert_none": {
+      "family": "BERT Deep Encoder",
+      "layers": 12,
+      "heads": 12,
+      "ff": 768,
+      "head": "last",
+      "encoding": "none",
+      "paper_params": 123889249,
+      "paper_f1": 87.74,
+      "paper_recall": 99.75,
+      "paper_fpr": 1.33
+    },
+    "bert_projection": {
+      "family": "BERT Deep Encoder",
+      "layers": 12,
+      "heads": 12,
+      "ff": 768,
+      "head": "last",
+      "encoding": "record_projection",
+      "dim": 64,
+      "paper_params": 29862401,
+      "paper_f1": 76.23,
+      "paper_recall": 98.9,
+      "paper_fpr": 2.98
+    }
+  },
+  "training": {
+    "seeds": [
+      20261005,
+      20261006,
+      20261007
+    ],
+    "batch_size": 128,
+    "steps_per_epoch": 64,
+    "max_epochs": 20,
+    "patience": 5,
+    "stop_implementation": "upstream: six epochs without a new minimum individual batch loss (stale > 5)",
+    "sampling": "50% attack, 50% benign; random target rows, contiguous windows; identical pregenerated schedules",
+    "optimizer": "Adam",
+    "learning_rates": {
+      "flow_models": 0.001,
+      "laya": 1e-05
+    },
+    "laya_full_parameter_finetune": true,
+    "checkpoint_selection": "last epoch reached by training-loss stopping; no test-selected checkpoint",
+    "test_threshold": "p(attack) > 0.5"
+  },
+  "evaluation": {
+    "full_test": true,
+    "epochs": "after epoch 7 and final epoch as upstream; final is primary",
+    "metrics": [
+      "F1",
+      "recall",
+      "FPR",
+      "precision",
+      "confusion matrix",
+      "PR-AUC",
+      "ROC-AUC",
+      "per-attack recall"
+    ],
+    "aggregation": "all three repeats plus mean, standard deviation and best repeat; best repeat is descriptive paper convention, not deployment selection",
+    "timing": "same GPU after training, warm state; 50 random batches x 4 repetitions; median per batch then mean; additional batch-1 p50/p95, serialization-inclusive latency",
+    "unknown_attack_claim": false,
+    "closed_loop_response_claim": false
+  },
+  "differences_and_unreported_details": [
+    "Paper says 90/10; code example uses UNSW 97.5/2.5. Paper text governs; published Table III values not directly comparable cohorts.",
+    "Winning per-setting learning rates absent. Fixed author-example Adam 0.001 for scratch models and conservative pretrained Laya 1e-5 from paper rate grid; no claim of optimal tuning.",
+    "64 steps/epoch and batch128 from public main.py, not explicitly stated in paper. An epoch is 8192 balanced draws, not a full pass through 2.15M training rows.",
+    "Record dense dimension128 for first encoder row inferred from exact published parameter count; other record dimensions64, categorical16.",
+    "Minimum3 repeats paper convention implemented as exactly3. Published best-of-grid numbers separated from fixed-setting reruns.",
+    "Python3.11/Linux and newer framework/GPU differ from paper Python3.9/Windows/RTX2070MaxQ.",
+    "Streaming batch assembly replaces full test-window materialization; architecture and upstream preprocessing unchanged.",
+    "v2 flow CSV lacks timestamps: consecutive rows are not proven chronological, host-related or multi-step attacks.",
+    "Test feature duplicates present in train are retained to match paper split, separately audited."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "schema": "public-network-v4",
+  "as_of": "2026-10-05",
+  "research_question": "Can prior network-flow context improve low-latency attack detection at low false-positive rates?",
+  "papers": [
+    {"title": "Evaluating large language models effectiveness for flow-based intrusion detection: a comparative study with ML and DL baselines", "date": "2026-01-09", "url": "https://link.springer.com/article/10.1007/s10462-025-11432-2", "use": "LLM/ML/DL comparison and CIC IoT 2023 Zeek extraction", "reproduction": "adapted protocol; author split artifacts not obtained"},
+    {"title": "SAFE-NID: Self-Attention with Normalizing-Flow Encodings for Network Intrusion Detection", "date": "2025-03", "url": "https://www.brianmatejek.com/assets/pdfs/research/publications/matejek2025safe.pdf", "code": "https://github.com/SRI-CSL/trinity-packet", "use": "withheld attack-family evaluation", "reproduction": "evaluation principle only; no claim to reproduce packet-payload architecture or paper scores"},
+    {"title": "Next Steps in Cyber Blue Team Automation", "date": "2025-05", "url": "https://roland-meier.ch/files/2025_CyCon_AI.pdf", "use": "LSPR24 network-flow data"},
+    {"title": "Sequence Construction as a Primary Design Factor in Flow-Based Intrusion Detection", "date": "2026-04-17", "url": "https://ssrn.com/abstract=6597680", "use": "sequence grouping and cross-year study design", "status": "SSRN abstract reviewed; full protocol and journal acceptance not verified"}
+  ],
+  "datasets": {
+    "lspr23": {"record": "https://zenodo.org/records/8042347", "use": "source-year training/validation/calibration/test"},
+    "lspr24": {"record": "https://zenodo.org/records/14900873", "use": "external-year test only"},
+    "ciciot2023": {"url": "https://www.unb.ca/cic/datasets/iotdataset-2023.html", "acquisition_status": "official registration/download link required; no identity information submitted"},
+    "lspr25": {"record": "https://zenodo.org/records/17093949", "use": "excluded: files restricted"}
+  },
+  "inputs": "network flow metadata only; no OSSEC, process logs, alerts, attack narratives, role labels or literal IP identities",
+  "task_unit": "current completed flow; previous 60 seconds is context; this is not a host-compromise or attack-episode label",
+  "models": ["laya", "qwen3-0.6b LoRA", "XGBoost", "RandomForest", "GRU"],
+  "views": ["single", "aggregate", "sequence", "time_removed", "unlinked"],
+  "grouping_options": ["source endpoint", "unordered endpoint pair", "whole network"],
+  "recommended_full_seeds": [20261005, 20261006, 20261007],
+  "calibration_fpr_targets": [0.01, 0.001],
+  "threshold_guarantees_test_fpr": false,
+  "latency": {"batch_sizes": [1, 8], "queue_max_wait_ms": 10, "pilot_arrival_rate": 50, "report": ["p50", "p95", "p99", "throughput", "fraction_under_200ms"], "includes": "input serialization, tokenization, scoring; queue in separate replay", "excludes": "sensor emission, flow completion wait, action execution"},
+  "pilot_limitations": ["nonrandom source prefix/row-group subsets", "context incomplete relative to the full network trace", "class-stratified evaluation samples are not natural attack prevalence", "one seed and two exercise years", "binary LSPR labels do not establish held-out attack families"],
+  "response_actions": "not fitted or executed: verified optimal-action and counterfactual outcome labels are absent"
+}

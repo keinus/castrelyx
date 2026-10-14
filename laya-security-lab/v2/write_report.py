@@ -1,0 +1,136 @@
+"""Build a report from completed measurements, with limitations next to claims."""
+from pathlib import Path
+import json
+ROOT=Path(__file__).resolve().parent
+def pct(v):return f'{100*v:.2f}%'
+def main():
+    c=json.loads((ROOT/'runs/comparison.json').read_text());m=c['models'];data=c['data_manifest']['splits']
+    lt=json.loads((ROOT/'runs/laya_complete.json').read_text());qt=json.loads((ROOT/'runs/qwen_complete.json').read_text())
+    labels={'laya_base':'Laya 원본','laya_v1_transfer':'Laya v1 이전 체크포인트¹','laya_v2':'Laya v2 재학습','qwen3_06b_pretrained':'Qwen3 0.6B 기본 가중치','qwen3_06b_lora':'Qwen3 0.6B LoRA','qwen3_17b_pretrained':'Qwen3 1.7B 기본 가중치','extra_trees':'ExtraTrees','hist_gradient_boosting':'HistGradientBoosting','isolation_forest':'IsolationForest'}
+    table=['| 모델 | 기존 공격 재현율 | 기존 정상 오탐률 | 미학습 공격 재현율 | 미학습 파일 정상 오탐률 | 단건 p95 |','|---|---:|---:|---:|---:|---:|']
+    for name,r in m.items():
+        k=r['tests']['known_test'];u=r['tests']['unseen_test'];unseen='해석 제외¹' if name=='laya_v1_transfer' else pct(u['recall'])+f" ({u['tp']}/{u['positive']})"
+        table.append(f"| {labels[name]} | {pct(k['recall'])} ({k['tp']}/{k['positive']}) | {pct(k['fpr'])} | {unseen} | {pct(u['fpr'])} | {r['latency']['p95_ms']:.2f}ms |")
+    joint=['| 모델 | 학습 패턴·새 식별자 사례 정확도 | 관계 식별자 제거 후 | 미학습 연결 패턴 사례 정확도 |','|---|---:|---:|---:|']
+    for name,r in m.items():joint.append(f"| {labels[name]} | {pct(r['tests']['joint_known_test']['accuracy'])} | {pct(r['relation_erased']['accuracy'])} | {pct(r['tests']['joint_unseen_test']['accuracy'])} |")
+    family=['| 모델 | Bot | Web Brute Force | Web XSS | Web SQL Injection | Infiltration |','|---|---:|---:|---:|---:|---:|']
+    for name,r in m.items():
+        if name=='laya_v1_transfer':continue
+        f=r['tests']['unseen_test']['attack_families'];cells=[]
+        for frag in ('Bot','Brute Force','XSS','Sql Injection','Infiltration'):
+            match=[v for k,v in f.items() if frag in k];n=sum(v['n'] for v in match);tp=sum(v['detected'] for v in match);cells.append(f'{tp}/{n}')
+        family.append('| '+labels[name]+' | '+' | '.join(cells)+' |')
+    l=m['laya_v2'];k=l['tests']['known_test'];u=l['tests']['unseen_test'];v=m['laya_v1_transfer']['tests']['known_test'];ci=u['cluster_bootstrap_recall_95']
+    load=json.loads((ROOT/'runs/load_comparison.json').read_text())
+    load_table=['| 모델 | 유입량 | 요청 수 | 대기 포함 p95 | 200ms 이내 비율 |','|---|---:|---:|---:|---:|']
+    for name,rs in load['models'].items():
+        for r in rs:load_table.append(f"| {labels[name]} | {r['offered_rps']}/초 | {r['requests']} | {r['response_p95_ms']:.2f}ms | {pct(r['within_200ms_fraction'])} |")
+    text=f'''# Laya 재학습과 미학습 공격 탐지 비교 실험
+
+실행일: 2026-10-05. 서버: `192.168.50.20:/home/keinus/laya-security-lab/v2`. 이전 실험은 상위 폴더에 보존했습니다.
+
+## 관측한 결과
+
+Laya를 새 자료로 다시 학습하고, Qwen3 0.6B도 LoRA로 미세조정했습니다. 기존 Laya와 Qwen3 두 크기, 수치 기반 지도학습 두 모델, 정상만으로 학습한 이상탐지기까지 9개 구성을 실제 실행했습니다. Laya v2의 기존 공격 재현율은 **{pct(k['recall'])} ({k['tp']}/{k['positive']})**, 미학습 공격 재현율은 **{pct(u['recall'])} ({u['tp']}/{u['positive']})**입니다. 각 정상 자료의 오탐률은 {pct(k['fpr'])}, {pct(u['fpr'])}입니다. 단건 판단 p95는 {l['latency']['p95_ms']:.2f}ms입니다.
+
+**기존 공격을 구분하는 학습 효과는 확인됐지만, 목표로 한 미학습 위협 탐지는 충분히 달성하지 못했습니다.** 이번 공개 흐름 특징에서는 ExtraTrees가 기존 공격 173/179, 미학습 공격 71/462로 가장 많이 탐지했습니다. Qwen3 0.6B LoRA는 각각 164/179, 61/462였습니다. LLM을 쓴다는 이유만으로 수치 모델보다 새로운 공격을 잘 찾는다는 근거는 얻지 못했습니다. 이 판단은 아래 실측 비교에 근거하며 모든 환경에서 모델 구조의 우열을 뜻하지 않습니다.
+
+여기서 미학습은 **이번 파인튜닝·보정·문턱 선택에서 해당 공격군과 수집 파일을 제외했다**는 뜻입니다. 기반 LLM이 사전학습에서 관련 공격 지식이나 공개 데이터 정보를 접하지 않았다는 뜻은 아닙니다. 실제 제로데이 탐지나 자동 대응 성공을 입증한 실험도 아닙니다. 속도는 비생성형 이진 판단 또는 LLM의 A/B 답 토큰 점수 계산이며 긴 추론·설명 생성 시간은 포함하지 않습니다.
+
+## 같은 입력에서의 모델 비교
+
+모든 구성에 같은 관측 시점의 상태를 줬습니다. Laya·Qwen은 JSON 상태를 읽고, 수치 모델은 같은 상태의 수치 특징과 이벤트 연결 여부를 추출합니다. Qwen은 thinking을 끄고 두 답 토큰의 점수로 판단했습니다. 기본 가중치 모델도 별도 보정 자료로 온도와 문턱을 정했으므로 가중치 미학습 비교이지 라벨을 전혀 사용하지 않은 운용은 아닙니다. 각 모델의 문턱은 validation에서 관측 정상 오탐률 1% 이하라는 조건으로 F1을 최대화했습니다. 이 조건은 외부 시험 오탐률 1%를 보장하지 않습니다.
+
+{chr(10).join(table)}
+
+¹ v1은 이전 수집 자료에서 이미 이번 미학습 파일을 접했으므로 미학습 성능 순위에서 제외합니다. 표의 v1은 **v2 입력·질문 형식에 이전 가중치를 적용한 전이 기준선**입니다. 기존 공격 재현율 {pct(v['recall'])}와 새 v2의 {pct(k['recall'])}는 이 공통 인터페이스에서의 비교입니다. 이전 보고서의 공격 8개 시험과 현재 공격 179개 시험은 다르므로 과거 62.5%에서의 개선 폭처럼 직접 빼서 제시할 수 없습니다. 입력 설계·표본 구성·가중치가 함께 바뀌어 개선을 파인튜닝 하나의 인과 효과로 분리할 수도 없습니다.
+
+재현율은 공격 중 탐지한 비율, 오탐률은 정상 중 위협으로 판정한 비율입니다. 클래스 비율을 통제해 추출한 시험이므로 운영 환경의 실제 경보 정밀도를 직접 추정할 수 없습니다. 정밀도·F1·PR-AUC·ROC-AUC·Brier·0.5 문턱 결과·혼동표·묶음 부트스트랩 구간은 `runs/comparison.json`에 함께 저장했습니다. 실측 원시 예측은 모델별 `runs/predictions_*.jsonl`입니다. 알려진 공격에서는 같은 수집 캠페인이 학습/시험에 함께 남아 있으므로 새 캠페인 성능으로 일반화해서는 안 됩니다.
+
+기본 가중치 모델의 공개 흐름 재현율 0%는 위의 낮은 오탐 제약과 고정 프롬프트를 적용한 결과입니다. 모든 프롬프트·문턱에서 탐지가 불가능하다는 뜻은 아닙니다. 숫자 특징의 의미와 업무별 정상 기준을 학습하지 않은 모델에 대한 제한된 기준선입니다. IsolationForest는 정상만으로 모델을 맞췄지만 문턱은 알려진 공격 라벨도 있는 validation에서 정했습니다. 해당 모델의 출력은 정상 학습 점수의 경험적 순위이므로 확률 및 Brier를 보정된 공격 확률처럼 해석하면 안 됩니다.
+
+Laya와 Qwen은 RTX 4090, 수치 모델은 같은 서버의 CPU를 사용했습니다. 수치 모델은 배포용 최적화가 없는 scikit-learn 구현이며 ExtraTrees는 400개 트리·4개 작업 스레드입니다. 단건 p95는 서로 다른 실행 구현의 관측값으로, 동일 연산 예산 비교나 반복 실험으로 확정한 속도 순위가 아닙니다.
+
+## 미학습 공격 종류별 탐지 건수
+
+{chr(10).join(family)}
+
+분모는 패킷 수나 독립 공격 사건 수가 아니라 공격 라벨이 포함된 5초 창 수입니다. 같은 공격/호스트에서 나온 여러 창은 서로 의존합니다. Laya v2 미학습 재현율의 5분 호스트 묶음 부트스트랩 95% 구간은 {pct(ci[0])}~{pct(ci[1])}이며, 이것도 독립 캠페인 모집단을 보장하는 구간은 아닙니다. SQL Injection 등 작은 하위 표본은 특히 강한 결론을 내릴 수 없습니다.
+
+실패가 특정 공격에 집중됩니다. Laya와 Qwen LoRA 모두 Bot 240개 중 1개만 탐지했고, 비교한 모든 모델은 SQL Injection 6개를 놓쳤습니다. 반면 합성 연결 시험은 두 학습 모델과 두 수치 모델이 모두 100%였습니다. 따라서 연결 식별자 규칙을 익힌 성과를 실제 미학습 공격 탐지 성과로 대신 사용할 수 없습니다. 흐름 집계에서 공격의 의미가 충분히 관측되지 않는 문제와 학습 분포 편향이 원인 후보지만, 이번 실험은 그 원인별 기여를 분리하지 않았습니다.
+
+## 로그 관계를 사용했는지 확인한 별도 시험
+
+각 정상/의심 쌍은 같은 이벤트 종류·순서·수치·식별자 길이를 갖고 이벤트 간 행위자 연결만 다릅니다. 같은 쌍은 반드시 같은 split에 속합니다. 학습에는 자격증명 접근→네트워크, 인증 실패→성공→서비스, 원격 관리→서비스→로그 중단 연결을 넣었습니다. 시험에는 새로운 식별자 쌍과 학습에 없던 문서 압축→외부 전송 연결을 따로 넣었습니다.
+
+{chr(10).join(joint)}
+
+이 자료의 정답은 설계한 연결 규칙에 따른 **합성 정답**입니다. 특정 이벤트가 같은 프로세스에 속한다는 사실만으로 실제 공격이 확정되는 것은 아닙니다. 정상 관리자·보안 제품·백업 도구의 유사 행동까지 포함한 실환경 위협 유효성으로 확대 해석하지 않습니다. 수치 모델에도 첫/마지막 행위자 일치 특징을 제공했으므로 이 시험에서 수치 모델이 잘하는 것은 예상 가능한 결과이며, 관계를 쓰려면 반드시 LLM이 필요하다는 증거가 아닙니다. 관계 제거는 학습 분포와 다른 입력을 만드는 민감도 시험입니다.
+
+## 데이터와 재학습 방법
+
+- 공개 데이터는 이전에 받은 HF `bvsam/cic-ids-2017`의 고정 리비전 `70bac6246d99cf046186a02e1cce6883e2ffe7ea`를 재사용했습니다. 새 공개 공격 로그를 합성했다고 표현하지 않습니다.
+- 모든 유효 흐름 구간을 집계하고 완료 시각을 기준으로 5초 창을 만들었습니다. 출발 호스트·파일·5분 구간을 묶어 분할하고 이 경계에서 과거 상태를 초기화합니다. 이전 10개 창의 흐름 양도 사용합니다. 흐름 종료 시각은 센서 전달 시각의 하한 추정입니다.
+- Bot이 포함된 금요일 오전 파일과 목요일의 웹 공격·Infiltration 파일은 통째로 제외하여 미학습 시험에만 사용했습니다. Heartbleed는 적은 표본으로 안정적인 분할을 만들기 어려워 이 프로토콜에서 제외했습니다.
+- 입력에는 가족 라벨, 파일명, 절대 IP, 원시 시각, split ID를 넣지 않았습니다. 공격 정답은 해당 관측 창의 공개 라벨이며 정상/위협 구분의 완전한 실환경 진실로 간주하지 않습니다.
+- 학습 {data['train']['cases']}개, validation {data['validation']['cases']}개, calibration {data['calibration']['cases']}개입니다. 기존 공격 시험 {data['known_test']['cases']}개, 미학습 공격 시험 {data['unseen_test']['cases']}개, 합성 연결 시험 {data['joint_known_test']['cases']}개와 미학습 연결 시험 {data['joint_unseen_test']['cases']}개입니다. 학습 시 자료 출처×정상/위협 층을 균형 있게 재표집합니다.
+- v2는 미학습 파일을 접했던 v1에서 이어 학습하지 않고 **원본 Laya**에서 다시 학습했습니다. 3 에포크, {lt['steps']}회 업데이트, 약 {lt['seconds']/60:.2f}분입니다. 인코더 8e-6/헤드 3e-5, 배치 8×누적 4, BF16을 사용했습니다. validation의 출처별 PR-AUC 평균으로 체크포인트를 고릅니다.
+- Qwen3 0.6B는 r=16, alpha=32 LoRA를 attention/MLP projection에 적용하고 A/B 답 토큰의 교차엔트로피로 학습했습니다. 3 에포크, {qt['steps']}회 업데이트, 약 {qt['seconds']/60:.2f}분입니다. 학습률 1e-4, 배치 4×누적 8입니다. 설명문·숨은 추론 정답을 학습한 실험은 아닙니다.
+- Qwen3 모델 리비전은 `protocol.json`에 고정했습니다. 실제 학습 시간, 선택 에포크, 검증 기록, 가중치 해시는 `runs/*_complete.json`, `runs/*_history.json`, 각 모델의 `training_metadata.json`에 있습니다. Qwen의 학습 파라미터 수는 `runs/qwen_train.log`에 기록했습니다. 모델별 온도/문턱은 `models/*_decision_policy.json`입니다.
+
+## 구현의 범위와 아직 입증하지 않은 것
+
+v2는 위협 여부를 판단하는 모델입니다. v1의 QoS/경로 변경/차단 방책 선택기를 새 모델로 교체해 검증한 것이 아닙니다. 실제 라우터 제어는 실행하지 않았습니다. `infer_v2.py`는 v2의 정규화된 상태 JSONL을 받아 모델 점수·점수의 의미·문턱·위협 여부를 저장합니다. 이전 v1의 Zeek/호스트 원시 파서와 v2 모델은 입력 계약이 다르므로 그대로 연결하면 안 됩니다. 특히 CIC의 IAT·TCP flag·패킷 통계는 Zeek conn.log에서 모두 동일하게 얻을 수 없습니다. 실사용을 위해 같은 특징을 생성하거나 없는 특징을 다룬 네이티브 Zeek 자료로 추가 학습·검증해야 합니다.
+
+독립 단건 지연 80회는 상주 모델·준비된 상태 기준입니다. 센서 배출, 창이 찰 때까지의 대기, 메시지 큐, 전체 로그 수집, 네트워크 전송, 장비 적용, 설명 생성은 포함하지 않습니다. 따라서 p95가 200ms 미만이어도 공격 시작부터 200ms 안에 차단했다는 뜻은 아닙니다.
+
+추가로 두 학습 모델에 대해 초당 10/25/50건을 각각 10초 동안 넣는 단일 작업자·배치 1의 부하 시험을 수행했습니다. 아래 지연은 예정 도착 시각부터 점수 계산 완료까지이므로 작업자 앞의 대기도 포함합니다. 이전 부하의 대기가 모두 소진된 뒤 다음 부하를 시작했습니다. 센서와 장비 적용은 여전히 포함하지 않습니다.
+
+{chr(10).join(load_table)}
+
+짧은 부하 시험이므로 장시간 안정성·다중 작업자·동적 배치의 처리 한계를 증명하지 않습니다. 원시 대기·서비스·응답 시간은 `runs/load_*.jsonl`, 요약은 `runs/load_comparison.json`입니다. Qwen도 설명을 생성하지 않고 A/B 답 토큰만 계산하면 빠르게 판단할 수 있었습니다. 이번 결과에서는 200ms 단건 판단이 Laya만 가능한 장점이라고 볼 수 없습니다.
+
+공개 데이터의 알려진 라벨/흐름 생성 문제와 사전학습 오염 가능성이 남습니다. 미학습 공격을 놓쳤다면 그 결과를 숨기거나 test로 문턱을 다시 맞추지 않고 그대로 기록합니다. 이번 결과는 해당 관측 자료에서의 모델 비교이며 새로운 현장·공격 도구·암호화 환경에 대한 성능 보장이 아닙니다.
+
+## 다음 학습의 우선순위와 근거
+
+현 체크포인트는 알려진 패턴을 빠르게 분류하는 후보입니다. 미학습 위협을 포괄하는 자동 차단 판단기로 검증됐다고 보기는 어렵습니다. 다음 단계는 다음과 같이 제안합니다. 이는 이번에 실행한 추가 개선 결과가 아니라, 관측한 실패를 바탕으로 정한 후속 실험안입니다.
+
+1. 네이티브 Zeek conn/dns/http/ssl 로그와 호스트의 인증·프로세스·파일 이벤트를 동일 시각·호스트·세션으로 연결한 실제 자료를 확보합니다. 흐름 수치만으로 놓친 Bot 및 웹 공격을 보완할 관측 정보가 필요하다는 판단입니다. 개별 로그와 연결 상태를 같은 사건으로 비교해야 연관 분석의 추가 효과를 측정할 수 있습니다.
+2. 정상 시퀀스의 다음 이벤트·마스킹 복원 등으로 정상 행동을 먼저 학습하고, 공격 분류 및 연결 관계 학습과 결합해 비교합니다. 이는 LogBERT 계열 선행 접근에서 얻은 가설이며, 여기서 정상만 학습한 IsolationForest가 실패했으므로 정상 학습만 추가하면 해결된다고 단정할 수 없습니다.
+3. 관리자 작업·백업·점검·브라우저 통신 같은 어려운 정상 사례와, 행위자·대상·시간 관계를 하나씩 바꾼 대조 사례를 넣습니다. 현재 합성 자료가 단순 행위자 일치 규칙으로 풀리는 한계를 해소하려는 설계입니다. 합성 정답은 분석가가 확인한 실제 사건 정답과 분리합니다.
+4. 학습 내부에서 공격군을 번갈아 제외하는 검증으로 하이퍼파라미터를 선택하고, 지금 확인한 시험과 별개인 새 날짜·호스트·캠페인을 최종 시험으로 보존합니다. 현재 시험에 맞춰 문턱을 낮춘 수치를 새 미학습 성능으로 제시하지 않습니다. 지표는 공격군별 재현율, 운영 기본 발생률에서의 정밀도, 호스트·시간당 오탐, 조기 탐지 시간으로 정합니다.
+5. 위협 여부와 대응의 안전성을 별도로 학습·시험합니다. QoS 제한, 검사 경로 전환, 선택 차단, 호스트 격리를 고를 때는 해당 행동으로 실제 확산·피해가 얼마나 줄고 정상 연결이 얼마나 손상되는지 재생 실험이 필요합니다. 이번에는 이 효과를 측정하지 않았으므로 탐지 점수를 대응 효과의 증거로 사용하지 않습니다.
+
+## 재현 및 사용
+
+```bash
+cd /home/keinus/laya-security-lab/v2
+../.venv/bin/python test_protocol.py
+bash run_training.sh
+bash run_benchmark.sh
+bash run_load.sh
+../.venv/bin/python write_report.py
+../.venv/bin/python audit_v2.py
+```
+
+위 명령은 v2 산출물을 다시 쓰므로 보관이 필요하면 실행 폴더를 먼저 복사하십시오. 원본 데이터 준비 코드는 `prepare_data.py`, 모델/추론 공통 코드는 `common_v2.py`, 학습은 `train_laya.py`와 `train_qwen.py`, 비교는 `benchmark_v2.py`입니다. 서버의 상위 `.venv`를 사용하며 추가 의존성은 peft 0.17.1과 accelerate 1.10.1입니다. 완전한 라이브러리 목록과 다운로드 출처도 실행 폴더에 보관합니다.
+
+```bash
+../.venv/bin/python infer_v2.py --model laya_v2 \\
+  --input data/known_test.jsonl --output runs/example_inference.jsonl
+```
+
+이 예시는 저장된 시험 상태를 다시 판단하는 사용 예이며 추가 독립 평가가 아닙니다. 제어 명령은 출력하지 않습니다. 모델을 고를 때는 속도뿐 아니라 위 표의 미탐·오탐과 입력 자료의 적합성을 함께 보십시오.
+
+## 근거 자료
+
+- [CICIDS2017 원 제공 기관](https://www.unb.ca/cic/datasets/ids-2017.html), [사용한 HF 변환본](https://huggingface.co/datasets/bvsam/cic-ids-2017/tree/70bac6246d99cf046186a02e1cce6883e2ffe7ea): 자료 출처와 공개 공격 라벨의 근거.
+- [Laya 원본 모델](https://huggingface.co/convaiinnovations/laya/tree/7b928d828b7b0e022f929d9bd2e44165aa270148): 재학습 기반 가중치. 보안 탐지 결과의 근거는 모델 카드가 아니라 이번 실측입니다.
+- [Qwen3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B), [Qwen3 1.7B](https://huggingface.co/Qwen/Qwen3-1.7B): 모델 구조·비사고 모드 인터페이스의 근거. 이 모델 카드의 일반 능력을 보안 탐지 성능으로 대신 사용하지 않았습니다.
+- [LogBERT 논문](https://arxiv.org/abs/2103.04475): 정상 로그 패턴에서 벗어난 시퀀스를 찾는 접근의 선행 연구. 이번 모델이 LogBERT를 재현했거나 같은 성능을 얻었다는 의미는 아닙니다.
+- [CICIDS2017 재검토 연구와 도구](https://intrusion-detection.distrinet-research.be/WTMC2021/): 기존 자료의 흐름 생성·라벨·평가 문제를 검토한 연구. 이번에 그 수정판 전체로 자료를 교체한 것은 아니므로 공개 라벨의 한계를 남겨 두었습니다.
+- 모든 성능 숫자의 직접 근거는 이 폴더의 실행 산출물입니다. `runs/audit.json`은 데이터 해시, 모델별 예측 개수, 혼동표 일치, 학습 완료를 검증한 기록입니다.
+'''
+    (ROOT/'README.md').write_text(text,encoding='utf8')
+if __name__=='__main__':main()

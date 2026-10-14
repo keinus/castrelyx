@@ -1,0 +1,18 @@
+[
+  {
+    "time": 1791249449.328368,
+    "gpu": "0, GPU-048706ee-10d4-e13f-481c-b2ffe15d5cd2, NVIDIA GeForce RTX 4090, 2210 MiB, 0 %, 45, 22.73 W\n1, GPU-56b19ff7-8d25-b55a-cc4e-760385ede53f, NVIDIA GeForce RTX 2080 Ti, 11 MiB, 0 %, 27, 21.50 W"
+  },
+  {
+    "time": 1791249454.4085183,
+    "gpu": "0, GPU-048706ee-10d4-e13f-481c-b2ffe15d5cd2, NVIDIA GeForce RTX 4090, 2209 MiB, 2 %, 46, 62.56 W\n1, GPU-56b19ff7-8d25-b55a-cc4e-760385ede53f, NVIDIA GeForce RTX 2080 Ti, 11 MiB, 0 %, 27, 20.96 W"
+  },
+  {
+    "time": 1791249459.5061274,
+    "gpu": "0, GPU-048706ee-10d4-e13f-481c-b2ffe15d5cd2, NVIDIA GeForce RTX 4090, 2267 MiB, 2 %, 45, 31.20 W\n1, GPU-56b19ff7-8d25-b55a-cc4e-760385ede53f, NVIDIA GeForce RTX 2080 Ti, 11 MiB, 0 %, 28, 21.40 W"
+  },
+  {
+    "time": 1791249464.6117024,
+    "gpu": "0, GPU-048706ee-10d4-e13f-481c-b2ffe15d5cd2, NVIDIA GeForce RTX 4090, 2237 MiB, 0 %, 45, 28.22 W\n1, GPU-56b19ff7-8d25-b55a-cc4e-760385ede53f, NVIDIA GeForce RTX 2080 Ti, 11 MiB, 0 %, 27, 21.03 W"
+  }
+]

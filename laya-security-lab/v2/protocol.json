@@ -1,0 +1,19 @@
+{
+  "version": "v2-20261005",
+  "seed": 20261005,
+  "unseen_files": ["Friday-WorkingHours-Morning", "Thursday-WorkingHours"],
+  "unseen_families": ["Bot", "Infiltration", "Web Attack"],
+  "window_seconds": 5,
+  "group_seconds": 300,
+  "split": "SHA256(source_file + source_host + 5-minute block), 60/15/10/15 train/validation/calibration/known_test; unseen files wholly excluded",
+  "selection": "max 4 benign or 30 attack windows per group and family, then per-family split caps; no test predictions used in selection",
+  "checkpoint_selection": "highest mean of per-source validation average precision",
+  "threshold_selection": "maximum validation F1 subject to <= 1% observed normal-window false positive rate",
+  "unknown_claim_limit": "Fine-tuning-unseen families and captures; no claim of foundation-pretraining absence or zero-day proof",
+  "comparison_models": ["Laya base", "Laya v1 checkpoint transfer (not unseen-clean)", "Laya v2 SFT", "Qwen3-0.6B zero-shot weights with supervised calibration", "Qwen3-0.6B LoRA", "Qwen3-1.7B zero-shot weights with supervised calibration", "HistGradientBoosting", "ExtraTrees", "IsolationForest normal-only"],
+  "raw_response_execution": false,
+  "hf_models": {
+    "Qwen/Qwen3-0.6B": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "Qwen/Qwen3-1.7B": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  }
+}

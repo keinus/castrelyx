@@ -1,0 +1,12 @@
+# Existing CUDA torch/transformers/peft environment is reused; do not replace GPU wheels blindly.
+numpy
+pandas
+pyarrow
+duckdb==1.4.1
+scikit-learn
+xgboost==3.1.1
+joblib
+torch
+transformers==4.57.1
+peft==0.17.1
+safetensors
