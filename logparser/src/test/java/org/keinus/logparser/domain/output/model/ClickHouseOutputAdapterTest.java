@@ -25,6 +25,41 @@ class ClickHouseOutputAdapterTest {
     @TempDir Path tempDir;
 
     @Test
+    void failedBackgroundFlushPausesUntilRecoveryExplicitlyRetriesTheRetainedBatch() throws Exception {
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
+        var offline = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var notified = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            requests.incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(offline.get() ? 503 : 200, -1);
+            exchange.close();
+        });
+        server.start();
+        try (var output = new ClickHouseOutputAdapter(Map.of("configParams", """
+                {"endpointUrl":"http://127.0.0.1:%d","tableName":"retry_test","batchSize":10,
+                 "flushIntervalMs":60000,"autoCreateSchema":false,"writeTelemetryTables":false}
+                """.formatted(server.getAddress().getPort())))) {
+            output.setBackgroundFailureHandler(failure -> {
+                notified.incrementAndGet();
+                output.setBackgroundFlushPaused(true);
+            });
+            output.send(new LogEvent("buffered", "agent", "test"));
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(output, "flushQuietly");
+            assertEquals(1, requests.get());
+            assertEquals(1, notified.get());
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(output, "flushQuietly");
+            assertEquals(1, requests.get(), "periodic flush must respect the runtime backoff");
+            offline.set(false);
+            output.retryPendingFlush();
+            assertEquals(2, requests.get());
+            output.retryPendingFlush();
+            assertEquals(2, requests.get(), "successful retry must clear the retained batch");
+        } finally { server.stop(0); }
+    }
+
+    @Test
     void writesCommonHostMetricsForPlainAndStructuredSnmpWithoutDuplicatingRawOidMetrics() throws Exception {
         List<CapturedRequest> requests = Collections.synchronizedList(new ArrayList<>());
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

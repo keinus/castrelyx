@@ -9,6 +9,8 @@ Logparser는 Spring Boot 기반 로그 수집, 파싱, 변환, 출력 파이프�
 Pipeline Studio의 `Test selected step`은 저장 전 신규 어댑터를 포함해 현재 draft를 테스트합니다. 첫 processing step은 Sample을 사용하고, 하위 step은 직전 활성 order의 테스트 결과를 Source로 이어 받습니다. 상위 결과가 없으면 먼저 상위 테스트가 필요하며, Sample·설정·순서 변경 시 관련 하위 결과를 무효화합니다. 저장은 런타임에 반영되므로 별도의 Deploy 단계는 없습니다. 자세한 동작은 [사용자 매뉴얼](readme/logparser-user-manual.md#21-pipeline-studio)을 참고하세요.
 전체 input/output adapter, parser, transform, structured transform 설정 argument와 실제 런타임 기본값은 [`readme/logparser_schema.md`](readme/logparser_schema.md)를 기준으로 합니다.
 
+출력 초기화/전송 실패는 `enabled`를 OFF로 바꾸지 않습니다. 처음 3회 연속 실패까지 5초마다, 이후 간격을 두 배씩 늘려 최대 1시간마다 자동 재시도하며 성공하면 초기화합니다. 재시도는 출력별로 독립적으로 실행됩니다. 대기 이벤트는 출력당 최대 10,000건/추정 64 MiB의 메모리 큐에 보관하고, 한도 초과 시 새 이벤트를 거부해 `rejectedCount`에 기록합니다. 재시도 상태와 다음 시각은 `/api/v1/pipeline/output-metrics`에서 확인합니다. 큐는 영구 저장소가 아니므로 프로세스 종료·설정 재적용·수동 OFF 시 남은 이벤트가 유실될 수 있습니다.
+
 ## 현재 구현 요약
 
 - 입력: File, TCP, TCP/TLS, UDP, HTTP, HTTPS, Kafka, SNMP, RabbitMQ, RabbitMQ/TLS, Castrelyx TCP mTLS gzip, Fake

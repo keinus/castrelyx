@@ -301,11 +301,23 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
     private void flushQuietly() {
         try {
             synchronized (lock) {
+                if (backgroundFlushPaused) { return; }
                 flushLegacyLocked();
                 flushExpiredChunkGroupsLocked(System.nanoTime());
             }
         } catch (Exception e) {
             log.warn("ClickHouse output flush failed: {}", e.getMessage(), e);
+            // Notify outside the buffer lock; recovery may be waiting to send on this adapter.
+            reportBackgroundFailure(e instanceof RuntimeException runtime ? runtime
+                    : new IllegalStateException("ClickHouse background flush failed", e));
+        }
+    }
+
+    @Override
+    public void retryPendingFlush() {
+        synchronized (lock) {
+            flushLegacyLocked();
+            flushExpiredChunkGroupsLocked(System.nanoTime());
         }
     }
 

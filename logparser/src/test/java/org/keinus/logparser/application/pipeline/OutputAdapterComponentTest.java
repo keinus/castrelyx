@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,7 +43,7 @@ class OutputAdapterComponentTest {
 
     @BeforeEach
     void setUp() {
-        outputAdapterComponent = new OutputAdapterComponent(appProp, configManagementService);
+        outputAdapterComponent = new OutputAdapterComponent(appProp);
     }
 
     @Test
@@ -283,19 +283,21 @@ class OutputAdapterComponentTest {
 
             assertEquals(2, summary.attempted());
             assertEquals(1, summary.succeeded());
-            assertEquals(1, summary.failed());
-            assertTrue(summary.hasFailures());
+            assertEquals(0, summary.failed());
+            assertEquals(1, summary.queued());
+            assertFalse(summary.hasFailures());
             assertEquals(1, successCount.get(), "Second adapter should still receive the message");
-            verify(configManagementService).disableOutputAdapter(1L);
-            assertEquals(1, outputAdapterComponent.getAdapterMetrics().size());
-            assertEquals(2L, outputAdapterComponent.getAdapterMetrics().get(0).adapterId());
+            verifyNoInteractions(configManagementService);
+            assertEquals(2, outputAdapterComponent.getAdapterMetrics().size());
+            assertEquals(1L, outputAdapterComponent.getAdapterMetrics().get(0).consecutiveFailures());
+            assertTrue(failingConfig.getEnabled());
 
             outputAdapterComponent.close();
         }
     }
 
     @Test
-    void testInitializationFailureDisablesOnlyFailedAdapter() throws Exception {
+    void testInitializationFailureStaysEnabledAndSchedulesRecovery() throws Exception {
         OutputAdapterConfig failingConfig = new OutputAdapterConfig();
         failingConfig.setId(1L);
         failingConfig.setType("FailingAdapter");
@@ -328,9 +330,11 @@ class OutputAdapterComponentTest {
 
             outputAdapterComponent.startPipeline();
 
-            verify(configManagementService).disableOutputAdapter(1L);
-            assertEquals(1, outputAdapterComponent.getAdapterMetrics().size());
-            assertEquals(2L, outputAdapterComponent.getAdapterMetrics().get(0).adapterId());
+            verifyNoInteractions(configManagementService);
+            assertEquals(2, outputAdapterComponent.getAdapterMetrics().size());
+            assertEquals(1L, outputAdapterComponent.getAdapterMetrics().get(0).consecutiveFailures());
+            assertTrue(failingConfig.getEnabled());
+            outputAdapterComponent.close();
         }
     }
 

@@ -21,7 +21,13 @@ Input Adapter -> MessageDispatcher -> ProcessingDispatcher -> Processing Steps (
 
 `messagetype`은 입력, processing step(parser/transform), output을 연결하는 키입니다. 출력 어댑터의 `messagetype`을 비우면 runtime 생성 시 `all`로 정규화되어 모든 message type을 받을 수 있습니다.
 
-입력 또는 출력 어댑터가 초기화나 런타임 처리 중 예외를 발생시키면 Logparser는 그 어댑터만 자동으로 OFF(`enabled=false`) 처리합니다. 실패한 어댑터는 현재 런타임에서도 제거되며 다른 어댑터와 파이프라인은 계속 동작합니다. 설정이나 외부 연결 문제를 해결한 다음 Inputs 또는 Outputs 화면에서 다시 활성화합니다.
+입력 어댑터는 초기화나 런타임 예외 시 해당 어댑터만 자동 OFF(`enabled=false`) 처리합니다. 원인을 해결한 뒤 Inputs에서 다시 활성화합니다.
+
+출력 어댑터는 초기화나 전송에 실패해도 ON 상태를 유지합니다. 처음 3회 연속 실패까지 5초 간격, 4회부터 10초·20초·40초처럼 두 배씩 늘려 최대 1시간마다 계속 재시도합니다. 성공하면 실패 횟수와 간격을 초기화합니다. 신규 입력 없이도 실패한 전송을 재시도하고, ClickHouse 주기 flush 실패도 같은 정책으로 복구합니다. 다른 출력의 전송은 계속 진행합니다.
+
+실패 이벤트와 대기 중 들어온 이벤트는 출력별 FIFO 메모리 큐에 최대 10,000건/추정 64 MiB까지 보관합니다. 초과한 새 이벤트는 거부하고 `rejectedCount`를 증가시킵니다. 수동 OFF·삭제·설정 재적용·프로세스 종료는 재시도를 취소하며 큐를 영구 보존하지 않습니다. 상대 서버가 처리한 뒤 응답이 끊긴 경우 재전송으로 중복 저장될 수 있으므로, 중복 방지가 필요한 목적지는 이벤트 ID 등을 기준으로 처리해야 합니다.
+
+`GET /api/v1/pipeline/output-metrics`의 `consecutiveFailures`, `nextRetryAt`(epoch ms), `pendingCount`, `pendingBytes`, `rejectedCount`로 복구 대기 상태를 확인합니다. `nextRetryAt=null`은 예약된 재시도가 없다는 뜻입니다. `failedCount`는 누적 시도 실패 수로 성공 후에도 유지됩니다.
 
 ## 2. 화면 구성
 

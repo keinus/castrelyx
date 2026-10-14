@@ -2,16 +2,17 @@ package org.keinus.logparser.application.pipeline;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.keinus.logparser.domain.configuration.model.OutputAdapterConfig;
-import org.keinus.logparser.domain.configuration.service.ConfigManagementService;
 import org.keinus.logparser.domain.model.LogEvent;
 import org.keinus.logparser.domain.output.model.OutputAdapter;
 import org.keinus.logparser.infrastructure.config.ApplicationProperties;
@@ -36,86 +37,19 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ApplicationProperties appProp;
-    private final ConfigManagementService configManagementService;
+    private final Function<OutputAdapterConfig, OutputAdapter> factory;
+    private final Supplier<ScheduledExecutorService> retryExecutors;
 
-    private final Map<String, CopyOnWriteArrayList<AdapterEntry>> specificAdapterMap = new ConcurrentHashMap<>();
-    private final CopyOnWriteArrayList<AdapterEntry> globalAdapterList = new CopyOnWriteArrayList<>();
-    private final CopyOnWriteArrayList<AdapterEntry> allAdapters = new CopyOnWriteArrayList<>();
-    private final Map<Long, AdapterEntry> adapterIdMap = new ConcurrentHashMap<>();
+    private final Map<String, CopyOnWriteArrayList<OutputDeliveryWorker>> specificAdapterMap = new ConcurrentHashMap<>();
+    private final CopyOnWriteArrayList<OutputDeliveryWorker> globalAdapterList = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<OutputDeliveryWorker> allAdapters = new CopyOnWriteArrayList<>();
+    private final Map<Long, OutputDeliveryWorker> adapterIdMap = new ConcurrentHashMap<>();
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private static final class AdapterEntry {
-        private final OutputAdapter adapter;
-        private final ReentrantLock deliveryLock = new ReentrantLock();
-        private final AtomicLong sentCount = new AtomicLong(0);
-        private final AtomicLong failedCount = new AtomicLong(0);
-        private final AtomicLong totalLatencyNanos = new AtomicLong(0);
-        private final AtomicLong lastSuccessAt = new AtomicLong(0);
-        private final AtomicLong lastFailureAt = new AtomicLong(0);
-        private final AtomicLong lastLatencyMs = new AtomicLong(0);
-        private final AtomicReference<String> lastError = new AtomicReference<>(null);
-
-        private AdapterEntry(OutputAdapter adapter) {
-            this.adapter = adapter;
+    public record DeliverySummary(int attempted, int succeeded, int failed, int queued) {
+        public DeliverySummary(int attempted, int succeeded, int failed) {
+            this(attempted, succeeded, failed, 0);
         }
-
-        private void deliver(LogEvent logEvent) {
-            deliveryLock.lock();
-            long startedAt = System.nanoTime();
-            try {
-                adapter.send(logEvent);
-                sentCount.incrementAndGet();
-                lastSuccessAt.set(System.currentTimeMillis());
-                lastError.set(null);
-            } catch (Exception e) {
-                failedCount.incrementAndGet();
-                lastFailureAt.set(System.currentTimeMillis());
-                lastError.set(e.getMessage());
-                throw e;
-            } finally {
-                long elapsedNanos = System.nanoTime() - startedAt;
-                totalLatencyNanos.addAndGet(elapsedNanos);
-                lastLatencyMs.set(elapsedNanos / 1_000_000);
-                deliveryLock.unlock();
-            }
-        }
-
-        private AdapterMetricsSnapshot snapshot() {
-            long attempts = sentCount.get() + failedCount.get();
-            Double averageLatencyMs = attempts > 0
-                    ? totalLatencyNanos.get() / 1_000_000.0 / attempts
-                    : null;
-            return new AdapterMetricsSnapshot(
-                    adapter.getId(),
-                    adapter.getClass().getSimpleName(),
-                    adapter.getMessageType(),
-                    sentCount.get(),
-                    failedCount.get(),
-                    lastError.get(),
-                    toNullableTimestamp(lastSuccessAt.get()),
-                    toNullableTimestamp(lastFailureAt.get()),
-                    toNullableTimestamp(lastLatencyMs.get()),
-                    averageLatencyMs
-            );
-        }
-
-        private static Long toNullableTimestamp(long value) {
-            return value > 0 ? value : null;
-        }
-
-        private void close() {
-            deliveryLock.lock();
-            try {
-                adapter.close();
-            } catch (Exception e) {
-                log.error("Error closing output adapter {}: {}", adapter, e.getMessage(), e);
-            } finally {
-                deliveryLock.unlock();
-            }
-        }
-    }
-
-    public record DeliverySummary(int attempted, int succeeded, int failed) {
         public boolean hasFailures() {
             return failed > 0;
         }
@@ -131,12 +65,29 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
             Long lastSuccessAt,
             Long lastFailureAt,
             Long lastLatencyMs,
-            Double averageLatencyMs
+            Double averageLatencyMs,
+            long consecutiveFailures,
+            Long nextRetryAt,
+            int pendingCount,
+            long pendingBytes,
+            long rejectedCount
     ) {}
 
-    public OutputAdapterComponent(ApplicationProperties appProp, ConfigManagementService configManagementService) {
+    @Autowired
+    public OutputAdapterComponent(ApplicationProperties appProp) {
+        this(appProp, OutputFactory::getOutputAdapter, () -> {
+            ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1,
+                    Thread.ofVirtual().name("output-retry-", 0).factory());
+            executor.setRemoveOnCancelPolicy(true);
+            return executor;
+        });
+    }
+
+    OutputAdapterComponent(ApplicationProperties appProp, Function<OutputAdapterConfig, OutputAdapter> factory,
+                           Supplier<ScheduledExecutorService> retryExecutors) {
         this.appProp = appProp;
-        this.configManagementService = configManagementService;
+        this.factory = factory;
+        this.retryExecutors = retryExecutors;
     }
 
     @Override
@@ -174,35 +125,27 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
         int attempted = 0;
         int succeeded = 0;
         int failed = 0;
-        String messageType = logEvent.getMessageType();
-
-        List<AdapterEntry> specificEntries = specificAdapterMap.get(messageType);
-        if (specificEntries != null) {
-            for (AdapterEntry entry : specificEntries) {
-                attempted++;
-                if (deliverToEntry(entry, logEvent)) {
-                    succeeded++;
-                } else {
-                    failed++;
-                }
-            }
+        int queued = 0;
+        List<OutputDeliveryWorker> entries = new java.util.ArrayList<>();
+        if (logEvent.getMessageType() != null) {
+            List<OutputDeliveryWorker> specific = specificAdapterMap.get(logEvent.getMessageType());
+            if (specific != null) { entries.addAll(specific); }
         }
-
-        for (AdapterEntry entry : globalAdapterList) {
+        entries.addAll(globalAdapterList);
+        for (OutputDeliveryWorker entry : entries) {
             attempted++;
-            if (deliverToEntry(entry, logEvent)) {
-                succeeded++;
-            } else {
-                failed++;
+            switch (entry.deliver(logEvent)) {
+                case SENT -> succeeded++;
+                case QUEUED -> queued++;
+                case REJECTED -> failed++;
             }
         }
-
-        return new DeliverySummary(attempted, succeeded, failed);
+        return new DeliverySummary(attempted, succeeded, failed, queued);
     }
 
     public List<AdapterMetricsSnapshot> getAdapterMetrics() {
         return allAdapters.stream()
-                .map(AdapterEntry::snapshot)
+                .map(OutputDeliveryWorker::snapshot)
                 .toList();
     }
 
@@ -217,23 +160,6 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
         log.info("Shutting down OutputAdapterComponent...");
         closeAllAdapters();
         log.info("OutputAdapterComponent shutdown completed");
-    }
-
-    private boolean deliverToEntry(AdapterEntry entry, LogEvent logEvent) {
-        try {
-            entry.deliver(logEvent);
-            return true;
-        } catch (Exception e) {
-            log.error(
-                    "Failed to deliver event to output adapter {} for messageType {}: {}",
-                    entry.adapter,
-                    getDisplayMessageType(logEvent.getMessageType()),
-                    e.getMessage(),
-                    e
-            );
-            disableFailedAdapter(entry.adapter.getId(), entry.adapter.getClass().getSimpleName(), entry, e);
-            return false;
-        }
     }
 
     private void initializeOutputAdapters() {
@@ -255,44 +181,25 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
                     continue;
                 }
 
-                try {
-                    log.info(
-                            "Creating OutputAdapter for type: {}, messageType: {}",
-                            config.getType(),
-                            config.getMessagetype()
-                    );
-                    OutputAdapter adapter = OutputFactory.getOutputAdapter(config);
-                    addAdapterInternal(adapter);
-                } catch (Exception e) {
-                    log.error("Failed to initialize OutputAdapter {}: {}", config.getType(), e.getMessage(), e);
-                    disableFailedAdapter(config.getId(), config.getType(), null, e);
-                }
+                addAdapterInternal(config);
             }
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    private void addAdapterInternal(OutputAdapter adapter) {
-        AdapterEntry entry = new AdapterEntry(adapter);
-        String messageType = adapter.getMessageType();
-
+    private void addAdapterInternal(OutputAdapterConfig config) {
+        OutputDeliveryWorker entry = new OutputDeliveryWorker(config, factory, retryExecutors.get());
+        String messageType = entry.messageType();
         if (isGlobalType(messageType)) {
             globalAdapterList.add(entry);
-            log.info("OutputAdapter {} registered as GLOBAL adapter", adapter.getClass().getSimpleName());
         } else {
             specificAdapterMap.computeIfAbsent(messageType, key -> new CopyOnWriteArrayList<>()).add(entry);
-            log.info(
-                    "OutputAdapter {} registered for message type: {}",
-                    adapter.getClass().getSimpleName(),
-                    messageType
-            );
         }
-
         allAdapters.add(entry);
-        if (adapter.getId() != null) {
-            adapterIdMap.put(adapter.getId(), entry);
-        }
+        if (entry.id() != null) { adapterIdMap.put(entry.id(), entry); }
+        // Register before initialization, so unavailable sinks remain visible and receive a retry queue.
+        entry.start();
     }
 
     private boolean isGlobalType(String type) {
@@ -309,7 +216,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
     }
 
     private void closeAllAdaptersLocked() {
-        for (AdapterEntry entry : allAdapters) {
+        for (OutputDeliveryWorker entry : allAdapters) {
             entry.close();
         }
 
@@ -330,12 +237,8 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
                 log.debug("Output adapter id={} is already registered", config.getId());
                 return;
             }
-            OutputAdapter adapter = OutputFactory.getOutputAdapter(config);
-            addAdapterInternal(adapter);
-            log.info("Added output adapter: id={}, type={}", adapter.getId(), adapter.getClass().getSimpleName());
-        } catch (Exception e) {
-            log.error("Failed to add output adapter", e);
-            disableFailedAdapter(config.getId(), config.getType(), null, e);
+            addAdapterInternal(config);
+            log.info("Added output adapter: id={}, type={}", config.getId(), config.getType());
         } finally {
             lock.writeLock().unlock();
         }
@@ -344,7 +247,7 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
     public void removeAdapter(Long id) {
         lock.writeLock().lock();
         try {
-            AdapterEntry entry = adapterIdMap.get(id);
+            OutputDeliveryWorker entry = adapterIdMap.get(id);
             if (entry == null) {
                 return;
             }
@@ -360,46 +263,17 @@ public class OutputAdapterComponent implements ApplicationListener<ApplicationRe
         addAdapter(config);
     }
 
-    private String getDisplayMessageType(String messageType) {
-        return messageType != null ? messageType : DEFAULT_MESSAGE_TYPE;
-    }
-
-    private void disableFailedAdapter(Long adapterId, String adapterType, AdapterEntry entry, Exception failure) {
-        if (entry != null) {
-            lock.writeLock().lock();
-            try {
-                removeAdapterEntryLocked(entry);
-            } finally {
-                lock.writeLock().unlock();
-            }
-        }
-
-        if (adapterId == null) {
-            log.error("Cannot persist OFF state for failed output adapter {} because it has no id", adapterType);
-            return;
-        }
-
-        try {
-            configManagementService.disableOutputAdapter(adapterId);
-            log.warn("Output adapter id={} type={} was set to OFF after failure: {}",
-                    adapterId, adapterType, failure.getMessage());
-        } catch (Exception disableException) {
-            log.error("Failed to persist OFF state for output adapter id={} type={}",
-                    adapterId, adapterType, disableException);
-        }
-    }
-
-    private void removeAdapterEntryLocked(AdapterEntry entry) {
-        Long adapterId = entry.adapter.getId();
+    private void removeAdapterEntryLocked(OutputDeliveryWorker entry) {
+        Long adapterId = entry.id();
         if (adapterId != null) {
             adapterIdMap.remove(adapterId, entry);
         }
 
-        String messageType = entry.adapter.getMessageType();
+        String messageType = entry.messageType();
         if (isGlobalType(messageType)) {
             globalAdapterList.remove(entry);
         } else {
-            List<AdapterEntry> entries = specificAdapterMap.get(messageType);
+            List<OutputDeliveryWorker> entries = specificAdapterMap.get(messageType);
             if (entries != null) {
                 entries.remove(entry);
                 if (entries.isEmpty()) {

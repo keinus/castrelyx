@@ -14,6 +14,7 @@ logparser/src/main/java/org/keinus/logparser/domain/output/**
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/
 logparser/src/main/java/org/keinus/logparser/domain/output/model/**
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/MariaDbOutputAdapter.java
+!logparser/src/main/java/org/keinus/logparser/domain/output/model/OutputAdapter.java
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/ClickHouseOutputAdapter.java
 !logparser/src/main/java/org/keinus/logparser/domain/output/model/SnmpHostMetricNormalizer.java
 !logparser/src/main/java/org/keinus/logparser/domain/output/service/

@@ -15,7 +15,12 @@ public record OutputAdapterMetricsDto(
         Long lastSuccessAt,
         Long lastFailureAt,
         Long lastLatencyMs,
-        Double averageLatencyMs
+        Double averageLatencyMs,
+        long consecutiveFailures,
+        Long nextRetryAt,
+        int pendingCount,
+        long pendingBytes,
+        long rejectedCount
 ) {
     public static OutputAdapterMetricsDto from(OutputAdapterComponent.AdapterMetricsSnapshot snapshot) {
         return new OutputAdapterMetricsDto(
@@ -28,7 +33,12 @@ public record OutputAdapterMetricsDto(
                 snapshot.lastSuccessAt(),
                 snapshot.lastFailureAt(),
                 snapshot.lastLatencyMs(),
-                snapshot.averageLatencyMs()
+                snapshot.averageLatencyMs(),
+                snapshot.consecutiveFailures(),
+                snapshot.nextRetryAt(),
+                snapshot.pendingCount(),
+                snapshot.pendingBytes(),
+                snapshot.rejectedCount()
         );
     }
 }

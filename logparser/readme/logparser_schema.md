@@ -16,6 +16,8 @@
 
 annotation의 `@Default`는 값을 자동 주입하지 않습니다. REST payload에서 생략한 값은 entity 기본값 또는 각 구현체의 런타임 기본값을 사용합니다.
 
+출력 초기화/전송 오류는 저장된 `enabled`를 변경하지 않습니다. 공통 런타임 재시도 정책은 연속 실패 1~3회에 5초, 이후 두 배 증가, 최대 3,600초이며 성공하면 초기화됩니다. 이 정책에는 별도 REST 설정 필드가 없습니다. 어댑터 자체의 요청 timeout/내부 재시도 후 반환되는 실패를 기준으로 합니다. ClickHouse background flush 실패도 공통 복구 일정에 합류합니다. 출력당 재시도 큐는 10,000건/추정 64 MiB이며, 재시작 시 보존되지 않습니다. `/api/v1/pipeline/output-metrics`는 `consecutiveFailures`, `nextRetryAt`(epoch ms 또는 null), `pendingCount`, `pendingBytes`, `rejectedCount`를 함께 반환합니다.
+
 ### REST API와 JSON 인코딩
 
 주요 생성 endpoint는 다음과 같습니다.
