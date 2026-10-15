@@ -1,4 +1,4 @@
-package org.keinus.logparser.domain.output.model;
+package org.keinus.logparser.domain.transformation.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;

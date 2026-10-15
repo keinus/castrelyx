@@ -180,7 +180,10 @@ public class ProcessingDispatcher implements Runnable {
             if (structuredTransformService != null && !"security-router".equals(logEvent.getMessageType())) {
                 boolean structuredResult = structuredTransformService.applyToLogEvent(logEvent);
                 if (!structuredResult) {
+                    logEvent.quarantine("Structured transformation failed: " + logEvent.getProcessingError());
+                    totalMessagesFailed.incrementAndGet();
                     log.warn("Structured transformation failed for event: {}", logEvent);
+                    return;
                 }
             }
             logEvent.markAsTransformed();

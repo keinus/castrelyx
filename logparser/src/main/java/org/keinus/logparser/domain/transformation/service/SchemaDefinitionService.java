@@ -46,6 +46,16 @@ public class SchemaDefinitionService {
     private Map<String, List<ColumnMetadataDto>> getSubSchemas() {
         Map<String, List<ColumnMetadataDto>> map = new HashMap<>();
 
+        map.put("event_metric", Arrays.asList(
+            col("asset_uid", "VARCHAR", "Canonical asset UID or registered management address"),
+            col("metric_name", "VARCHAR", "Canonical metric name"),
+            col("metric_value", "DOUBLE", "Numeric measurement"),
+            col("unit", "VARCHAR", "Canonical metric unit"),
+            col("labels", "JSON", "Resource dimensions such as interface, mount_point, device"),
+            col("observed_at", "TIMESTAMP", "Measurement time in UTC"),
+            col("source_type", "VARCHAR", "Collection method; defaults to AGENT")
+        ));
+
         map.put("event_snmp", Arrays.asList(
             col("target_host", "VARCHAR", "Polled device address"),
             col("version", "VARCHAR", "SNMP version"),

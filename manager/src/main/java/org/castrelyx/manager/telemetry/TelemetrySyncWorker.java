@@ -33,6 +33,12 @@ public class TelemetrySyncWorker {
   private final AssetService assetService;
   private final JdbcTemplate jdbcTemplate;
   private final AlertEvaluator alertEvaluator;
+  private org.castrelyx.manager.integration.LogparserClient logparserClient;
+
+  @Autowired
+  public void setLogparserClient(org.castrelyx.manager.integration.LogparserClient client) {
+    this.logparserClient = client;
+  }
 
   @Autowired
   public TelemetrySyncWorker(ClickHouseClient clickHouseClient, TelemetryNormalizer telemetryNormalizer,
@@ -72,7 +78,18 @@ public class TelemetrySyncWorker {
       bindSourceIfMissing(asset.id(), SourceType.AGENT, source.sourceId(), "transformed-agent", 90);
       count++;
     }
+    refreshAssetBindings();
     return Map.of("synced", true, "agents", count);
+  }
+
+  @org.springframework.scheduling.annotation.Scheduled(fixedDelayString = "${manager.telemetry.asset-binding-refresh-ms:60000}", initialDelay = 10000)
+  public void refreshAssetBindings() {
+    if (logparserClient != null) {
+      try { logparserClient.syncAssetBindings(assetService.telemetryAliases()); }
+      catch (RuntimeException e) {
+        org.slf4j.LoggerFactory.getLogger(getClass()).warn("Unable to publish telemetry asset bindings: {}", e.getMessage());
+      }
+    }
   }
 
   private void upsertObservedAgent(CanonicalTelemetryRecord record) {

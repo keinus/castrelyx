@@ -879,3 +879,13 @@ schema 1.1 chunk event는 `source_id + batch_id + chunk_index`별로 `chunk_item
 TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
 
 TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.
+
+### 공통 structured telemetry 계약
+
+일반 structured 결과(`common`, `subDomainType`, `subFields`, `additionalAttributes`)에 `telemetry`가 추가됩니다. `telemetry.metrics[]`는 `observed_at`, `asset_uid`, `source_type`, `source_id`, `metric_name`, `metric_value`, `unit`, `labels_json`을 포함합니다. `telemetry.states[]`는 공통 식별·시간 필드와 `state_type`, `state_key`, `state_json`을, `telemetry.events[]`는 공통 필드와 `event_type`, `severity`, `event_json`을 포함합니다. 시간은 UTC이며 밀리초 정밀도입니다. 유효하지 않거나 지원하지 않는 메트릭 값은 메트릭 행을 생성하지 않고 원문에 남깁니다.
+
+SNMP의 OID 변환과 Agent payload 변환은 structured 단계에서 한 번 수행합니다. 출력 어댑터는 protocol을 다시 해석하지 않습니다. `writeTelemetryTables`는 정규화 실행 여부가 아니라 ClickHouse의 공통 테이블 저장 여부를 제어합니다. 해당 테이블의 기존 컬럼 스키마는 유지합니다.
+
+`GET /api/v1/structure/asset-bindings`는 현재 주소→자산 UID 매핑을 반환합니다. `PUT`은 같은 형태의 JSON object로 전체 snapshot을 교체합니다(최대 10,000개). Manager가 현재 inventory 범위에서 유일한 관리 IP만 발행하며, Logparser는 SQLite `telemetry_asset_bindings`에 저장합니다. 예: `{"192.168.50.22":"nas"}`. 빈 object는 기존 매핑을 제거합니다. 잘못된 매핑은 HTTP 400입니다.
+
+일반 HTTP/TCP/Kafka 등 입력도 sub-table rule의 target을 `event_metric`으로 지정하고 `asset_uid`, `metric_name`, `metric_value`, `unit`, `labels`, `observed_at`을 매핑하면 같은 `telemetry.metrics[]` 계약을 생성합니다. SNMP의 poll 묶음은 `event_snmp` 매핑을 적용한 뒤 OID별 공통 메트릭 행으로 전개됩니다.

@@ -608,3 +608,9 @@ Flyway migration은 `src/main/resources/db/migration`에 있습니다. adapter t
 TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
 
 TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.
+
+### SNMP·Agent의 공통 structured 출력
+
+SNMP도 parser → transform → structured mapping → output 순서를 사용합니다. structured 단계는 SNMP poll의 여러 OID를 공통 메트릭 행으로 전개하고 단위·이름·labels를 정규화합니다. `telemetry` 아래의 `metrics`, `states`, `events`를 통해 Console/HTTP 등에서도 ClickHouse와 같은 정규화 결과를 확인할 수 있습니다. 원본 OID와 설정한 field mapping 결과는 기존 필드에 보존합니다.
+
+Manager에 등록된 관리 IP가 하나의 자산에만 연결되면 해당 주소의 SNMP 관측도 기존 자산 UID를 사용합니다. 이 매핑은 Manager가 자동 갱신하고 Logparser의 SQLite에 보존합니다. 주소가 여러 등록 자산에 중복되면 자동으로 연결하지 않으며 관리 IP의 충돌을 먼저 해소해야 합니다. Agent와 SNMP를 함께 수집해도 자산 수는 UID별로 세고, 동일 인터페이스의 트래픽은 대표 수집원 하나만 반영합니다.

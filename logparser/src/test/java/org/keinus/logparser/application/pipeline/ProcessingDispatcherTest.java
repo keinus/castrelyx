@@ -120,7 +120,7 @@ class ProcessingDispatcherTest {
     }
 
     @Test
-    void structuredTransformFailureDoesNotBlockDelivery() throws Exception {
+    void structuredTransformFailureQuarantinesBeforeDelivery() throws Exception {
         ParseService parseService = mock(ParseService.class);
         TransformService transformService = mock(TransformService.class);
         StructuredTransformService structuredTransformService = mock(StructuredTransformService.class);
@@ -137,7 +137,10 @@ class ProcessingDispatcherTest {
 
         when(parseService.parse(any(LogEvent.class))).thenReturn(true);
         when(transformService.transform(any(LogEvent.class))).thenReturn(true);
-        when(structuredTransformService.applyToLogEvent(any(LogEvent.class))).thenReturn(false);
+        when(structuredTransformService.applyToLogEvent(any(LogEvent.class))).thenAnswer(invocation -> {
+            running.set(false);
+            return false;
+        });
         when(outputAdapterComponent.deliver(any(LogEvent.class))).thenAnswer(invocation -> {
             running.set(false);
             return new OutputAdapterComponent.DeliverySummary(1, 1, 0);
@@ -160,12 +163,11 @@ class ProcessingDispatcherTest {
         runOnce(dispatcher);
 
         assertEquals(0, dropped.get());
-        assertEquals(0, failed.get());
-        assertEquals(1, processed.get());
+        assertEquals(1, failed.get());
+        assertEquals(0, processed.get());
         assertEquals(0, inFlightMessages.get());
-        assertTrue(event.isTransformed());
-        verify(outputAdapterComponent).deliver(event);
-        verify(liveTailService).broadcastLog(event);
+        verify(outputAdapterComponent, never()).deliver(event);
+        verify(liveTailService, never()).broadcastLog(event);
     }
 
     private void runOnce(ProcessingDispatcher dispatcher) throws InterruptedException {

@@ -37,6 +37,14 @@ class AssetServiceTest {
   }
 
   @Test
+  void resolvesNasAddressButDoesNotMergeAmbiguousManagementAddresses() {
+    assetService.upsertObservedAsset("nas", "nas", AssetType.LINUX_SERVER, "192.168.50.22");
+    assertThat(assetService.telemetryAliases()).containsEntry("192.168.50.22", "nas");
+    assetService.upsertObservedAsset("other-device", "other", AssetType.LINUX_SERVER, "192.168.50.22");
+    assertThat(assetService.telemetryAliases()).doesNotContainKey("192.168.50.22");
+  }
+
+  @Test
   void createsManualAssetAndBindsAgentAndSnmpSources() {
     Asset created = assetService.createManualAsset(new AssetCreateRequest(
         "edge-router",

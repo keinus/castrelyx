@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 public class StructuredTransformService {
     private static final Logger log = LoggerFactory.getLogger(StructuredTransformService.class);
 
+    private final TelemetryTransformService telemetryTransformService;
     private final MappingRepository mappingRepository;
     private final ConditionEvaluator conditionEvaluator;
     private final StructuredEventSerializer serializer;
@@ -33,6 +34,14 @@ public class StructuredTransformService {
     public StructuredTransformService(MappingRepository mappingRepository, 
                                       ConditionEvaluator conditionEvaluator,
                                       StructuredEventSerializer serializer) {
+        this(mappingRepository, conditionEvaluator, serializer,
+                new TelemetryTransformService(new TelemetryAssetBindings(Map.of())));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public StructuredTransformService(MappingRepository mappingRepository, ConditionEvaluator conditionEvaluator,
+            StructuredEventSerializer serializer, TelemetryTransformService telemetryTransformService) {
+        this.telemetryTransformService = telemetryTransformService;
         this.mappingRepository = mappingRepository;
         this.conditionEvaluator = conditionEvaluator;
         this.serializer = serializer;
@@ -97,7 +106,7 @@ public class StructuredTransformService {
         // If no config, we might want a default generic event or return null?
         // For now, create a basic event with unmapped data.
         if (config == null) {
-            return createDefaultEvent(logEvent);
+            return withTelemetry(logEvent, createDefaultEvent(logEvent));
         }
 
         // Track mapped source fields to handle unmapped later
@@ -167,12 +176,22 @@ public class StructuredTransformService {
             }
         }
 
-        return StructuredEvent.builder()
+        return withTelemetry(logEvent, StructuredEvent.builder()
                 .common(commonFields)
                 .subDomainType(subDomainType)
                 .subFields(subFields)
                 .additionalAttributes(additionalAttributes)
-                .build();
+                .build());
+    }
+
+    private StructuredEvent withTelemetry(LogEvent event, StructuredEvent result) {
+        Map<String, Object> fields = new HashMap<>(event.toOutputMap());
+        fields.put("common", result.getCommon());
+        if (result.getSubDomainType() != null) fields.put("subDomainType", result.getSubDomainType());
+        if (!result.getSubFields().isEmpty()) fields.put("subFields", result.getSubFields());
+        fields.put("additionalAttributes", result.getAdditionalAttributes());
+        result.setTelemetry(telemetryTransformService.transform(fields));
+        return result;
     }
 
     // Preserve exact flat keys; otherwise support nested dot paths and JSON Pointer.

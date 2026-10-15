@@ -1,4 +1,4 @@
-package org.keinus.logparser.domain.output.model;
+package org.keinus.logparser.domain.transformation.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;

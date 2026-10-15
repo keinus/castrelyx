@@ -68,4 +68,12 @@ public class LogparserClient {
         .retrieve()
         .body(Object.class);
   }
+
+  public synchronized void syncAssetBindings(Map<String, String> aliases) {
+    IntegrationConfig config = integrationService.get("logparser");
+    if (!config.enabled() || config.baseUrl() == null || config.baseUrl().isBlank()) return;
+    // Refresh even unchanged snapshots: Logparser may have restarted or changed configuration.
+    routerStatusClient.put().uri(URI.create(config.baseUrl() + "/api/v1/structure/asset-bindings"))
+        .body(aliases).retrieve().toBodilessEntity();
+  }
 }

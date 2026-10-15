@@ -283,12 +283,12 @@ public class AssetMetricsQueryService {
   private static List<Map<String, Object>> networkSeries(List<MetricSample> samples) {
     Map<String, MetricSample> previousByKey = new HashMap<>();
     Map<Instant, Map<String, Object>> points = new LinkedHashMap<>();
-    for (MetricSample sample : samples.stream()
+    for (MetricSample sample : ClickHouseClient.preferMetricSources(samples).stream()
         .filter(AssetMetricsQueryService::isNetworkCounter)
         .filter(TrafficInterfaceFilter::isVisibleNetworkSample)
         .sorted(Comparator.comparing(MetricSample::observedAt))
         .toList()) {
-      String key = sample.metricName() + "::" + Optional.ofNullable(sample.interfaceName()).orElse("");
+      String key = sample.sourceType() + "::" + sample.sourceId() + "::" + sample.metricName() + "::" + Optional.ofNullable(sample.interfaceName()).orElse("");
       MetricSample previous = previousByKey.put(key, sample);
       if (previous == null) {
         continue;
@@ -830,7 +830,7 @@ public class AssetMetricsQueryService {
       for (String name : names) {
         Optional<MetricSample> sample = samples.stream()
             .filter(row -> name.equals(row.metricName()))
-            .max(Comparator.comparing(MetricSample::observedAt));
+            .max(ClickHouseClient.sourcePreference());
         if (sample.isPresent()) {
           return sample.get().value();
         }
@@ -842,7 +842,7 @@ public class AssetMetricsQueryService {
       for (String name : names) {
         Optional<MetricSample> sample = samples.stream()
             .filter(row -> name.equals(row.metricName()))
-            .max(Comparator.comparing(MetricSample::observedAt));
+            .max(ClickHouseClient.sourcePreference());
         if (sample.isPresent()) {
           return normalizePercent(sample.get().metricName(), sample.get().value());
         }

@@ -435,3 +435,13 @@ Flyway migration은 `src/main/resources/db/migration`에서 관리합니다. 새
 - SNMP community, RabbitMQ password처럼 직접 입력하는 secret은 DB 접근 권한과 백업 정책으로 보호해야 합니다.
 - 네트워크 입력은 timeout, queue size, `maxConnections`를 운영 부하에 맞춰 조정해야 합니다.
 - `tcp_mtls_gzip`의 accepted ACK는 memory queue 경계이고 durable 저장 ACK가 아닙니다. 무손실이 필요한 배포는 Logparser 장애/재시작 구간과 ClickHouse insert 실패를 별도로 모니터링해야 합니다.
+
+### 공통 structured telemetry와 자산 연결
+
+SNMP와 Agent의 메트릭·상태·이벤트 정규화는 공통 `StructuredTransformService`에서 실행합니다. 결과의 `telemetry.metrics`, `telemetry.states`, `telemetry.events`는 모든 출력이 공유하는 레코드입니다. `ClickHouseOutputAdapter`는 이 레코드를 공통 `manager_metric_samples`, `manager_state_snapshots`, `manager_events` 테이블에 저장하며 OID 해석이나 메트릭 계산을 하지 않습니다. 원본과 사용자 structured mapping 결과도 유지합니다. structured 변환 실패는 quarantine 처리하고 출력하지 않습니다.
+
+Manager는 등록 자산의 관리 IP가 유일한 경우 주소→기존 UID 매핑을 `/api/v1/structure/asset-bindings`에 전달합니다. 매핑은 SQLite에 저장되어 재시작 후에도 유지됩니다. 예를 들어 `192.168.50.22`가 기존 `nas`의 관리 IP이면 SNMP 레코드의 `asset_uid`도 `nas`가 됩니다. 충돌하는 관리 IP는 자동 병합하지 않습니다. Manager는 매핑을 기본 60초마다, 자산 동기화 시에도 갱신합니다.
+
+Manager는 과거 IP UID도 조회 시 기존 UID로 연결합니다. 트래픽은 수집원별 카운터로 각각 계산한 뒤 자산/인터페이스마다 한 수집원만 선택합니다. 최근 10분 내 데이터가 있는 수집원을 우선하고, 같은 조건에서는 Agent를 우선합니다. 정상값 0은 대체 사유가 아닙니다.
+
+실제 ClickHouse 통합 테스트는 격리된 테스트 서버에 `TELEMETRY_TEST_CLICKHOUSE_URL`을 지정한 뒤 Logparser와 Manager 각각에서 `gradlew test -PskipFrontend=true`로 실행합니다. 테스트는 임의 이름의 전용 DB를 만들고 종료 시 삭제합니다. 기존 Router 통합 테스트도 함께 실행하려면 `ROUTER_TEST_CLICKHOUSE_URL`에 같은 테스트 서버를 지정합니다.

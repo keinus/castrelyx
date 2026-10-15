@@ -19,6 +19,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.castrelyx.manager.config.ManagerProperties;
+import org.castrelyx.manager.asset.AssetService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -34,12 +36,30 @@ public class ClickHouseClient {
   private static final List<String> DASHBOARD_STATE_TYPES = List.of(
       "socket", "service", "firewall", "interface", "process", "package");
 
+  private final AssetService assetService;
   private final ManagerProperties properties;
   private final RestClient restClient;
 
   public ClickHouseClient(ManagerProperties properties, RestClient.Builder builder) {
+    this(properties, builder, null);
+  }
+
+  @Autowired
+  public ClickHouseClient(ManagerProperties properties, RestClient.Builder builder,
+      AssetService assetService) {
+    this.assetService = assetService;
     this.properties = properties;
     this.restClient = builder.build();
+  }
+
+  private String queryTable(String tableName) {
+    String table = tableReference(properties.clickhouse().database(), tableName);
+    Map<String, String> aliases = assetService == null ? Map.of() : assetService.telemetryAliases();
+    if (aliases.isEmpty()) return table;
+    List<String> keys = aliases.keySet().stream().sorted().toList();
+    String from = keys.stream().map(ClickHouseClient::sqlString).collect(java.util.stream.Collectors.joining(", "));
+    String to = keys.stream().map(key -> sqlString(aliases.get(key))).collect(java.util.stream.Collectors.joining(", "));
+    return "(SELECT * REPLACE (transform(asset_uid, [" + from + "], [" + to + "], asset_uid) AS asset_uid) FROM " + table + ")";
   }
 
   public void execute(String sql) {
@@ -141,18 +161,19 @@ public class ClickHouseClient {
   public List<MetricSample> queryMetricSeriesSamples(String range, String bucket, String assetUid) {
     String rangeInterval = rangeInterval(range);
     String bucketInterval = bucketInterval(range, bucket);
-    return queryCanonicalMetricSeriesSamples(rangeInterval, bucketInterval, assetUid).stream()
+    return preferMetricSources(queryCanonicalMetricSeriesSamples(rangeInterval, bucketInterval, assetUid)).stream()
         .sorted(Comparator.comparing(MetricSample::observedAt))
         .toList();
   }
 
   private List<MetricSample> queryCanonicalLatestMetricSamples(String rangeInterval, String assetUid) {
-    String table = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String table = queryTable("manager_metric_samples");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     String sql = """
         SELECT
           asset_uid,
           source_type,
+          source_id,
           metric_name,
           value,
           unit,
@@ -165,6 +186,7 @@ public class ClickHouseClient {
           SELECT
             asset_uid,
             source_type,
+            source_id,
             metric_name,
             JSONExtractString(labels_json, 'interface') AS interface_name,
             JSONExtractString(labels_json, 'mount_point') AS mount_point,
@@ -178,7 +200,7 @@ public class ClickHouseClient {
             AND asset_uid != ''
             %s
             %s
-          GROUP BY asset_uid, source_type, metric_name, interface_name, mount_point, device_name
+          GROUP BY asset_uid, source_type, source_id, metric_name, interface_name, mount_point, device_name
         )
         ORDER BY latest_observed_at DESC
         LIMIT 4000
@@ -238,12 +260,13 @@ public class ClickHouseClient {
   }
 
   private List<MetricSample> queryCanonicalMetricSeriesSamples(String rangeInterval, String bucketInterval, String assetUid) {
-    String table = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String table = queryTable("manager_metric_samples");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     String sql = """
         SELECT
           asset_uid,
           source_type,
+          source_id,
           metric_name,
           value,
           unit,
@@ -251,12 +274,15 @@ public class ClickHouseClient {
           mount_point,
           device_name,
           labels_payload_json AS labels_json,
+          latest_observed_at AS last_seen_at,
           bucket_at AS observed_at
         FROM (
           SELECT
             asset_uid,
             source_type,
+            source_id,
             metric_name,
+            max(observed_at) AS latest_observed_at,
             avg(metric_value) AS value,
             any(unit) AS unit,
             JSONExtractString(labels_json, 'interface') AS interface_name,
@@ -269,7 +295,7 @@ public class ClickHouseClient {
             AND asset_uid != ''
             %s
             %s
-          GROUP BY bucket_at, asset_uid, source_type, metric_name, interface_name, mount_point, device_name
+          GROUP BY bucket_at, asset_uid, source_type, source_id, metric_name, interface_name, mount_point, device_name
         )
         ORDER BY observed_at ASC
         LIMIT 8000
@@ -329,20 +355,34 @@ public class ClickHouseClient {
   }
 
   private List<TrafficQueryService.InterfaceTraffic> queryCanonicalInterfaceTraffic(String rangeInterval, String assetUid) {
-    String table = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String table = queryTable("manager_metric_samples");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     String sql = """
         SELECT
           asset_uid,
           interface_name,
-          if(in_latest_bps > 0, in_latest_bps, in_counter_bps) AS in_bps,
-          if(out_latest_bps > 0, out_latest_bps, out_counter_bps) AS out_bps,
+          if(in_rate_count > 0, in_latest_bps, in_counter_bps) AS in_bps,
+          if(out_rate_count > 0, out_latest_bps, out_counter_bps) AS out_bps,
           utilization_pct,
           errors,
           discards
         FROM (
+          SELECT *, row_number() OVER (PARTITION BY asset_uid, interface_name
+            ORDER BY (in_rate_count > 0 OR out_rate_count > 0 OR in_counter_valid OR out_counter_valid) DESC,
+              latest_observed_at >= now() - INTERVAL 10 MINUTE DESC,
+              source_type = 'AGENT' DESC, latest_observed_at DESC, source_id ASC) AS source_rank
+          FROM (
           SELECT
             asset_uid,
+            source_type,
+            source_id,
+            max(observed_at) AS latest_observed_at,
+            countIf(metric_name = 'interface.in.bps') AS in_rate_count,
+            countIf(metric_name = 'interface.out.bps') AS out_rate_count,
+            (countIf(metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')) >= 2 AND maxIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')) > minIf(observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes'))
+              AND argMaxIf(metric_value, observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes')) >= argMinIf(metric_value, observed_at, metric_name IN ('interface.in.bytes', 'host.network.rx_bytes'))) AS in_counter_valid,
+            (countIf(metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')) >= 2 AND maxIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')) > minIf(observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes'))
+              AND argMaxIf(metric_value, observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes')) >= argMinIf(metric_value, observed_at, metric_name IN ('interface.out.bytes', 'host.network.tx_bytes'))) AS out_counter_valid,
             JSONExtractString(labels_json, 'interface') AS interface_name,
             argMaxIf(metric_value, observed_at, metric_name = 'interface.in.bps') AS in_latest_bps,
             argMaxIf(metric_value, observed_at, metric_name = 'interface.out.bps') AS out_latest_bps,
@@ -368,9 +408,12 @@ public class ClickHouseClient {
             AND JSONExtractString(labels_json, 'interface') != ''
             %s
             %s
-          GROUP BY asset_uid, interface_name
+          GROUP BY asset_uid, source_type, source_id, interface_name
+          )
+          WHERE in_rate_count > 0 OR out_rate_count > 0 OR in_counter_valid OR out_counter_valid
+            OR errors > 0 OR discards > 0
         )
-        WHERE in_bps > 0 OR out_bps > 0 OR errors > 0 OR discards > 0
+        WHERE source_rank = 1 AND (in_bps > 0 OR out_bps > 0 OR errors > 0 OR discards > 0)
         ORDER BY in_bps + out_bps DESC
         LIMIT 200
         FORMAT JSONEachRow
@@ -459,7 +502,7 @@ public class ClickHouseClient {
   }
 
   private List<DiskIo> queryCanonicalDiskIo(String rangeInterval, String assetUid) {
-    String table = tableReference(properties.clickhouse().database(), "manager_metric_samples");
+    String table = queryTable("manager_metric_samples");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     String sql = """
         SELECT
@@ -471,8 +514,12 @@ public class ClickHouseClient {
           if(write_latest_iops > 0, write_latest_iops, write_counter_iops) AS write_iops,
           least(100, if(io_latest_pct > 0, io_latest_pct, io_counter_pct)) AS utilization_pct
         FROM (
+          SELECT *, row_number() OVER (PARTITION BY asset_uid, device_name
+            ORDER BY latest_observed_at >= now() - INTERVAL 10 MINUTE DESC,
+              source_type = 'AGENT' DESC, latest_observed_at DESC, source_id ASC) AS source_rank
+          FROM (
           SELECT
-            asset_uid,
+            asset_uid, source_type, source_id, max(observed_at) AS latest_observed_at,
             JSONExtractString(labels_json, 'device') AS device_name,
             argMaxIf(metric_value, observed_at, metric_name = 'host.disk.read_bps') AS read_latest_bps,
             argMaxIf(metric_value, observed_at, metric_name = 'host.disk.write_bps') AS write_latest_bps,
@@ -513,9 +560,10 @@ public class ClickHouseClient {
           WHERE observed_at >= now() - %s
             AND JSONExtractString(labels_json, 'device') != ''
             %s
-          GROUP BY asset_uid, device_name
+          GROUP BY asset_uid, source_type, source_id, device_name
+          )
         )
-        WHERE read_bps > 0 OR write_bps > 0 OR read_iops > 0 OR write_iops > 0 OR utilization_pct > 0
+        WHERE source_rank = 1 AND (read_bps > 0 OR write_bps > 0 OR read_iops > 0 OR write_iops > 0 OR utilization_pct > 0)
         ORDER BY read_bps + write_bps DESC
         LIMIT 500
         FORMAT JSONEachRow
@@ -650,7 +698,8 @@ public class ClickHouseClient {
             stringValue(row.get("interface_name")),
             stringValue(row.get("mount_point")),
             stringValue(row.get("device_name")),
-            stringValue(row.get("labels_json"))))
+            stringValue(row.get("labels_json")), stringValue(row.get("source_id")),
+            parseInstant(stringValue(row.getOrDefault("last_seen_at", row.get("observed_at"))))))
         .filter(row -> row.assetUid() != null && !row.assetUid().isBlank())
         .filter(row -> row.metricName() != null && !row.metricName().isBlank())
         .toList();
@@ -723,7 +772,7 @@ public class ClickHouseClient {
   }
 
   public List<ObservedAgentSource> fetchObservedAgentSources() {
-    String table = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
+    String table = queryTable("manager_state_snapshots");
     List<Map<String, Object>> rows = queryJsonRows("""
         SELECT
           asset_uid,
@@ -749,9 +798,9 @@ public class ClickHouseClient {
   }
 
   public Map<String, Object> queryAgentDashboard(String assetUid) {
-    String metricTable = tableReference(properties.clickhouse().database(), "manager_metric_samples");
-    String stateTable = tableReference(properties.clickhouse().database(), "manager_state_snapshots");
-    String eventTable = tableReference(properties.clickhouse().database(), "manager_events");
+    String metricTable = queryTable("manager_metric_samples");
+    String stateTable = queryTable("manager_state_snapshots");
+    String eventTable = queryTable("manager_events");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     int stateTypeLimit = assetUid == null || assetUid.isBlank() ? 50 : 500;
     int packageLimit = assetUid == null || assetUid.isBlank() ? 50 : 200;
@@ -759,11 +808,11 @@ public class ClickHouseClient {
     List<Map<String, Object>> agents = queryJsonRows("""
         SELECT asset_uid, argMax(source_id, observed_at) AS source_id, max(observed_at) AS last_seen_at
         FROM (
-          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' AND source_type = 'AGENT' %s %s
           UNION ALL
-          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' AND source_type = 'AGENT' %s %s
           UNION ALL
-          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' %s %s
+          SELECT asset_uid, source_id, observed_at FROM %s WHERE asset_uid != '' AND source_type = 'AGENT' %s %s
         )
         GROUP BY asset_uid
         ORDER BY last_seen_at DESC
@@ -942,7 +991,7 @@ public class ClickHouseClient {
 
   public List<Map<String, Object>> queryAgentLogEvents(String range, String severity, String assetUid, int limit,
       String family, String search) {
-    String table = tableReference(properties.clickhouse().database(), "manager_events");
+    String table = queryTable("manager_events");
     String assetFilter = assetUid == null || assetUid.isBlank() ? "" : "AND asset_uid = " + sqlString(assetUid);
     String zeekEvent = "(JSONExtractString(event_json, 'log_family') = 'zeek' OR startsWith(event_type, 'zeek.'))";
     String familyFilter = switch (family) {
@@ -997,14 +1046,14 @@ public class ClickHouseClient {
           LIMIT 1 BY asset_uid, source_type, source_id, log_key
         ) ORDER BY observed_at DESC, source_id DESC, log_key DESC
         LIMIT %d FORMAT JSONEachRow
-        """.formatted(tableReference(properties.clickhouse().database(), "manager_events"), rangeInterval(range),
+        """.formatted(queryTable("manager_events"), rangeInterval(range),
             assetFilter, Math.min(Math.max(limit, 1), 10001));
     return queryJsonRows(sql).stream().map(ClickHouseClient::canonicalEventRow).toList();
   }
 
   public Map<String,Object> queryAssetLogEvents(String range, String severity, String assetUid,
       String family, String search, int limit, int offset) {
-    String table=tableReference(properties.clickhouse().database(), "manager_events");
+    String table=queryTable("manager_events");
     String familyFilter="ALL".equals(family) ? "" : "AND JSONExtractString(event_json, 'log_family') = "+sqlString(family);
     String searchFilter=search.isBlank() ? "" : "AND positionCaseInsensitiveUTF8(concat(event_type, ' ', source_id, ' ', event_json), "+sqlString(search)+") > 0";
     String sql="""
@@ -1233,6 +1282,33 @@ public class ClickHouseClient {
       case "INFO", "WARNING", "ERROR", "CRITICAL" -> "AND upper(ifNull(severity, '')) = " + sqlString(normalized);
       default -> "";
     };
+  }
+
+  static Comparator<MetricSample> sourcePreference() {
+    Instant freshAfter = Instant.now().minus(Duration.ofMinutes(10));
+    return Comparator.<MetricSample, Boolean>comparing(sample -> sample.sourceObservedAt() != null && sample.sourceObservedAt().isAfter(freshAfter))
+        .thenComparing(sample -> "AGENT".equalsIgnoreCase(sample.sourceType()))
+        .thenComparing(MetricSample::sourceObservedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+        .thenComparing(sample -> String.valueOf(sample.sourceId()));
+  }
+
+  static List<MetricSample> preferMetricSources(List<MetricSample> samples) {
+    Map<String, MetricSample> selected = new LinkedHashMap<>();
+    Comparator<MetricSample> preference = sourcePreference();
+    for (MetricSample sample : samples) {
+      String key = metricResourceKey(sample);
+      selected.merge(key, sample, (left, right) -> preference.compare(left, right) >= 0 ? left : right);
+    }
+    return samples.stream().filter(sample -> {
+      MetricSample chosen = selected.get(metricResourceKey(sample));
+      return java.util.Objects.equals(sample.sourceType(), chosen.sourceType())
+          && java.util.Objects.equals(sample.sourceId(), chosen.sourceId());
+    }).toList();
+  }
+
+  private static String metricResourceKey(MetricSample sample) {
+    return sample.assetUid() + "::" + sample.metricName() + "::" + sample.interfaceName()
+        + "::" + sample.mountPoint() + "::" + sample.deviceName();
   }
 
   private static String interfaceKey(TrafficQueryService.InterfaceTraffic row) {
@@ -1575,6 +1651,16 @@ public class ClickHouseClient {
       String interfaceName,
       String mountPoint,
       String deviceName,
-      String labelsJson) {
+      String labelsJson,
+      String sourceId,
+      Instant sourceObservedAt) {
+    public MetricSample(String assetUid, String sourceType, String metricName, double value, String unit,
+        Instant observedAt, String interfaceName, String mountPoint, String deviceName, String labelsJson, String sourceId) {
+      this(assetUid, sourceType, metricName, value, unit, observedAt, interfaceName, mountPoint, deviceName, labelsJson, sourceId, observedAt);
+    }
+    public MetricSample(String assetUid, String sourceType, String metricName, double value, String unit,
+        Instant observedAt, String interfaceName, String mountPoint, String deviceName, String labelsJson) {
+      this(assetUid, sourceType, metricName, value, unit, observedAt, interfaceName, mountPoint, deviceName, labelsJson, sourceType);
+    }
   }
 }

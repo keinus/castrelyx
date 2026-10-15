@@ -170,3 +170,17 @@ Inform ACK confirms memory queue acceptance. Events and deduplication history ar
 TLS 6514 → RFC5424SyslogParser → JsonParser(sourceField=syslog_MESSAGE) → router 정규화 → ClickHouse → 자산 로그. 초기 input/output은 비활성입니다.
 
 TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFrameBytes`는 1024..2097152(기본 2097152)입니다. `security-router` 입력은 TLS `clientAuth=need`, 절대 경로 `inboxDirectory`, 인증서 CN별 `clientSourceBindings: {CN: {sourceId, assetUid}}` 등록이 필요합니다. 원문·오류·재처리 및 설정 예제는 [security-router.md](security-router.md)를 참고하세요.
+
+### 입력 종류와 무관한 structured telemetry
+
+```mermaid
+flowchart LR
+  Inputs["SNMP / Agent / other inputs"] --> Parse["Parser / Transform"]
+  Parse --> Structured["Structured mapping + telemetry normalization"]
+  Bindings["Persistent Manager asset bindings"] --> Structured
+  Structured --> Shared["telemetry.metrics / states / events"]
+  Shared --> Outputs["Console / HTTP / ClickHouse outputs"]
+  Outputs --> Tables["Shared canonical tables"]
+```
+
+OID 단위 변환·CPU 계산·공통 labels 생성은 structured 단계의 책임입니다. ClickHouse 출력은 정규화된 레코드의 배치 저장·재시도만 수행합니다. Manager 조회는 과거 주소 UID를 기존 자산으로 연결하고, 수집원별 변화율 계산 후 대표 수집원을 선택합니다.

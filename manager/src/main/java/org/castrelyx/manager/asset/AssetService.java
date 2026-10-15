@@ -27,6 +27,23 @@ public class AssetService {
         """, AssetService::asset);
   }
 
+  /** Resolve only unambiguous registered management addresses; never guess across conflicts. */
+  public java.util.Map<String, String> telemetryAliases() {
+    List<Asset> assets = listAssets();
+    var byAddress = assets.stream()
+        .filter(asset -> asset.managementIp() != null && !asset.managementIp().isBlank())
+        .collect(java.util.stream.Collectors.groupingBy(asset -> asset.managementIp().trim()));
+    java.util.Map<String, String> aliases = new java.util.TreeMap<>();
+    byAddress.forEach((address, matches) -> {
+      if (matches.size() == 1) {
+        String uid = matches.getFirst().assetUid();
+        if (!address.equals(uid) && assets.stream().noneMatch(asset -> address.equals(asset.assetUid())))
+          aliases.put(address, uid);
+      }
+    });
+    return java.util.Map.copyOf(aliases);
+  }
+
   public Asset createManualAsset(AssetCreateRequest request) {
     AssetType type = request.assetType() == null ? AssetType.UNKNOWN : request.assetType();
     String assetUid = "manual-" + UUID.randomUUID();

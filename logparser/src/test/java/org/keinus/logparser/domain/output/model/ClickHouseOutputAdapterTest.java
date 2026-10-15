@@ -24,6 +24,15 @@ class ClickHouseOutputAdapterTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     @TempDir Path tempDir;
 
+    private static LogEvent normalize(LogEvent event) {
+        if (event.getField("telemetry") == null) {
+            var normalizer = new org.keinus.logparser.domain.transformation.service.TelemetryTransformService(
+                    new org.keinus.logparser.domain.transformation.service.TelemetryAssetBindings(Map.of()));
+            event.setField("telemetry", normalizer.transform(event.toOutputMap()));
+        }
+        return event;
+    }
+
     @Test
     void failedBackgroundFlushPausesUntilRecoveryExplicitlyRetriesTheRetainedBatch() throws Exception {
         var requests = new java.util.concurrent.atomic.AtomicInteger();
@@ -45,7 +54,7 @@ class ClickHouseOutputAdapterTest {
                 notified.incrementAndGet();
                 output.setBackgroundFlushPaused(true);
             });
-            output.send(new LogEvent("buffered", "agent", "test"));
+            output.send(normalize(new LogEvent("buffered", "agent", "test")));
             org.springframework.test.util.ReflectionTestUtils.invokeMethod(output, "flushQuietly");
             assertEquals(1, requests.get());
             assertEquals(1, notified.get());
@@ -78,11 +87,11 @@ class ClickHouseOutputAdapterTest {
             try (var output = new ClickHouseOutputAdapter(config)) {
                 LogEvent plain = new LogEvent(OBJECT_MAPPER.writeValueAsString(payload), "192.0.2.22", "snmp");
                 assertTrue(new org.keinus.logparser.domain.parse.model.JsonParser().parse(plain));
-                output.send(plain);
+                output.send(normalize(plain));
                 LogEvent structured = new LogEvent("{}", "192.0.2.22", "snmp");
                 structured.setField("subDomainType", "event_snmp");
                 structured.setField("subFields", payload);
-                output.send(structured);
+                output.send(normalize(structured));
             }
             String body = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
             assertFalse(body.contains("snmp.renamed"));
@@ -119,7 +128,7 @@ class ClickHouseOutputAdapterTest {
                             "trap_oid", "1.3.6.1.6.3.1.1.5.3");
                     LogEvent event = new LogEvent(OBJECT_MAPPER.writeValueAsString(payload), "192.0.2.1", "snmp");
                     assertTrue(new org.keinus.logparser.domain.parse.model.JsonParser().parse(event));
-                    output.send(event);
+                    output.send(normalize(event));
                 }
             }
             String metricBody = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
@@ -149,7 +158,7 @@ class ClickHouseOutputAdapterTest {
                     "target_host", "192.0.2.10", "observed_at", "2026-09-04T00:00:00Z",
                     "metrics", Map.of("temperature", Map.of("value", 42, "syntax", "Integer32")),
                     "metric_temperature", 42));
-            try (var output = new ClickHouseOutputAdapter(config)) { output.send(event); }
+            try (var output = new ClickHouseOutputAdapter(config)) { output.send(normalize(event)); }
             String metrics = requestContaining(requests, "INSERT+INTO+default.manager_metric_samples").body();
             assertTrue(metrics.contains("snmp.temperature"));
             assertTrue(metrics.contains("192.0.2.10"));
@@ -291,9 +300,9 @@ class ClickHouseOutputAdapterTest {
             event.setField("item_key", "heartbeat");
             event.setField("payload", Map.of("event_type", "health", "severity", "INFO", "message", "ok"));
 
-            adapter.send(metric);
-            adapter.send(state);
-            adapter.send(event);
+            adapter.send(normalize(metric));
+            adapter.send(normalize(state));
+            adapter.send(normalize(event));
             adapter.close();
 
             assertTrue(requests.size() >= 8);
@@ -361,17 +370,17 @@ class ClickHouseOutputAdapterTest {
             Map<String, String> config = chunkConfig(endpointUrl, 60_000, 60_000, 100, 1_000);
 
             ClickHouseOutputAdapter first = new ClickHouseOutputAdapter(config);
-            first.send(chunkEvent("batch-stable", 1, 3, 2));
-            first.send(chunkEvent("batch-stable", 1, 3, 0));
+            first.send(normalize(chunkEvent("batch-stable", 1, 3, 2)));
+            first.send(normalize(chunkEvent("batch-stable", 1, 3, 0)));
             assertEquals(0, rawInserts(requests).size(), "incomplete chunk must not flush");
-            first.send(chunkEvent("batch-stable", 1, 3, 1));
+            first.send(normalize(chunkEvent("batch-stable", 1, 3, 1)));
             first.close();
 
             ClickHouseOutputAdapter retry = new ClickHouseOutputAdapter(config);
             for (int sequence : List.of(1, 0, 2)) {
                 LogEvent retryEvent = chunkEvent("batch-stable", 1, 3, sequence);
                 retryEvent.setField("sent_at", "2026-07-10T00:01:00Z");
-                retry.send(retryEvent);
+                retry.send(normalize(retryEvent));
             }
             retry.close();
 
@@ -406,8 +415,8 @@ class ClickHouseOutputAdapterTest {
             String endpointUrl = "http://127.0.0.1:" + server.getAddress().getPort();
             ClickHouseOutputAdapter adapter = new ClickHouseOutputAdapter(
                     chunkConfig(endpointUrl, 60_000, 60_000, 100, 1_000));
-            adapter.send(chunkEvent("batch-two-chunks", 0, 1, 0));
-            adapter.send(chunkEvent("batch-two-chunks", 1, 1, 1));
+            adapter.send(normalize(chunkEvent("batch-two-chunks", 0, 1, 0)));
+            adapter.send(normalize(chunkEvent("batch-two-chunks", 1, 1, 1)));
             adapter.close();
 
             List<CapturedRequest> inserts = rawInserts(requests);
@@ -432,8 +441,8 @@ class ClickHouseOutputAdapterTest {
         try {
             String endpointUrl = "http://127.0.0.1:" + server.getAddress().getPort();
             adapter = new ClickHouseOutputAdapter(chunkConfig(endpointUrl, 10, 50, 1, 10));
-            adapter.send(chunkEvent("batch-memory", 0, 2, 0));
-            adapter.send(chunkEvent("batch-timeout", 0, 2, 0));
+            adapter.send(normalize(chunkEvent("batch-memory", 0, 2, 0)));
+            adapter.send(normalize(chunkEvent("batch-timeout", 0, 2, 0)));
 
             List<CapturedRequest> afterPressure = rawInserts(requests);
             assertEquals(1, afterPressure.size(), "second group must force-flush the oldest group");
@@ -463,7 +472,7 @@ class ClickHouseOutputAdapterTest {
             String endpointUrl = "http://127.0.0.1:" + server.getAddress().getPort();
             ClickHouseOutputAdapter adapter = new ClickHouseOutputAdapter(
                     chunkConfig(endpointUrl, 60_000, 60_000, 100, 1_000));
-            adapter.send(chunkEvent("batch-close", 0, 2, 0));
+            adapter.send(normalize(chunkEvent("batch-close", 0, 2, 0)));
             assertEquals(0, rawInserts(requests).size());
             adapter.close();
 
@@ -495,7 +504,7 @@ class ClickHouseOutputAdapterTest {
                      "autoCreateSchema":false,"writeTelemetryTables":true}
                     """.formatted(endpointUrl, jsonPath(dlq)));
             ClickHouseOutputAdapter adapter = new ClickHouseOutputAdapter(config);
-            adapter.send(chunkEvent("batch-incomplete", 0, 2, 0));
+            adapter.send(normalize(chunkEvent("batch-incomplete", 0, 2, 0)));
             adapter.close();
 
             assertEquals(1, rawInserts(requests).size(), "raw audit insert remains best effort");
@@ -537,7 +546,7 @@ class ClickHouseOutputAdapterTest {
             LogEvent oversized = chunkEvent("batch-byte-limit", 0, 2, 0);
             oversized.setField("payload", Map.of("value", "한".repeat(512)));
 
-            adapter.send(oversized);
+            adapter.send(normalize(oversized));
             adapter.close();
 
             assertEquals(1, rawInserts(requests).size());
@@ -566,8 +575,8 @@ class ClickHouseOutputAdapterTest {
             legacy.setField("item_key", "legacy");
             legacy.setField("payload", Map.of("value", "l".repeat(256)));
             LogEvent chunk = chunkEvent("batch-after-legacy", 0, 2, 0);
-            long legacyBytes = ClickHouseOutputAdapter.EventRecord.from(legacy, false).serializedSizeBytes();
-            long chunkBytes = ClickHouseOutputAdapter.EventRecord.from(chunk, false).serializedSizeBytes();
+            long legacyBytes = ClickHouseOutputAdapter.EventRecord.from(normalize(legacy), false).serializedSizeBytes();
+            long chunkBytes = ClickHouseOutputAdapter.EventRecord.from(normalize(chunk), false).serializedSizeBytes();
             long byteLimit = Math.max(legacyBytes, chunkBytes) + 8;
             assertTrue(legacyBytes + chunkBytes > byteLimit);
 
@@ -581,9 +590,9 @@ class ClickHouseOutputAdapterTest {
                     """.formatted(endpointUrl, byteLimit, jsonPath(dlq)));
             ClickHouseOutputAdapter adapter = new ClickHouseOutputAdapter(config);
 
-            adapter.send(legacy);
+            adapter.send(normalize(legacy));
             assertEquals(0, rawInserts(requests).size());
-            assertDoesNotThrow(() -> adapter.send(chunk));
+            assertDoesNotThrow(() -> adapter.send(normalize(chunk)));
             assertEquals(1, rawInserts(requests).size(), "legacy buffer must flush before retaining the chunk");
             adapter.close();
 

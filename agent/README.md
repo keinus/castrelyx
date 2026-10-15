@@ -162,7 +162,7 @@ Castrelyx Agent는 Linux와 Windows 호스트 내부에서 실행되는 경량 G
 13. sender loop는 오래된 spool record부터 최대 25개씩 전송하고, 서버가 성공 응답한 record만 ACK하여 제거합니다. 일시 오류는 재시도하고 영구 오류나 잘못된 record는 dead-letter queue로 옮깁니다.
 14. HTTPS 모드에서는 CastrelSign이 batch와 item을 자체 ingest table에 저장합니다.
 15. TCP/mTLS 모드에서는 Logparser가 item을 `LogEvent`로 변환하고 ClickHouse `castrelyx_agent_events` raw table에 저장합니다.
-16. Manager의 telemetry sync worker는 ClickHouse raw row를 canonical metric/state/event 테이블로 정규화하고, asset binding과 alert 평가에 사용합니다.
+16. Logparser의 structured transform이 공통 metric/state/event 레코드를 생성하고 ClickHouse 출력이 저장합니다. Manager의 telemetry sync worker는 Agent identity와 자산 binding을 동기화합니다.
 
 ## 설정 파일
 
@@ -947,20 +947,11 @@ TTL toDateTime(received_at) + INTERVAL 7 DAY DELETE
 
 schema `1.1` chunk는 `batchSize`가 아니라 선언된 `chunk_item_count`가 찰 때 flush됩니다. `batchSize: 100`과 `flushIntervalMs: 5000`은 chunk metadata가 없는 legacy event buffer에 적용됩니다. Chunk group은 기본 `incompleteGroupTimeoutMs: 30000`, `maxPendingGroups: 2048`, `maxPendingItems: 50000`, `maxPendingBytes: 67108864`의 전역 상한을 함께 적용합니다. 시간·개수·byte 상한이나 adapter 종료로 불완전하게 남은 chunk는 canonical table에 쓰지 않고 기본 128 MiB/1,000 records의 durable DLQ로 격리합니다. 인증은 `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` 환경변수에서 읽어 Basic Auth header를 구성합니다.
 
-### Manager canonical 동기화
+### 공통 telemetry 정규화와 Manager 동기화
 
-Manager `TelemetrySyncWorker`는 ClickHouse raw table에서 cursor 이후 row를 읽어 canonical table로 변환합니다.
+Logparser의 공통 structured transform이 Agent와 SNMP 입력을 같은 canonical 스키마로 정규화합니다. ClickHouse 출력은 이미 정규화된 `telemetry.metrics`, `telemetry.states`, `telemetry.events`를 각각 `manager_metric_samples`, `manager_state_snapshots`, `manager_events`에 저장합니다. Manager는 raw 데이터를 다시 canonical 테이블에 쓰지 않습니다.
 
-처리 내용:
-
-- raw table cursor는 MariaDB `sync_cursors`에 저장됩니다.
-- 한 번에 최대 1000 rows, 최대 100 batches를 처리합니다.
-- `metric` item은 `manager_metric_samples`로 변환됩니다.
-- `state` item은 `manager_state_snapshots`로 변환됩니다.
-- `event` item은 `manager_events`로 변환됩니다.
-- `asset` 또는 `identity` item은 identity state로 변환됩니다.
-- agent source를 asset source binding으로 연결합니다.
-- metric/event 기반 alert rule 평가를 수행합니다.
+Manager `TelemetrySyncWorker`는 Agent identity로 자산과 source binding을 갱신하고, 유일한 관리 IP→자산 UID 매핑을 Logparser에 발행합니다. 매핑은 Logparser SQLite에 보존됩니다. 같은 장비의 SNMP 주소와 Agent 데이터는 기존 자산 UID로 연결되며, Manager 조회는 과거 IP UID도 동일 자산으로 연결합니다.
 
 ## 설치
 

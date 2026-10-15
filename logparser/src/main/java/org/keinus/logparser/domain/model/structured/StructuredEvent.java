@@ -13,6 +13,8 @@ import lombok.Data;
 @Data
 @Builder
 public class StructuredEvent {
+    private StructuredTelemetry telemetry;
+
     // 공통 필드 (CORE)
     private CommonFields common;
 
