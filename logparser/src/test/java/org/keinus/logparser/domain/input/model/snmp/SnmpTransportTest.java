@@ -94,13 +94,20 @@ class SnmpTransportTest {
             sender.addUser(SnmpSecurity.read(user("authPriv", "SHA256"), null, true), null);
             sender.listen();
             Target<UdpAddress> target = target(version, receiver.listenAddress(), "authPriv");
-            target.setTimeout(200);
             assertNotNull(sender.snmp.send(notification(version, "inform", 1), target).getResponse());
             PDU second = notification(version, "inform", 2);
+            // Only the intentional no-ACK check needs a short observation window.
+            // Positive sends keep the normal UDP/USM response budget, with no retries.
+            target.setTimeout(200);
             assertNull(sender.snmp.send(second, target).getResponse());
             assertNotNull(receiver.run());
-            assertNotNull(sender.snmp.send(second, target).getResponse());
+            target.setTimeout(1500);
+            PDU response = sender.snmp.send(second, target).getResponse();
+            assertNotNull(response);
+            assertEquals(PDU.RESPONSE, response.getType());
+            assertEquals(2, response.getRequestID().getValue());
             assertEquals(2, JSON.readTree(awaitEvent(receiver).getOriginalText()).path("request_id").asInt());
+            assertNull(receiver.run(), "A recovered Inform must only enqueue one event");
         }
     }
 

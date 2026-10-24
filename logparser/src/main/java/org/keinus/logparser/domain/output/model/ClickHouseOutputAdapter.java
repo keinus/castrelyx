@@ -545,7 +545,8 @@ public class ClickHouseOutputAdapter extends OutputAdapter {
         Map<String, Object> row = baseTelemetryRow(observedAt, assetUid, sourceType, sourceId);
         row.put("event_type", firstNonBlank(eventType, "event"));
         row.put("severity", severity);
-        row.put("event_json", eventJson);
+        row.put("event_json", org.keinus.logparser.domain.model.structured.SecurityEventEnvelope.enrich(
+                eventJson, assetUid, sourceType, sourceId, eventType, observedAt));
         return row;
     }
 

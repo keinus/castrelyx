@@ -614,3 +614,7 @@ TCP/TLS `configParams.framing`은 `line`(기본) 또는 `octet-counted`, `maxFra
 SNMP도 parser → transform → structured mapping → output 순서를 사용합니다. structured 단계는 SNMP poll의 여러 OID를 공통 메트릭 행으로 전개하고 단위·이름·labels를 정규화합니다. `telemetry` 아래의 `metrics`, `states`, `events`를 통해 Console/HTTP 등에서도 ClickHouse와 같은 정규화 결과를 확인할 수 있습니다. 원본 OID와 설정한 field mapping 결과는 기존 필드에 보존합니다.
 
 Manager에 등록된 관리 IP가 하나의 자산에만 연결되면 해당 주소의 SNMP 관측도 기존 자산 UID를 사용합니다. 이 매핑은 Manager가 자동 갱신하고 Logparser의 SQLite에 보존합니다. 주소가 여러 등록 자산에 중복되면 자동으로 연결하지 않으며 관리 IP의 충돌을 먼저 해소해야 합니다. Agent와 SNMP를 함께 수집해도 자산 수는 UID별로 세고, 동일 인터페이스의 트래픽은 대표 수집원 하나만 반영합니다.
+
+### 헌팅 조회를 위한 이벤트 메타데이터
+
+새 canonical 이벤트의 JSON에는 `event_uid`, `stored_at`, `normalization_version`이 추가됩니다. `event_uid`는 재전송에 안정적인 식별자이며 `stored_at`은 이번 저장 시각입니다. Windows의 `event_id`가 4625라는 이유만으로 서로 다른 레코드를 같은 이벤트로 합치지 않습니다. 원본의 고유 키를 우선 사용하고, 없으면 관측 시각·유형·payload를 사용합니다. 새 필드는 출력 이벤트에 추가되며 parser나 입력 adapter 설정 변경은 필요하지 않습니다. 이전에 저장한 행을 자동 재작성하지 않으므로 기존 데이터 재처리 시 중복·시점 경계를 먼저 확인하세요.

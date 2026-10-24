@@ -68,7 +68,7 @@ public class LocalAuthProvider implements AuthProvider {
         select u.id, u.username, u.display_name, u.role, u.enabled
         from user_sessions s
         join users u on u.id = s.user_id
-        where s.session_token_hash = ? and s.expires_at > ?
+        where s.session_token_hash = ? and s.expires_at > ? and u.enabled = true
         """,
         (rs, rowNum) -> new AuthUser(
             rs.getLong("id"),

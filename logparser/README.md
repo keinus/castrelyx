@@ -445,3 +445,7 @@ Manager는 등록 자산의 관리 IP가 유일한 경우 주소→기존 UID �
 Manager는 과거 IP UID도 조회 시 기존 UID로 연결합니다. 트래픽은 수집원별 카운터로 각각 계산한 뒤 자산/인터페이스마다 한 수집원만 선택합니다. 최근 10분 내 데이터가 있는 수집원을 우선하고, 같은 조건에서는 Agent를 우선합니다. 정상값 0은 대체 사유가 아닙니다.
 
 실제 ClickHouse 통합 테스트는 격리된 테스트 서버에 `TELEMETRY_TEST_CLICKHOUSE_URL`을 지정한 뒤 Logparser와 Manager 각각에서 `gradlew test -PskipFrontend=true`로 실행합니다. 테스트는 임의 이름의 전용 DB를 만들고 종료 시 삭제합니다. 기존 Router 통합 테스트도 함께 실행하려면 `ROUTER_TEST_CLICKHOUSE_URL`에 같은 테스트 서버를 지정합니다.
+
+### 헌팅 이벤트 식별과 수신 시각
+
+Canonical 이벤트 JSON에는 `event_uid`, `stored_at`, `normalization_version=security-2.0`을 기록합니다. UID는 자산·수집 경로·수집원과 Router의 원본 `event_id` 또는 Agent의 `dedup_key`로 생성합니다. Windows의 숫자 이벤트 코드는 레코드 ID로 취급하지 않습니다. 원본 키가 없으면 관측 시각·유형·정렬된 payload로 식별하며, 저장 시각은 UID 계산에서 제외합니다. 재전송은 같은 UID를 유지하고 `stored_at`은 현재 저장 시각으로 기록합니다. Manager는 이 시각으로 조회 작업 생성 이후 삽입된 이벤트를 구분합니다. 기존 데이터에는 이 메타데이터가 없을 수 있습니다. 전체 헌팅 운영 범위는 [위협 헌팅 구현과 출시 계획](../docs/threat-hunting-implementation.md)을 참고하세요.

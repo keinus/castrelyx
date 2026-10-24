@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -28,62 +27,84 @@ public class AlertController {
 
   @GetMapping("/api/alerts")
   public List<AlertInstance> alerts() {
-    return jdbcTemplate.query("""
+    return jdbcTemplate.query(
+        """
         select id, rule_id, asset_id, severity, status, title, detail, state_key, first_seen_at, last_seen_at,
                acknowledged_at, resolved_at
         from alert_instances
         order by last_seen_at desc
-        """, AlertController::alert);
+        """,
+        AlertController::alert);
   }
 
   @PostMapping("/api/alerts/{id}/acknowledge")
   public AlertInstance acknowledge(@PathVariable long id) {
-    jdbcTemplate.update("update alert_instances set status = 'ACKNOWLEDGED', acknowledged_at = ? where id = ?",
-        Timestamp.from(Instant.now()), id);
+    if (jdbcTemplate.update(
+            "update alert_instances set status = 'ACKNOWLEDGED', acknowledged_at = ? where id = ? and status <> 'MERGED'",
+            Timestamp.from(Instant.now()),
+            id)
+        == 0) throw new IllegalStateException("병합된 알림은 원래 episode에서 확인하세요.");
     return alert(id);
   }
 
   @PostMapping("/api/alerts/{id}/resolve")
   public AlertInstance resolve(@PathVariable long id) {
-    jdbcTemplate.update("update alert_instances set status = 'RESOLVED', resolved_at = ? where id = ?",
-        Timestamp.from(Instant.now()), id);
+    if (jdbcTemplate.update(
+            "update alert_instances set status = 'RESOLVED', resolved_at = ? where id = ? and status <> 'MERGED'",
+            Timestamp.from(Instant.now()),
+            id)
+        == 0) throw new IllegalStateException("병합된 알림은 원래 episode에서 확인하세요.");
     return alert(id);
   }
 
   @GetMapping("/api/alert-rules")
   public List<AlertRule> rules() {
-    return jdbcTemplate.query("""
+    return jdbcTemplate.query(
+        """
         select id, name, rule_type, severity, expression_json, enabled
         from alert_rules
         order by id
-        """, AlertController::rule);
+        """,
+        AlertController::rule);
   }
 
   @PutMapping("/api/alert-rules/{id}")
   public AlertRule updateRule(@PathVariable long id, @RequestBody AlertRule request) {
-    jdbcTemplate.update("""
+    jdbcTemplate.update(
+        """
         update alert_rules
         set name = ?, severity = ?, expression_json = ?, enabled = ?
         where id = ?
-        """, request.name(), request.severity().name(), request.expressionJson(), request.enabled(), id);
+        """,
+        request.name(),
+        request.severity().name(),
+        request.expressionJson(),
+        request.enabled(),
+        id);
     return rule(id);
   }
 
   private AlertInstance alert(long id) {
-    return jdbcTemplate.queryForObject("""
+    return jdbcTemplate.queryForObject(
+        """
         select id, rule_id, asset_id, severity, status, title, detail, state_key, first_seen_at, last_seen_at,
                acknowledged_at, resolved_at
         from alert_instances
         where id = ?
-        """, AlertController::alert, id);
+        """,
+        AlertController::alert,
+        id);
   }
 
   private AlertRule rule(long id) {
-    return jdbcTemplate.queryForObject("""
+    return jdbcTemplate.queryForObject(
+        """
         select id, name, rule_type, severity, expression_json, enabled
         from alert_rules
         where id = ?
-        """, AlertController::rule, id);
+        """,
+        AlertController::rule,
+        id);
   }
 
   private static AlertInstance alert(ResultSet rs, int rowNum) throws SQLException {

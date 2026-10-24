@@ -71,6 +71,7 @@ type logCursorState struct {
 	JournaldCursor   string                   `json:"journald_cursor,omitempty"`
 	JournaldFallback bool                     `json:"journald_fallback,omitempty"`
 	Windows          map[string]uint64        `json:"windows,omitempty"`
+	Audit            map[string]auditGroup    `json:"audit,omitempty"`
 }
 
 type fileLogCursor struct {
@@ -82,24 +83,25 @@ type fileLogCursor struct {
 }
 
 type normalizedLogEvent struct {
-	Platform      string
-	SourceName    string
-	Channel       string
-	Program       string
-	Provider      string
-	PID           string
-	EventID       int
-	RecordID      uint64
-	EventTime     string
-	EventType     string
-	EventCategory string
-	Severity      string
-	Actor         string
-	Action        string
-	Outcome       string
-	Message       string
-	RecordRef     string
-	Fields        map[string]any
+	Platform        string
+	SourceName      string
+	Channel         string
+	Program         string
+	Provider        string
+	PID             string
+	EventID         int
+	RecordID        uint64
+	EventTime       string
+	EventType       string
+	EventCategory   string
+	Severity        string
+	Actor           string
+	Action          string
+	Outcome         string
+	Message         string
+	IdentityContent string
+	RecordRef       string
+	Fields          map[string]any
 }
 
 type linuxLogLine struct {
@@ -233,7 +235,7 @@ func collectLinuxLogEventsWith(
 		}
 		items = append(items, sourceItems...)
 	}
-	return dedupeCrossSourceLogItems(items), nil
+	return dedupeCrossSourceLogItems(assembleAuditRecords(items, state, time.Now())), nil
 }
 
 func buildLogCollectorErrorItem(source string, err error) envelope.Item {
@@ -251,6 +253,7 @@ func buildLogCollectorErrorItem(source string, err error) envelope.Item {
 
 func linuxFileLogSources(includeJournalMirrors bool) []string {
 	sources := []string{
+		"/var/log/audit/audit.log",
 		"/var/log/suricata/eve.json",
 		"/var/log/suricata/fast.log",
 		"/var/log/suricata/suricata.log",
@@ -641,6 +644,8 @@ func collectWindowsLogEvents(ctx context.Context, options Options, state *logCur
 		"Application",
 		"Windows PowerShell",
 		"Microsoft-Windows-PowerShell/Operational",
+		"Microsoft-Windows-Sysmon/Operational",
+		"Microsoft-Windows-TaskScheduler/Operational",
 		"Microsoft-Windows-TerminalServices-LocalSessionManager/Operational",
 		"Microsoft-Windows-Windows Defender/Operational",
 	}
@@ -753,7 +758,7 @@ func windowsLogChannelCommand(channel string, lastRecordID uint64, maxEvents int
 	if lastRecordID > 0 {
 		filter := fmt.Sprintf("*[System[(EventRecordID > %d)]]", lastRecordID)
 		return fmt.Sprintf(
-			`$events = @(Get-WinEvent -LogName %s -FilterXPath %s -Oldest -MaxEvents %d -ErrorAction SilentlyContinue); if ($events.Count -eq 0) { $events = @(Get-WinEvent -LogName %s -MaxEvents 1 -ErrorAction SilentlyContinue) }; $events | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message | ConvertTo-Json -Compress`,
+			`$events = @(Get-WinEvent -LogName %s -FilterXPath %s -Oldest -MaxEvents %d -ErrorAction SilentlyContinue); if ($events.Count -eq 0) { $events = @(Get-WinEvent -LogName %s -MaxEvents 1 -ErrorAction SilentlyContinue) }; $events | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Depth 6 -Compress`,
 			powerShellString(channel),
 			powerShellString(filter),
 			maxEvents,
@@ -761,7 +766,7 @@ func windowsLogChannelCommand(channel string, lastRecordID uint64, maxEvents int
 		)
 	}
 	return fmt.Sprintf(
-		`Get-WinEvent -LogName %s -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message | ConvertTo-Json -Compress`,
+		`Get-WinEvent -LogName %s -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,RecordId,ProviderName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Depth 6 -Compress`,
 		powerShellString(channel),
 		maxEvents,
 	)
@@ -823,22 +828,23 @@ func buildLogEventItem(platform, sourceName, message string) envelope.Item {
 func buildLinuxLogEventItem(sourceName, line string, maxMessageBytes int) envelope.Item {
 	parsed := parseLinuxLogLine(line)
 	event := normalizedLogEvent{
-		Platform:      "linux",
-		SourceName:    sourceName,
-		Channel:       linuxLogChannel(sourceName),
-		Program:       parsed.Program,
-		PID:           parsed.PID,
-		EventTime:     parsed.EventTime,
-		EventType:     "system.event",
-		EventCategory: "system",
-		Severity:      "INFO",
-		Outcome:       "unknown",
-		Message:       parsed.Message,
+		Platform:        "linux",
+		SourceName:      sourceName,
+		Channel:         linuxLogChannel(sourceName),
+		Program:         parsed.Program,
+		PID:             parsed.PID,
+		EventTime:       parsed.EventTime,
+		EventType:       "system.event",
+		EventCategory:   "system",
+		Severity:        "INFO",
+		Outcome:         "unknown",
+		Message:         parsed.Message,
+		IdentityContent: line,
 	}
 	if event.Message == "" {
 		event.Message = line
 	}
-	if !classifySuricataLog(&event, line) && !classifyZeekLog(&event, line) {
+	if !classifyAuditLog(&event, line) && !classifySuricataLog(&event, line) && !classifyZeekLog(&event, line) {
 		classifyLinuxLog(&event)
 	}
 	return buildNormalizedLogEventItem(event, maxMessageBytes)
@@ -865,6 +871,11 @@ func buildWindowsLogEventItem(channel string, row map[string]any, maxMessageByte
 		event.RecordRef = strconv.FormatUint(recordID, 10)
 	}
 	classifyWindowsLog(&event)
+	if document := jsonString(row, "Xml"); document != "" {
+		if err := enrichWindowsSecurityEvent(&event, document); err != nil {
+			event.Fields = mergeFields(event.Fields, map[string]any{"structured_parse_error": err.Error()})
+		}
+	}
 	return buildNormalizedLogEventItem(event, maxMessageBytes)
 }
 
@@ -873,12 +884,16 @@ func buildNormalizedLogEventItem(event normalizedLogEvent, maxMessageBytes int) 
 		maxMessageBytes = defaultLogMessageMaxBytes
 	}
 	message := limitStringBytes(scrubLogMessage(event.Message), maxMessageBytes)
+	identityContent := firstNonBlank(event.IdentityContent, event.Message)
+	if event.RecordID > 0 {
+		identityContent = ""
+	} // Native record identity is independent of localized display text.
 	dedup := hashText(strings.Join([]string{
 		event.Platform,
 		event.SourceName,
 		event.EventTime,
 		event.RecordRef,
-		message,
+		identityContent,
 	}, "\x00"))
 	payload := map[string]any{
 		"event_type":     firstNonBlank(event.EventType, "system.event"),
@@ -1016,7 +1031,9 @@ func classifySuricataLog(event *normalizedLogEvent, line string) bool {
 	})
 
 	row := map[string]any{}
-	if strings.HasSuffix(strings.ToLower(filepath.Base(event.SourceName)), ".json") && json.Unmarshal([]byte(line), &row) == nil {
+	decoder := json.NewDecoder(strings.NewReader(line))
+	decoder.UseNumber()
+	if strings.HasSuffix(strings.ToLower(filepath.Base(event.SourceName)), ".json") && decoder.Decode(&row) == nil {
 		eventType := jsonString(row, "event_type")
 		event.EventType = "suricata." + firstNonBlank(eventType, "event")
 		event.EventTime = firstNonBlank(jsonString(row, "timestamp"), event.EventTime)
@@ -1031,6 +1048,7 @@ func classifySuricataLog(event *normalizedLogEvent, line string) bool {
 			"flow_id":             jsonString(row, "flow_id"),
 			"app_proto":           jsonString(row, "app_proto"),
 		}
+		enrichSuricataFields(fields, row)
 		if alert, ok := jsonObject(row, "alert"); ok {
 			signature := jsonString(alert, "signature")
 			severityValue := jsonNumberValue(alert, "severity")
@@ -1183,6 +1201,9 @@ func isZeekLogSource(sourceName string) bool {
 
 func suricataSeverity(value any) string {
 	switch v := value.(type) {
+	case json.Number:
+		n, _ := v.Int64()
+		return suricataSeverityNumber(int(n))
 	case float64:
 		return suricataSeverityNumber(int(v))
 	case int:
@@ -1418,6 +1439,11 @@ func jsonNumberValue(row map[string]any, key string) any {
 		return nil
 	}
 	switch v := value.(type) {
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n
+		}
+		return v
 	case float64:
 		if v == float64(int64(v)) {
 			return int64(v)
@@ -1728,12 +1754,17 @@ func cloneLogCursorState(state *logCursorState) *logCursorState {
 		JournaldCursor:   state.JournaldCursor,
 		JournaldFallback: state.JournaldFallback,
 		Windows:          make(map[string]uint64, len(state.Windows)),
+		Audit:            make(map[string]auditGroup, len(state.Audit)),
 	}
 	for source, cursor := range state.Files {
 		clone.Files[source] = cursor
 	}
 	for channel, recordID := range state.Windows {
 		clone.Windows[channel] = recordID
+	}
+	for id, group := range state.Audit {
+		group.Records = append([]string(nil), group.Records...)
+		clone.Audit[id] = group
 	}
 	return clone
 }

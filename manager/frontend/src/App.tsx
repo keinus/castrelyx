@@ -398,7 +398,7 @@ function ViewSwitch({
     case 'agent':
       return <AgentDashboardView role={role} />;
     case 'agentLogs':
-      return <SecurityHuntView assets={assets} />;
+      return <SecurityHuntView assets={assets} role={role} />;
     case 'snmp':
       return <SnmpDashboardView role={role} />;
     case 'alerts':

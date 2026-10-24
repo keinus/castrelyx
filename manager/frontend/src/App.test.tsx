@@ -29,9 +29,14 @@ describe('App shell', () => {
     expect(screen.getByRole('button', { name: 'LogParser' })).toBeInTheDocument();
   });
 
-  it('opens collected agent logs from the sidebar menu', async () => {
+  it('opens the hunting workbench and retains access to legacy logs', async () => {
     const fetchMock = mockFetch({
-      '/api/agent/logs?range=1h&severity=ALL&limit=300': {
+      '/api/security/hunt/v2/fields': { body: [] },
+      '/api/security/hunt/v2/scenarios': { body: [] },
+      '/api/security/hunt/v2/resources/saved-search': { body: [] },
+      '/api/security/hunt/v2/resources/investigation': { body: [] },
+      '/api/security/hunt/v2/resources/rule': { body: [] },
+      '/api/agent/logs?range=1h&severity=ALL&family=ALL&query=&limit=300': {
         body: [{
           assetUid: 'agent-01',
           eventType: 'auth.login.failure',
@@ -48,11 +53,14 @@ describe('App shell', () => {
     render(<App bootstrap={{ setupRequired: false, authenticated: true, user: { role: 'ADMIN', username: 'admin' } }} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Hunt' }));
-
+    expect(await screen.findByRole('heading', { name: 'Threat Hunting' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '조회 실행' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '기존 분석' }));
+    fireEvent.click(screen.getByRole('button', { name: '전체 기간 원문 검색' }));
     expect(await screen.findByRole('heading', { name: 'Agent Logs' })).toBeInTheDocument();
     expect(await screen.findByText('Failed password for invalid user admin')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/agent/logs?range=1h&severity=ALL&limit=300',
+      '/api/agent/logs?range=1h&severity=ALL&family=ALL&query=&limit=300',
       expect.objectContaining({ credentials: 'include' })
     );
   });

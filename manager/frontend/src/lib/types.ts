@@ -29,7 +29,7 @@ export type Asset = {
 export type AlertRow = {
   id: number;
   severity: 'INFO' | 'WARNING' | 'CRITICAL';
-  status: 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED';
+  status: 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED' | 'MERGED';
   title: string;
   detail?: string;
   assetId?: number | null;

@@ -11,9 +11,11 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Component
 public class RbacInterceptor implements HandlerInterceptor {
   private final LocalAuthProvider authProvider;
+  private final org.castrelyx.manager.hunt.v2.HuntAccess huntAccess;
 
-  public RbacInterceptor(LocalAuthProvider authProvider) {
+  public RbacInterceptor(LocalAuthProvider authProvider, org.castrelyx.manager.hunt.v2.HuntAccess huntAccess) {
     this.authProvider = authProvider;
+    this.huntAccess = huntAccess;
   }
 
   @Override
@@ -24,6 +26,13 @@ public class RbacInterceptor implements HandlerInterceptor {
     }
     AuthUser user = authProvider.currentUser(sessionCookie(request));
     request.setAttribute(CurrentUser.REQUEST_ATTRIBUTE, user);
+    if (path.startsWith("/api/security/hunt/v2/")) {
+      if (!HttpMethod.GET.matches(request.getMethod()) && !HttpMethod.HEAD.matches(request.getMethod())) huntAccess.verify(request);
+      if (HttpMethod.POST.matches(request.getMethod()) && (path.equals("/api/security/hunt/v2/queries")
+          || path.matches("/api/security/hunt/v2/queries/[^/]+/cancel")
+          || path.matches("/api/security/hunt/v2/investigations/[^/]+/exports")
+          || path.matches("/api/security/hunt/v2/scenarios/[^/]+/runs"))) return true;
+    }
     if (user.role() == Role.ADMIN) {
       return true;
     }

@@ -1256,7 +1256,7 @@ Manager 쪽에서는 agent dashboard, traffic view, asset list가 raw/canonical 
 - 여러 chunk enqueue와 state-cache 저장은 실패 시 이번 cycle의 이미 쓴 queue record를 제거하지만 하나의 filesystem transaction은 아닙니다. process/전원 장애 경계에서는 일부 chunk가 남아 재전송될 수 있습니다.
 - Agent spool, Logparser 최근 batch cache, ClickHouse dedup token은 중복 가능성을 줄이지만 end-to-end exactly-once를 보장하지 않습니다. 특히 TCP ACK는 메모리 queue 수락 시점이고 ClickHouse commit 시점이 아닙니다.
 - DLQ는 pending과 함께 총량/age 제한을 적용하며 자동 재처리하지 않습니다. 공간 확보 과정에서 오래된 DLQ부터 삭제되므로 장기 증적 보관소로 사용할 수 없습니다.
-- Process command line과 환경변수는 수집하지 않습니다.
+- Process snapshot은 command line과 환경변수를 수집하지 않습니다. Windows XML·Linux auditd 보안 실행 이벤트는 조사에 필요한 명령 인수를 별도 구조 필드로 보존합니다.
 - Linux service startup type, binary path, user, last state change는 대부분 null입니다.
 - Windows 일부 collector는 PowerShell과 CIM cmdlet 사용 가능 여부에 의존합니다.
 - `tcp_mtls` 모드에서 enrollment는 여전히 HTTPS CastrelSign API가 필요합니다.

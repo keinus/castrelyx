@@ -4,7 +4,8 @@ import { ViewFrame } from '../components/ViewFrame';
 import { ViewFeedback } from '../components/ViewFeedback';
 import { api } from '../lib/api';
 import { useRemoteData } from '../lib/useRemoteData';
-import type { Asset, HuntAssessment, HuntCategory, HuntFinding, HuntLog, HuntLogRef } from '../lib/types';
+import type { Asset, HuntAssessment, HuntCategory, HuntFinding, HuntLog, HuntLogRef, Role } from '../lib/types';
+import { HuntWorkbench } from './HuntWorkbench';
 import { AgentLogsView } from './AgentLogsView';
 import './security-hunt.css';
 
@@ -18,7 +19,13 @@ const categories: [HuntCategory, string, string][] = [
 const label = (value: HuntCategory) => categories.find(([key]) => key === value)?.[1] ?? value;
 const confidence = { HIGH: '직접 로그 근거', MEDIUM: '맥락 확인 필요', LOW: '근거 제한적' };
 
-export function SecurityHuntView({ assets = [] }: { assets?: Asset[] }) {
+export function SecurityHuntView({ assets = [], role = 'VIEWER' }: { assets?: Asset[]; role?: Role }) {
+  const [legacy, setLegacy] = useState(false);
+  if (!legacy) return <HuntWorkbench assets={assets} role={role} onLegacy={() => setLegacy(true)} />;
+  return <><button type="button" onClick={() => setLegacy(false)}>새 헌팅 작업 공간으로</button><LegacySecurityHuntView assets={assets} /></>;
+}
+
+function LegacySecurityHuntView({ assets = [] }: { assets?: Asset[] }) {
   const [mode, setMode] = useState('analysis');
   return <div className="hunt-workspace">
     <div className="hunt-mode-bar" aria-label="Hunt 조회 방식">

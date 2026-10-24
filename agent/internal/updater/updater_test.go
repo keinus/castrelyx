@@ -474,11 +474,20 @@ func TestRollbackCleansTerminalDeploymentStaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != "ROLLBACKING" {
-		t.Fatalf("state status before reconciliation = %q, want ROLLBACKING", state.Status)
-	}
-	if _, err := os.Stat(filepath.Join(u.config.UpdateDir, "staged")); err != nil {
-		t.Fatalf("rollback staging was removed before helper completion: %v", err)
+	if runtime.GOOS == "windows" {
+		if state.Status != "ROLLBACKING" {
+			t.Fatalf("Windows rollback before helper reconciliation = %q, want ROLLBACKING", state.Status)
+		}
+		if _, err := os.Stat(filepath.Join(u.config.UpdateDir, "staged")); err != nil {
+			t.Fatalf("Windows staging removed before helper reconciliation: %v", err)
+		}
+	} else {
+		if state.Status != "ROLLBACK" {
+			t.Fatalf("synchronous rollback = %q, want ROLLBACK", state.Status)
+		}
+		if _, err := os.Stat(filepath.Join(u.config.UpdateDir, "staged")); !os.IsNotExist(err) {
+			t.Fatalf("completed synchronous rollback retained staging: %v", err)
+		}
 	}
 	if err := u.ResumePendingReplacement(context.Background()); err != nil {
 		t.Fatalf("ResumePendingReplacement returned error: %v", err)
@@ -742,6 +751,28 @@ func TestMarkAppliedDoesNotAcceptHelperStartBeforeTargetReplacement(t *testing.T
 	if pending := u.HasPendingApply(); !pending {
 		t.Fatal("helper-started replacement was not retained as pending")
 	}
+	if runtime.GOOS != "windows" {
+		// A Windows marker cannot make an unverified POSIX replacement look active or applied.
+		if err := u.ResumePendingReplacement(context.Background()); err == nil || errors.Is(err, ErrRestartRequired) {
+			t.Fatalf("POSIX unverified replacement must fail instead of waiting for a Windows helper: %v", err)
+		}
+		state, err := u.loadState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Status != "FAILED" {
+			t.Fatalf("POSIX unverified replacement status=%q, want FAILED", state.Status)
+		}
+		if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
+			t.Fatalf("failed POSIX replacement retained staging: %v", err)
+		}
+		for _, reported := range serverState.reportedStatuses() {
+			if reported == "APPLIED" {
+				t.Fatal("unverified POSIX target was reported applied")
+			}
+		}
+		return
+	}
 	if err := u.ResumePendingReplacement(context.Background()); !errors.Is(err, ErrRestartRequired) {
 		t.Fatalf("ResumePendingReplacement error = %v, want ErrRestartRequired while helper is active", err)
 	}
@@ -817,6 +848,27 @@ func TestRollbackHelperKeepsStagingUntilPreviousBinaryIsTarget(t *testing.T) {
 
 	if pending := u.HasPendingApply(); !pending {
 		t.Fatal("helper-started rollback was not retained as pending")
+	}
+	if runtime.GOOS != "windows" {
+		if err := u.MarkApplied(context.Background()); err == nil {
+			t.Fatal("unverified POSIX rollback was accepted")
+		}
+		state, err := u.loadState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Status != "FAILED" {
+			t.Fatalf("unverified POSIX rollback status=%q, want FAILED", state.Status)
+		}
+		if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
+			t.Fatalf("failed POSIX rollback retained staging: %v", err)
+		}
+		for _, reported := range serverState.reportedStatuses() {
+			if reported == "APPLIED" {
+				t.Fatal("unverified POSIX rollback was reported applied")
+			}
+		}
+		return
 	}
 	if err := u.MarkApplied(context.Background()); err == nil || !strings.Contains(err.Error(), "has not completed") {
 		t.Fatalf("MarkApplied error = %v, want incomplete rollback helper", err)

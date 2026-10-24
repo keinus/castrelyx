@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -49,6 +51,20 @@ class AuthProviderTest {
     authProvider.revokeSession(token);
 
     assertThatThrownBy(() -> authProvider.currentUser(token))
+        .isInstanceOf(AuthException.class);
+  }
+
+  @ParameterizedTest
+  @EnumSource(Role.class)
+  void existingSessionsAndPasswordAuthenticationAreRejectedWhileAccountIsDisabled(Role role) {
+    AuthUser user = authProvider.createLocalUser("disabled-account", "test-password", "QA disabled", role);
+    String first = authProvider.createSession(user), second = authProvider.createSession(user);
+    assertThat(authProvider.currentUser(first).role()).isEqualTo(role);
+    assertThat(authProvider.currentUser(second).role()).isEqualTo(role);
+    jdbcTemplate.update("update users set enabled=false where id=?", user.id());
+    assertThatThrownBy(() -> authProvider.currentUser(first)).isInstanceOf(AuthException.class);
+    assertThatThrownBy(() -> authProvider.currentUser(second)).isInstanceOf(AuthException.class);
+    assertThatThrownBy(() -> authProvider.authenticate("disabled-account", "test-password"))
         .isInstanceOf(AuthException.class);
   }
 }

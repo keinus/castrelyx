@@ -20,6 +20,10 @@ Castrelyx는 우리 서비스의 인프라 요새 전체를 실시간으로 분�
 
 Castrelyx는 보안과 원격 관제가 강력하게 결합된 느낌을 주는 이름입니다. 단단한 방어성, 실시간 분석, 인프라 중심 관제라는 인상을 담고 있으며, CNCF 오픈소스 프로젝트들이 가진 현대적이고 기술적인 톤앤매너와 잘 맞는 프로젝트 정체성을 가집니다.
 
+## 위협 헌팅 작업 공간
+
+Manager에는 전체 기간 검색·집계, 48개 실행 시나리오, 저장 검색·조사·고정 증거, 규칙 관찰 운영과 IOC·룩업 관리를 제공하는 새 작업 공간이 추가되었습니다. 구현 범위, 사용 절차, 검증과 후속 제품 출시 단계는 [위협 헌팅 구현과 제품 출시 계획](docs/threat-hunting-implementation.md)에 정리되어 있습니다.
+
 ## Agent 상세 설명
 
 Castrelyx Agent는 Linux/Windows 호스트에 설치되는 Go 기반 수집기입니다. 호스트 내부의 식별 정보, CPU/memory/disk/network metric, interface 상태, process/socket 연결, service 상태, package/application 목록, firewall 상태, 최근 system/security log를 수집하고 Castrelyx 서버로 전송합니다.

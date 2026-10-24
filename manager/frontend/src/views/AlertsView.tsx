@@ -43,6 +43,7 @@ export function AlertsView({ role, alerts, onAcknowledge, onResolve }: AlertsVie
             <option value="ACTIVE">Active</option>
             <option value="ACKNOWLEDGED">Ack</option>
             <option value="RESOLVED">Resolved</option>
+            <option value="MERGED">Merged</option>
           </select>
         </div>
       }
@@ -50,7 +51,7 @@ export function AlertsView({ role, alerts, onAcknowledge, onResolve }: AlertsVie
       {error && <div className="notice error" role="alert">{error}</div>}
       <MetricCards items={[
         ['활성 알림', String(alerts.filter((alert) => alert.status === 'ACTIVE').length)],
-        ['Critical · 미해결', String(alerts.filter((alert) => alert.severity === 'CRITICAL' && alert.status !== 'RESOLVED').length)],
+        ['Critical · 미해결', String(alerts.filter((alert) => alert.severity === 'CRITICAL' && ['ACTIVE', 'ACKNOWLEDGED'].includes(alert.status)).length)],
         ['확인 완료', String(alerts.filter((alert) => alert.status === 'ACKNOWLEDGED').length)],
         ['해결 완료', String(alerts.filter((alert) => alert.status === 'RESOLVED').length)]
       ]} />
@@ -77,7 +78,7 @@ export function AlertsView({ role, alerts, onAcknowledge, onResolve }: AlertsVie
                 {canManage && alert.status === 'ACTIVE' && (
                   <button type="button" disabled={pending !== null} onClick={() => void update(alert.id, 'acknowledge')}>확인</button>
                 )}
-                {canManage && alert.status !== 'RESOLVED' && (
+                {canManage && ['ACTIVE', 'ACKNOWLEDGED'].includes(alert.status) && (
                   <button type="button" disabled={pending !== null} onClick={() => void update(alert.id, 'resolve')}>해결</button>
                 )}
                 {!canManage && <span className="muted">읽기 전용</span>}
